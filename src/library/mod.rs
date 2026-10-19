@@ -1,5 +1,7 @@
 //! The library: Games found under the Games Root, and what Game37 records about them.
 
+pub mod db;
+
 /// One Game found on disk by a scan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FoundGame {
