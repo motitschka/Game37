@@ -143,12 +143,7 @@ Requirements for v1. Terms follow [CONTEXT.md](../CONTEXT.md). Decisions behind 
 
 ## Milestones
 
-1. Skeleton: window, controller input, library scanner, Home and Carousel with placeholder art.
-2. External launching and Playtime.
-3. Embedded player, software-rendered: NES, SNES, GB, GBC, GBA, with Save States and the Pause Menu.
-4. OpenGL hardware rendering: PS1, N64, DS, PSP.
-5. SteamGridDB Artwork, Details Page, Options Menu.
-6. Settings, search with on-screen keyboard, First-run Setup.
+See [milestones.md](milestones.md) for the build order and what each milestone delivers.
 
 ## Open questions
 
