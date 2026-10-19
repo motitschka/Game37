@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use crate::config::ConfigError;
+use crate::ctx::Ctx;
 use crate::ui::gfx::{Align, Gfx, TextStyle};
 use crate::ui::input::{Action, Input, Pointer};
 use crate::ui::nav::{Hint, Screen, Transition};
@@ -39,14 +40,14 @@ impl Screen for NoConfig {
         "First-run Setup"
     }
 
-    fn handle(&mut self, input: Input) -> Transition {
+    fn handle(&mut self, input: Input, _: &mut Ctx) -> Transition {
         match input {
             Input::Action(Action::Back) | Input::Pointer(Pointer::Back) => Transition::Quit,
             _ => Transition::None,
         }
     }
 
-    fn draw(&mut self, gfx: &mut Gfx<'_>) {
+    fn draw(&mut self, gfx: &mut Gfx<'_>, _: &Ctx) {
         let body = TextStyle::new(22, Weight::Regular, MUTED);
         let lines = gfx.wrap(&self.body, body, W - 4.0 * M);
         let line_height = 34.0;
@@ -82,15 +83,15 @@ mod tests {
     fn back_quits() {
         let mut screen = NoConfig::missing(Path::new("/c.toml"));
         assert!(matches!(
-            screen.handle(Input::Action(Action::Back)),
+            screen.handle(Input::Action(Action::Back), &mut Ctx::empty()),
             Transition::Quit
         ));
         assert!(matches!(
-            screen.handle(Input::Pointer(Pointer::Back)),
+            screen.handle(Input::Pointer(Pointer::Back), &mut Ctx::empty()),
             Transition::Quit
         ));
         assert!(matches!(
-            screen.handle(Input::Action(Action::Confirm)),
+            screen.handle(Input::Action(Action::Confirm), &mut Ctx::empty()),
             Transition::None
         ));
     }

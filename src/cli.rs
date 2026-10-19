@@ -4,12 +4,15 @@ use std::path::PathBuf;
 
 use crate::ui::input::{Action, Input, Pointer};
 
-pub const USAGE: &str = "usage: game37 [--config <path>] [--screenshot <out.bmp> [--actions <a,b,...>]]";
+pub const USAGE: &str =
+    "usage: game37 [--config <path>] [--data-dir <path>] [--screenshot <out.bmp> [--actions <a,b,...>]]";
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Options {
     /// Overrides `config::config_path()`.
     pub config: Option<PathBuf>,
+    /// Overrides `config::data_dir()`, where the library database lives.
+    pub data_dir: Option<PathBuf>,
     pub screenshot: Option<Screenshot>,
 }
 
@@ -51,6 +54,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
         let mut value = || args.next().ok_or_else(|| format!("{arg} needs a value"));
         match arg.as_str() {
             "--config" => options.config = Some(PathBuf::from(value()?)),
+            "--data-dir" => options.data_dir = Some(PathBuf::from(value()?)),
             "--screenshot" => out = Some(PathBuf::from(value()?)),
             "--actions" => actions = Some(value()?),
             _ => return Err(format!("unknown argument {arg:?}")),

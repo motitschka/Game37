@@ -4,14 +4,15 @@
 use super::gfx::Gfx;
 use super::input::{Action, Input, Pointer};
 use super::{Rect, hit};
+use crate::ctx::Ctx;
 
 /// A full-screen view. The app draws the background, top bar and hint bar around it.
 pub trait Screen {
     /// Shown as the "‹ title" back affordance on screens pushed on top of this one.
     fn title(&self) -> &str;
-    fn handle(&mut self, input: Input) -> Transition;
+    fn handle(&mut self, input: Input, ctx: &mut Ctx) -> Transition;
     /// Draws the content between the top bar and the hint bar.
-    fn draw(&mut self, gfx: &mut Gfx<'_>);
+    fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx);
     fn hints(&self) -> Vec<Hint>;
 }
 
@@ -109,7 +110,7 @@ impl Nav {
         (stack.len() > 1).then(|| stack[stack.len() - 2].title())
     }
 
-    pub fn handle(&mut self, input: Input, hits: &Hits) -> Flow {
+    pub fn handle(&mut self, input: Input, hits: &Hits, ctx: &mut Ctx) -> Flow {
         let tabs = self.tabs.len();
         match input {
             Input::Action(Action::PrevTab) if tabs > 1 => self.active = (self.active + tabs - 1) % tabs,
@@ -123,9 +124,9 @@ impl Nav {
             }
             Input::Pointer(Pointer::Click { x, y }) if hit(&hits.hints, x, y).is_some() => {
                 let action = hit(&hits.hints, x, y).unwrap();
-                return self.handle(Input::Action(action), &Hits::default());
+                return self.handle(Input::Action(action), &Hits::default(), ctx);
             }
-            _ => match self.top().handle(input) {
+            _ => match self.top().handle(input, ctx) {
                 Transition::None => {}
                 Transition::Push(screen) => self.tabs[self.active].stack.push(screen),
                 Transition::Pop => self.pop(),
@@ -161,7 +162,7 @@ mod tests {
         fn title(&self) -> &str {
             self.title
         }
-        fn handle(&mut self, input: Input) -> Transition {
+        fn handle(&mut self, input: Input, _: &mut Ctx) -> Transition {
             self.log.borrow_mut().push((self.title, input));
             match input {
                 Input::Action(Action::Confirm) => (self.on_confirm)(),
@@ -169,7 +170,7 @@ mod tests {
                 _ => Transition::None,
             }
         }
-        fn draw(&mut self, _: &mut Gfx<'_>) {}
+        fn draw(&mut self, _: &mut Gfx<'_>, _: &Ctx) {}
         fn hints(&self) -> Vec<Hint> {
             Vec::new()
         }
@@ -201,11 +202,11 @@ mod tests {
     }
 
     fn act(nav: &mut Nav, action: Action) -> Flow {
-        nav.handle(Input::Action(action), &Hits::default())
+        nav.handle(Input::Action(action), &Hits::default(), &mut Ctx::empty())
     }
 
     fn click(nav: &mut Nav, hits: &Hits, x: f32, y: f32) -> Flow {
-        nav.handle(Input::Pointer(Pointer::Click { x, y }), hits)
+        nav.handle(Input::Pointer(Pointer::Click { x, y }), hits, &mut Ctx::empty())
     }
 
     #[test]
@@ -281,7 +282,7 @@ mod tests {
         let mut nav = tabs(&log);
         act(&mut nav, Action::NextTab);
         act(&mut nav, Action::Confirm);
-        nav.handle(Input::Pointer(Pointer::Back), &Hits::default());
+        nav.handle(Input::Pointer(Pointer::Back), &Hits::default(), &mut Ctx::empty());
         assert_eq!(nav.depth(), 1);
 
         act(&mut nav, Action::Confirm);

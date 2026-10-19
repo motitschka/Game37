@@ -1,5 +1,6 @@
 //! Placeholder for a top-level tab whose real screen comes in a later job.
 
+use crate::ctx::Ctx;
 use crate::ui::gfx::{Align, Gfx, TextStyle};
 use crate::ui::input::{Action, Input};
 use crate::ui::nav::{Hint, Screen, Transition};
@@ -22,11 +23,11 @@ impl Screen for Stub {
         self.title
     }
 
-    fn handle(&mut self, _: Input) -> Transition {
+    fn handle(&mut self, _: Input, _: &mut Ctx) -> Transition {
         Transition::None
     }
 
-    fn draw(&mut self, gfx: &mut Gfx<'_>) {
+    fn draw(&mut self, gfx: &mut Gfx<'_>, _: &Ctx) {
         gfx.text(
             W / 2.0,
             H / 2.0,

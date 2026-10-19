@@ -14,6 +14,8 @@ use sdl3::{GamepadSubsystem, VideoSubsystem};
 
 use crate::cli::{Options, Screenshot};
 use crate::config;
+use crate::ctx::{self, Ctx};
+use crate::library::db::Library;
 use crate::screens;
 use crate::ui::chrome::{self, TopBar};
 use crate::ui::gfx::Gfx;
@@ -25,10 +27,21 @@ use crate::ui::text::Fonts;
 
 pub fn run(options: Options) -> Result<(), String> {
     let path = options.config.unwrap_or_else(config::config_path);
-    let nav = screens::start(config::load(&path), &path);
+    let loaded = config::load(&path);
+    let ctx = match &loaded {
+        Ok(Some(config)) => {
+            let data_dir = options.data_dir.unwrap_or_else(config::data_dir);
+            let library = Library::open(&data_dir.join("library.db")).map_err(|e| e.to_string())?;
+            let mut ctx = Ctx::new(library, config.games_root.clone());
+            ctx.scan_all(ctx::now()).map_err(|e| e.to_string())?;
+            ctx
+        }
+        _ => Ctx::empty(),
+    };
+    let nav = screens::start(loaded, &path);
     match options.screenshot {
-        Some(shot) => screenshot(nav, shot),
-        None => interactive(nav),
+        Some(shot) => screenshot(nav, ctx, shot),
+        None => interactive(nav, ctx),
     }
 }
 
@@ -48,7 +61,7 @@ fn canvas(video: &VideoSubsystem, w: u32, h: u32, driver: &CStr) -> Result<Windo
     Ok(canvas)
 }
 
-fn interactive(mut nav: Nav) -> Result<(), String> {
+fn interactive(mut nav: Nav, mut ctx: Ctx) -> Result<(), String> {
     let sdl = sdl3::init().map_err(|e| e.to_string())?;
     let video = sdl.video().map_err(|e| e.to_string())?;
     let gamepads = sdl.gamepad().map_err(|e| e.to_string())?;
@@ -74,16 +87,16 @@ fn interactive(mut nav: Nav) -> Result<(), String> {
             inputs.push(Input::Action(dir));
         }
         for i in inputs.drain(..) {
-            if nav.handle(i, &hits) == Flow::Quit {
+            if nav.handle(i, &hits, &mut ctx) == Flow::Quit {
                 return Ok(());
             }
         }
-        hits = draw(&mut gfx, &mut nav, &input.view(), &clock());
+        hits = draw(&mut gfx, &mut nav, &ctx, &input.view(), &clock());
         gfx.present();
     }
 }
 
-fn screenshot(mut nav: Nav, shot: Screenshot) -> Result<(), String> {
+fn screenshot(mut nav: Nav, mut ctx: Ctx, shot: Screenshot) -> Result<(), String> {
     sdl3::hint::set("SDL_VIDEO_DRIVER", "offscreen");
     let sdl = sdl3::init().map_err(|e| e.to_string())?;
     let video = sdl.video().map_err(|e| e.to_string())?;
@@ -101,7 +114,7 @@ fn screenshot(mut nav: Nav, shot: Screenshot) -> Result<(), String> {
         pointer: None,
     };
     let clock = clock();
-    let mut hits = draw(&mut gfx, &mut nav, &view, &clock);
+    let mut hits = draw(&mut gfx, &mut nav, &ctx, &view, &clock);
     gfx.present();
     for step in shot.steps {
         for i in step.inputs() {
@@ -114,14 +127,14 @@ fn screenshot(mut nav: Nav, shot: Screenshot) -> Result<(), String> {
                     }
                 }
             }
-            if nav.handle(i, &hits) == Flow::Quit {
+            if nav.handle(i, &hits, &mut ctx) == Flow::Quit {
                 break;
             }
         }
-        hits = draw(&mut gfx, &mut nav, &view, &clock);
+        hits = draw(&mut gfx, &mut nav, &ctx, &view, &clock);
         gfx.present();
     }
-    draw(&mut gfx, &mut nav, &view, &clock);
+    draw(&mut gfx, &mut nav, &ctx, &view, &clock);
     gfx.save_bmp(&shot.out)
 }
 
@@ -133,9 +146,9 @@ struct View {
 }
 
 /// Draws a frame (without presenting it) and returns where its clickable chrome went.
-fn draw(gfx: &mut Gfx<'_>, nav: &mut Nav, view: &View, clock: &str) -> Hits {
+fn draw(gfx: &mut Gfx<'_>, nav: &mut Nav, ctx: &Ctx, view: &View, clock: &str) -> Hits {
     chrome::background(gfx);
-    nav.top().draw(gfx);
+    nav.top().draw(gfx, ctx);
     let labels = nav.tab_labels();
     let bar = TopBar {
         tabs: labels.as_deref().map(|l| (l, nav.active_tab())),
