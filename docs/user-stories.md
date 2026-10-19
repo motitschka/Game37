@@ -60,12 +60,13 @@ Two people use Game37:
 
 **US-10 Browse a console.** As a player, I want to pick a console from a themed carousel and see all its games, so I can browse the way I think about my collection.
 - L1/R1 or the tabs switch between Home and Carousel.
-- The background colour and logo change as I move between Systems.
+- All 17 Systems are listed in System Order: Nintendo first, then Sony, each by European release year, which is shown on each card.
+- The background colour changes as I move between Systems.
 - Selecting a System opens a grid of tall covers.
 - *Covers FR-CAR-1, FR-CAR-2, FR-CAR-3*
 
 **US-11 Know where files go.** As a new player, I want consoles without games to tell me where to put files, so I can fill my library.
-- A System with no Games still appears in the Carousel.
+- A System with no Games stays in its usual place in the Carousel, slightly dimmed.
 - Its Console Page shows the exact folder path.
 - *Covers FR-CAR-4*
 
@@ -73,6 +74,21 @@ Two people use Game37:
 - I change the sort to Most played on Wii, open PS2, and it's sorted by Most played too.
 - The choice survives a restart.
 - *Covers FR-CAR-5*
+
+**US-38 Get around the carousel fast.** As a player, I want the carousel to remember where I was and loop around, so reaching any console takes only a few presses.
+- Switching to the Carousel shows the System I last viewed, even after a restart. The very first time, it shows NES.
+- Pressing right on PS4 goes to NES, and left on NES goes to PS4.
+- Holding left or right scrolls faster the longer I hold.
+- Every other list of Systems (setup checklist, BIOS status, README) uses the same order.
+- *Covers FR-CAR-6, FR-CAR-7, FR-CAR-8*
+
+**US-39 Know when an emulator is missing.** As a player, I want to see which consoles need an emulator installed and how to fix it, so I'm never stuck pressing Play on something that can't start.
+- An External System without its Standalone Emulator is dimmed in the Carousel and shows a warning badge.
+- Its Console Page shows a notice naming the emulator, the `flatpak install` command with a copy button, and a Check again button.
+- After installing, Check again clears the notice without restarting Game37.
+- Until then I can browse, favorite, rename and pick art, but Play is disabled.
+- Embedded Systems never show this notice. If their Core can't be downloaded, Play shows a clear error.
+- *Covers FR-CAR-9, FR-CAR-10*
 
 ## Epic 4: Game details and options
 

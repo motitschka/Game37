@@ -16,12 +16,13 @@ Testing uses free, legal homebrew games and test ROMs, never commercial game fil
 - Live watching of the Games Root.
 - Local library database (date added, last played, Playtime, flags).
 - Home with all four Shelves, 20-game limit, "See all" grid, and empty-Shelf hints.
-- Carousel with per-System theming, Console Pages with a global sort order, and the empty-System message.
+- Carousel in System Order with per-System theming, European years, wrap-around, remembered position, faster scrolling when held, and dimmed empty Systems.
+- Console Pages with a global sort order and the empty-System message.
 - Placeholder art (Display Title and System icon).
 - `.gitignore` that keeps game, BIOS, key and secret files out of the repo.
 
-**Delivers:** US-1, US-2, US-3 (clean names), US-7, US-8, US-9, US-10, US-11, US-12, US-31, US-35
-**Requirements:** FR-LIB-1, 2, 4, 5, 6, 7 · FR-HOME-1–5 · FR-CAR-1–5 · FR-UI-1, 2, 4 · FR-CFG-1, 2 · FR-ART-3 · NFR-6
+**Delivers:** US-1, US-2, US-3 (clean names), US-7, US-8, US-9, US-10, US-11, US-12, US-31, US-35, US-38
+**Requirements:** FR-LIB-1, 2, 4, 5, 6, 7 · FR-HOME-1–5 · FR-CAR-1–8 · FR-UI-1, 2, 4 · FR-CFG-1, 2 · FR-ART-3 · NFR-6
 
 **Done when**
 - Homebrew files placed in several System folders appear on the right Console Pages and in Recently added, without a restart.
@@ -35,14 +36,16 @@ Testing uses free, legal homebrew games and test ROMs, never commercial game fil
 - Launch Dolphin (GameCube, Wii), Cemu, Azahar, Ryubing, PCSX2, RPCS3 and shadPS4 with the selected Game, fullscreen where supported.
 - Game37 stays open in the background and comes back to the front when the emulator exits.
 - Playtime and last played are recorded from the emulator process, so Continue playing and Most played fill up.
+- Detect which Standalone Emulators are installed. Missing ones get a dimmed card with a warning badge, and a Console Page notice with the install command, a copy button, and Check again. Play is disabled until installed.
 - Until M5, selecting a Game launches it directly, because the Details Page doesn't exist yet.
 
-**Delivers:** US-4 (tracking), US-5 (external part), US-30
-**Requirements:** FR-EXT-1–4 · FR-LIB-8
+**Delivers:** US-4 (tracking), US-5 (external part), US-30, US-39
+**Requirements:** FR-EXT-1–4 · FR-LIB-8 · FR-CAR-9, 10
 
 **Done when**
 - Each of the 8 External Systems starts its emulator with a test Game.
 - Quitting the emulator returns to Game37, with Playtime updated.
+- Removing an emulator's Flatpak shows the badge and notice. Reinstalling it and pressing Check again clears them.
 
 ## M3 — Embedded player (software rendering)
 

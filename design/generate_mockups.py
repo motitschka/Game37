@@ -32,24 +32,24 @@ PALETTE = [
     ("#E0C3FC", "#4B3B8F"), ("#FCCB90", "#8E3B46"), ("#5EE7DF", "#3B3486"),
 ]
 
-# Carousel order: Nintendo then Sony, each by release year.
+# System Order: Nintendo then Sony, each by European release year.
 SYSTEMS = [
-    ("nes", "NES", "Nintendo · 1985", "#C62828"),
-    ("gb", "Game Boy", "Nintendo · 1989", "#7A9A12"),
-    ("snes", "SNES", "Nintendo · 1991", "#6A4C9C"),
-    ("n64", "Nintendo 64", "Nintendo · 1996", "#1E9E57"),
+    ("nes", "NES", "Nintendo · 1986", "#C62828"),
+    ("gb", "Game Boy", "Nintendo · 1990", "#7A9A12"),
+    ("snes", "SNES", "Nintendo · 1992", "#6A4C9C"),
+    ("n64", "Nintendo 64", "Nintendo · 1997", "#1E9E57"),
     ("gbc", "Game Boy Color", "Nintendo · 1998", "#D4A017"),
     ("gba", "Game Boy Advance", "Nintendo · 2001", "#4B3FA8"),
-    ("gc", "GameCube", "Nintendo · 2001", "#6A3FB5"),
-    ("nds", "Nintendo DS", "Nintendo · 2004", "#7D8898"),
+    ("gc", "GameCube", "Nintendo · 2002", "#6A3FB5"),
+    ("nds", "Nintendo DS", "Nintendo · 2005", "#7D8898"),
     ("wii", "Wii", "Nintendo · 2006", "#1F9FD6"),
     ("3ds", "Nintendo 3DS", "Nintendo · 2011", "#C9302C"),
     ("wiiu", "Wii U", "Nintendo · 2012", "#0A8FBF"),
     ("switch", "Switch", "Nintendo · 2017", "#E60012"),
-    ("ps1", "PlayStation", "Sony · 1994", "#8C8C96"),
+    ("ps1", "PlayStation", "Sony · 1995", "#8C8C96"),
     ("ps2", "PlayStation 2", "Sony · 2000", "#2443B8"),
-    ("psp", "PSP", "Sony · 2004", "#3A3F4B"),
-    ("ps3", "PlayStation 3", "Sony · 2006", "#2B2F3A"),
+    ("psp", "PSP", "Sony · 2005", "#3A3F4B"),
+    ("ps3", "PlayStation 3", "Sony · 2007", "#2B2F3A"),
     ("ps4", "PlayStation 4", "Sony · 2013", "#0B3D91"),
 ]
 SYS = {s[0]: s for s in SYSTEMS}
@@ -216,7 +216,7 @@ def cover(sv, x, y, w, h, g, focused=False, show_sys=True):
         sv.add(text(x + 12, y + h - 16 - (len(lines) - 1 - i) * fs * 1.12, line, fs, 800))
     if show_sys:
         label = SHORT[g["sys"]]
-        sv.add(rect(x + 10, y + 10, tw(label, 11, 700) + 18, 22, "#000000", rx=11, opacity=0.5),
+        sv.add(rect(x + 10, y + 10, len(label) * 8.7 + 18, 22, "#000000", rx=11, opacity=0.5),
                text(x + 19, y + 25, label, 11, 700, ls=1))
 
 
@@ -332,20 +332,31 @@ def console_card(sv, cx, cy, size, sysid, opacity=1.0):
     sv.add("</g>")
 
 
-def screen_carousel():
+WARN = "#FFB020"
+
+
+def screen_carousel(focus="3ds", missing={"wiiu": "Cemu"}, games=12):
     sv = Svg("03-carousel", "Carousel")
-    color = SYS["gc"][3]
+    order = [s[0] for s in SYSTEMS]
+    idx = order.index(focus)
+    _, name, _, color = SYS[focus]
     sv.add(rect(0, 0, W, H, C["bg"]))
     sv.add(rect(0, 0, W, H, sv.rad([(0, color, 0.55), (1, color, 0)], cx=0.5, cy=0.42, r=0.6)))
     topbar(sv, active="consoles")
-    console_card(sv, 160, 450, 210, "gbc", 0.3)
-    console_card(sv, 470, 450, 310, "gba", 0.55)
-    console_card(sv, 1450, 450, 310, "nds", 0.55)
-    console_card(sv, 1760, 450, 210, "wii", 0.3)
+    neighbours = [(-2, 160, 210, 0.3), (-1, 470, 310, 0.55), (1, 1450, 310, 0.55), (2, 1760, 210, 0.3)]
+    for off, cx, size, op in neighbours:
+        sysid = order[(idx + off) % len(order)]
+        console_card(sv, cx, 450, size, sysid, op * (0.6 if sysid in missing else 1))
+        if sysid in missing:
+            bx, by = cx + size / 2 - 8, 450 - size / 2 + 8
+            sv.add(circle(bx, by, 22, WARN), text(bx, by + 9, "!", 26, 800, fill=C["bg"], anchor="middle"),
+                   text(cx, 450 + size / 2 + 40, f"{missing[sysid]} not installed", 18, 600, fill=WARN, anchor="middle"))
     sv.add(rect(705, 195, 510, 510, "none", rx=46, stroke="#FFFFFF", sw=4))
-    console_card(sv, 960, 450, 500, "gc")
-    sv.add(text(960, 790, "38 games  ·  Plays in Dolphin", 26, 600, fill=C["muted"], anchor="middle"))
-    n, idx = len(SYSTEMS), [s[0] for s in SYSTEMS].index("gc")
+    console_card(sv, 960, 450, 500, focus)
+    emulator = {"3ds": "Azahar", "gc": "Dolphin", "wii": "Dolphin", "wiiu": "Cemu", "switch": "Ryubing",
+                "ps2": "PCSX2", "ps3": "RPCS3", "ps4": "shadPS4"}.get(focus, "Game37")
+    sv.add(text(960, 790, f"{games} games  ·  Plays in {emulator}", 26, 600, fill=C["muted"], anchor="middle"))
+    n = len(SYSTEMS)
     for i in range(n):
         x = 960 + (i - (n - 1) / 2) * 22
         sv.add(rect(x - 12, 846, 24, 8, "#FFFFFF", rx=4) if i == idx else circle(x, 850, 4, "#FFFFFF", 0.3))

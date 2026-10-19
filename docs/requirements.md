@@ -4,25 +4,27 @@ Requirements for v1. Terms follow [CONTEXT.md](../CONTEXT.md). Decisions behind 
 
 ## Systems
 
-| System | Folder | Kind | Played with |
-|---|---|---|---|
-| NES | `nes` | Embedded | Mesen core |
-| SNES | `snes` | Embedded | bsnes core |
-| Game Boy | `gb` | Embedded | SameBoy core |
-| Game Boy Color | `gbc` | Embedded | SameBoy core |
-| Game Boy Advance | `gba` | Embedded | mGBA core |
-| Nintendo 64 | `n64` | Embedded | Mupen64Plus-Next core |
-| Nintendo DS | `nds` | Embedded | melonDS DS core |
-| PlayStation | `ps1` | Embedded | Beetle PSX HW core |
-| PSP | `psp` | Embedded | PPSSPP core |
-| GameCube | `gc` | External | Dolphin |
-| Wii | `wii` | External | Dolphin |
-| Wii U | `wiiu` | External | Cemu |
-| 3DS | `3ds` | External | Azahar |
-| Switch | `switch` | External | Ryubing |
-| PlayStation 2 | `ps2` | External | PCSX2 |
-| PlayStation 3 | `ps3` | External | RPCS3 |
-| PlayStation 4 | `ps4` | External | shadPS4 |
+The table is in **System Order**: Nintendo first, then Sony, each by European release date. This order is used everywhere Systems are listed (see FR-CAR-8).
+
+| System | Folder | Year (EU) | Kind | Played with |
+|---|---|---|---|---|
+| NES | `nes` | 1986 | Embedded | Mesen core |
+| Game Boy | `gb` | 1990 | Embedded | SameBoy core |
+| SNES | `snes` | 1992 | Embedded | bsnes core |
+| Nintendo 64 | `n64` | 1997 | Embedded | Mupen64Plus-Next core |
+| Game Boy Color | `gbc` | 1998 | Embedded | SameBoy core |
+| Game Boy Advance | `gba` | 2001 | Embedded | mGBA core |
+| GameCube | `gc` | 2002 | External | Dolphin |
+| Nintendo DS | `nds` | 2005 | Embedded | melonDS DS core |
+| Wii | `wii` | 2006 | External | Dolphin |
+| 3DS | `3ds` | 2011 | External | Azahar |
+| Wii U | `wiiu` | 2012 | External | Cemu |
+| Switch | `switch` | 2017 | External | Ryubing |
+| PlayStation | `ps1` | 1995 | Embedded | Beetle PSX HW core |
+| PlayStation 2 | `ps2` | 2000 | External | PCSX2 |
+| PSP | `psp` | 2005 | Embedded | PPSSPP core |
+| PlayStation 3 | `ps3` | 2007 | External | RPCS3 |
+| PlayStation 4 | `ps4` | 2013 | External | shadPS4 |
 
 ## Functional requirements
 
@@ -50,10 +52,19 @@ Requirements for v1. Terms follow [CONTEXT.md](../CONTEXT.md). Decisions behind 
 ### Carousel and Console Pages
 
 - **FR-CAR-1** L1/R1, or clicking a tab, switches between Home and Carousel.
-- **FR-CAR-2** The Carousel lists every System. Background colour and logo change with the highlighted System.
+- **FR-CAR-2** The Carousel always lists all 17 Systems in System Order, whatever was picked in First-run Setup. Each card shows the maker and European release year (e.g. "Nintendo · 2002"). There are no maker labels or dividers. The background colour changes with the highlighted System.
 - **FR-CAR-3** Selecting a System opens its Console Page, a grid of tall covers.
-- **FR-CAR-4** A System with no Games still appears. Its Console Page explains which folder to put files in.
+- **FR-CAR-4** A System with no Games keeps its place in the Carousel but its card is slightly dimmed. Its Console Page explains which folder to put files in.
 - **FR-CAR-5** Console Pages can be sorted A–Z, by Last played, by Most played, or by Recently added. The sort order is global: changing it on one Console Page applies to all of them until it is changed again. It persists across restarts.
+- **FR-CAR-6** The Carousel opens on the System last viewed, across restarts. On the very first launch it opens on NES.
+- **FR-CAR-7** The Carousel wraps around in both directions. Holding left or right speeds up scrolling. There is no shortcut to jump between makers.
+- **FR-CAR-8** System Order is defined once and used everywhere Systems are listed: the Carousel, the First-run Setup checklist, Settings → BIOS status, and the README.
+- **FR-CAR-9** When an External System's Standalone Emulator isn't installed:
+  - Its Carousel card is dimmed and shows a warning badge.
+  - Its Console Page shows a notice at the top naming the missing emulator, with the `flatpak install` command, a copy button, and a **Check again** button that clears the notice without a restart once the emulator is found.
+  - Browsing, Artwork and the Options Menu still work. Play is disabled until the emulator is installed.
+  - If the System also has no Games, the notice appears above the empty-library message.
+- **FR-CAR-10** Embedded Systems never show the missing-emulator notice, because their Core downloads on first Play. If that download fails (e.g. offline), pressing Play shows a clear error.
 
 ### Details and Options
 

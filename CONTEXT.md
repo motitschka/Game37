@@ -20,6 +20,10 @@ _Avoid_: Launched system, delegated system
 A libretro library that emulates one Embedded System inside Game37.
 _Avoid_: Plugin, module, emulator (when meaning a core)
 
+**System Order**:
+The single fixed order in which Systems are listed everywhere: Nintendo first, then Sony, each by European release date.
+_Avoid_: Console order, carousel order
+
 **Standalone Emulator**:
 A separately installed emulator application (e.g. Dolphin, RPCS3) that Game37 starts for an External System.
 _Avoid_: External emulator, app
