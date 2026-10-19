@@ -5,4 +5,5 @@
 pub mod input;
 pub mod saves;
 pub mod sdl;
+pub mod states;
 pub mod timing;

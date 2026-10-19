@@ -1,5 +1,7 @@
 //! Frame scheduling, audio rate control and where the game picture goes (NFR-4, FR-EMB-11).
 
+use std::time::{Duration, Instant};
+
 use crate::ui::{H, Rect, W};
 
 /// How close the display's refresh rate must be to the Core's fps to run one Core frame per
@@ -79,9 +81,59 @@ pub fn fit(aspect: f32) -> Rect {
     }
 }
 
+/// Playtime counted while the Game runs, not while the Pause Menu is open.
+#[derive(Debug, Clone)]
+pub struct PlayTimer {
+    counted: Duration,
+    /// When the current stretch of play started; `None` while paused.
+    since: Option<Instant>,
+}
+
+impl PlayTimer {
+    pub fn start(now: Instant) -> PlayTimer {
+        PlayTimer {
+            counted: Duration::ZERO,
+            since: Some(now),
+        }
+    }
+
+    /// Stops or restarts counting at `now`.
+    pub fn set_paused(&mut self, paused: bool, now: Instant) {
+        match (paused, self.since) {
+            (true, Some(since)) => {
+                self.counted += now.saturating_duration_since(since);
+                self.since = None;
+            }
+            (false, None) => self.since = Some(now),
+            _ => {}
+        }
+    }
+
+    /// The Playtime counted up to `now`.
+    pub fn played(&self, now: Instant) -> Duration {
+        self.counted
+            + self
+                .since
+                .map_or(Duration::ZERO, |s| now.saturating_duration_since(s))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playtime_stops_while_paused() {
+        let t0 = Instant::now();
+        let at = |s| t0 + Duration::from_secs(s);
+        let mut timer = PlayTimer::start(t0);
+        timer.set_paused(true, at(10));
+        timer.set_paused(true, at(20));
+        assert_eq!(timer.played(at(100)), Duration::from_secs(10));
+        timer.set_paused(false, at(100));
+        timer.set_paused(false, at(105));
+        assert_eq!(timer.played(at(130)), Duration::from_secs(40));
+    }
 
     const NES: f64 = 60.0988;
 

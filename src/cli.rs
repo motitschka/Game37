@@ -37,13 +37,21 @@ pub enum Step {
     Action(Action),
     /// A left click at logical coordinates.
     Click(f32, f32),
+    /// `wait:N`: N frames without input, e.g. to let a running Game get going.
+    Wait(u32),
 }
 
 impl Step {
+    /// How many frames the step takes.
+    pub fn frames(self) -> u32 {
+        if let Step::Wait(n) = self { n } else { 1 }
+    }
+
     /// The inputs the step stands for: a click is preceded by the pointer moving there.
     pub fn inputs(self) -> Vec<Input> {
         match self {
             Step::Action(a) => vec![Input::Action(a)],
+            Step::Wait(_) => Vec::new(),
             Step::Click(x, y) => {
                 vec![
                     Input::Pointer(Pointer::Move { x, y }),
@@ -137,6 +145,12 @@ fn parse_steps(list: &str) -> Result<Vec<Step>, String> {
 }
 
 fn parse_step(step: &str) -> Result<Step, String> {
+    if let Some(n) = step.strip_prefix("wait:") {
+        return n
+            .parse()
+            .map(Step::Wait)
+            .map_err(|_| format!("bad wait {step:?}: expected wait:N frames"));
+    }
     if let Some(rest) = step.strip_prefix("click:") {
         let coords = rest
             .split_once(':')
@@ -165,7 +179,7 @@ mod tests {
     #[test]
     fn screenshot_with_actions() {
         let options = parse(args(
-            "--screenshot out.bmp --config c.toml --actions nexttab,click:900:60,back",
+            "--screenshot out.bmp --config c.toml --actions nexttab,click:900:60,wait:30,back",
         ))
         .unwrap();
         assert_eq!(options.config, Some(PathBuf::from("c.toml")));
@@ -176,6 +190,7 @@ mod tests {
             [
                 Step::Action(Action::NextTab),
                 Step::Click(900.0, 60.0),
+                Step::Wait(30),
                 Step::Action(Action::Back)
             ]
         );

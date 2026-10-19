@@ -167,7 +167,7 @@ fn interactive(
         inputs.extend(input.controls.poll(sdl3::timer::ticks()));
         for i in inputs.drain(..) {
             // A running Game takes no menu input: it reads the keyboard itself.
-            if sdl::running(&mut nav).is_some() {
+            if sdl::playing(&mut nav) {
                 continue;
             }
             if nav.handle(i, &hits, &mut ctx) == Flow::Quit {
@@ -239,7 +239,7 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
         let mut esc = false;
         for i in step.inputs() {
             // A running Game takes no menu input; `back` stands for Esc.
-            if sdl::running(&mut nav).is_some() {
+            if sdl::playing(&mut nav) {
                 esc |= i == Input::Action(Action::Back);
                 continue;
             }
@@ -263,23 +263,25 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
                 sdl::start(&game, &mut nav, &ctx, audio.as_ref(), Some(SHOT_REFRESH));
             }
         }
-        sdl::tick(&mut nav, &mut ctx, &mut gfx, 1.0 / SHOT_REFRESH, &[], |k| {
-            esc && k == Scancode::Escape
-        });
-        // A Core download (FR-EMB-2) runs on its own thread; block until it settles so the
-        // screenshot is deterministic, with a cap in case it never does.
-        let deadline = Instant::now() + Duration::from_secs(60);
-        while nav.top().busy() && Instant::now() < deadline {
-            if nav.tick(&mut ctx) == Flow::Quit {
-                break 'steps;
+        for _ in 0..step.frames() {
+            sdl::tick(&mut nav, &mut ctx, &mut gfx, 1.0 / SHOT_REFRESH, &[], |k| {
+                esc && k == Scancode::Escape
+            });
+            // A Core download (FR-EMB-2) runs on its own thread; block until it settles so the
+            // screenshot is deterministic, with a cap in case it never does.
+            let deadline = Instant::now() + Duration::from_secs(60);
+            while nav.top().busy() && Instant::now() < deadline {
+                if nav.tick(&mut ctx) == Flow::Quit {
+                    break 'steps;
+                }
+                if let Some(game) = ctx.play.take() {
+                    sdl::start(&game, &mut nav, &ctx, audio.as_ref(), Some(SHOT_REFRESH));
+                }
             }
-            if let Some(game) = ctx.play.take() {
-                sdl::start(&game, &mut nav, &ctx, audio.as_ref(), Some(SHOT_REFRESH));
-            }
+            ctx.input_kind = view.kind;
+            hits = draw(&mut gfx, &mut nav, &ctx, &view, &clock);
+            gfx.present();
         }
-        ctx.input_kind = view.kind;
-        hits = draw(&mut gfx, &mut nav, &ctx, &view, &clock);
-        gfx.present();
     }
     for frame in 1..=shot.frames {
         sdl::tick(&mut nav, &mut ctx, &mut gfx, 1.0 / SHOT_REFRESH, &[], |_| false);
@@ -311,10 +313,16 @@ fn draw(gfx: &mut Gfx<'_>, nav: &mut Nav, ctx: &Ctx, view: &View, clock: &str) -
     if !nav.base().chrome() {
         gfx.clear(BLACK);
         nav.base().draw(gfx, ctx);
-        if let Some(modal) = nav.modal() {
-            modal.draw(gfx, ctx);
-        }
-        return Hits::default();
+        let Some(modal) = nav.modal() else {
+            return Hits::default();
+        };
+        // The Pause Menu over a running Game.
+        modal.draw(gfx, ctx);
+        let hints = chrome::hintbar(gfx, &modal.hints(), view.kind, view.style, view.pointer);
+        return Hits {
+            hints,
+            ..Hits::default()
+        };
     }
     chrome::background(gfx);
     nav.base().draw(gfx, ctx);

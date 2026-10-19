@@ -15,14 +15,17 @@ use sdl3::keyboard::Scancode;
 
 use super::input::{self, PadState, PauseTrigger};
 use super::saves::{self, Tracker};
-use super::timing::{self, AUDIO_MAX, Scheduler};
+use super::states::{self, SLOTS, StatePaths};
+use super::timing::{self, AUDIO_MAX, PlayTimer, Scheduler};
 use crate::cores;
 use crate::ctx::{self, Ctx};
 use crate::launch::{self, FAILED_TITLE};
 use crate::library::db::GameRow;
 use crate::libretro::{Core, CoreDirs};
 use crate::screens::message::Message;
-use crate::systems;
+use crate::screens::pause::{PauseMenu, Request, SlotInfo};
+use crate::systems::{self, System};
+use crate::ui::cover::playtime_label;
 use crate::ui::gfx::Gfx;
 use crate::ui::input::Input;
 use crate::ui::nav::{Hint, Nav, Screen, Transition};
@@ -39,8 +42,14 @@ pub struct Session {
     pause: PauseTrigger,
     /// The Game's save memory file and its change tracker; `None` when it has no save memory.
     save: Option<(PathBuf, Tracker)>,
-    started: Instant,
+    system: &'static System,
+    states: StatePaths,
+    /// The Game's Playtime before this session.
+    playtime_before: u64,
+    timer: PlayTimer,
     shown: bool,
+    /// Whether the Pause Menu is open over it.
+    paused: bool,
 }
 
 struct Audio {
@@ -128,6 +137,18 @@ impl Session {
             let tracker = Tracker::new(ram);
             (srm, tracker)
         });
+        let states = StatePaths::new(root, system.id, Path::new(&game.rel_path));
+        // Continue where the player quit (FR-EMB-6). A state the Core can't read, e.g. after a
+        // Core update, starts the Game fresh.
+        match fs::read(states.resume()) {
+            Ok(state) => {
+                if let Err(e) = core.unserialize(&state) {
+                    eprintln!("game37: can't resume from {}: {e}", states.resume().display());
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => eprintln!("game37: can't read {}: {e}", states.resume().display()),
+        }
         let av = core.av_info();
         let audio = audio.and_then(|a| {
             Audio::open(a, av.sample_rate)
@@ -142,8 +163,12 @@ impl Session {
             scheduler: Scheduler::new(av.fps, refresh),
             pause: PauseTrigger::default(),
             save,
-            started: Instant::now(),
+            system,
+            states,
+            playtime_before: game.playtime_secs,
+            timer: PlayTimer::start(Instant::now()),
             shown: true,
+            paused: false,
         })
     }
 
@@ -154,8 +179,27 @@ impl Session {
             return;
         }
         self.shown = shown;
+        self.sync_audio();
+    }
+
+    /// The Pause Menu opened or closed: a paused Game runs no frames, plays no sound and counts
+    /// no Playtime. Resuming waits for the pause trigger to be let go before it can fire again.
+    fn set_paused(&mut self, paused: bool) {
+        if paused == self.paused {
+            return;
+        }
+        self.paused = paused;
+        self.timer.set_paused(paused, Instant::now());
+        if !paused {
+            self.pause = PauseTrigger::default();
+        }
+        self.sync_audio();
+    }
+
+    fn sync_audio(&mut self) {
+        let play = self.shown && !self.paused;
         if let Some(audio) = &self.audio {
-            let _ = if shown {
+            let _ = if play {
                 audio.stream.resume()
             } else {
                 audio.stream.pause()
@@ -204,16 +248,73 @@ impl Session {
         false
     }
 
-    /// Writes the save memory if it changed, records the Playtime and silences the Game. The
-    /// Core shuts down when the session is dropped.
+    /// While paused: whether Guide or Select+Start was pressed again, which resumes. Esc is left
+    /// to the Pause Menu, as its Back.
+    fn resume_trigger(&mut self, pads: &[(usize, PadState)], down: impl Fn(Scancode) -> bool) -> bool {
+        let esc = down(Scancode::Escape);
+        let (_, fired) = input::frame_input(pads, Default::default(), esc, &mut self.pause);
+        fired && !esc
+    }
+
+    /// The Pause Menu's heading line: "<System> · <Playtime> played".
+    fn meta(&self) -> String {
+        let secs = self.playtime_before + self.timer.played(Instant::now()).as_secs();
+        format!("{} · {} played", self.system.name, playtime_label(secs))
+    }
+
+    /// Slot `n`'s time and screenshot, `None` when it is empty.
+    fn slot_info(&self, n: usize) -> Option<SlotInfo> {
+        let modified = fs::metadata(self.states.slot(n))
+            .and_then(|m| m.modified())
+            .ok()?;
+        let thumb = states::read_png(&self.states.thumb(n))
+            .map_err(|e| eprintln!("game37: can't read {}: {e}", self.states.thumb(n).display()))
+            .ok();
+        Some(SlotInfo {
+            when: when_label(modified),
+            thumb,
+        })
+    }
+
+    /// Writes slot `n`'s Save State and a screenshot of the current frame (FR-EMB-5).
+    fn save_slot(&mut self, n: usize) -> Result<SlotInfo, String> {
+        let state = self.core.serialize().map_err(|e| e.to_string())?;
+        saves::write(&self.states.slot(n), &state).map_err(|e| e.to_string())?;
+        let rgb = states::frame_rgb(self.core.frame());
+        let png = states::encode_png(&rgb).map_err(|e| e.to_string())?;
+        saves::write(&self.states.thumb(n), &png).map_err(|e| e.to_string())?;
+        self.slot_info(n).ok_or_else(|| "the slot is gone".to_owned())
+    }
+
+    fn load_slot(&mut self, n: usize) -> Result<(), String> {
+        let state = fs::read(self.states.slot(n)).map_err(|e| e.to_string())?;
+        self.core.unserialize(&state).map_err(|e| e.to_string())
+    }
+
+    /// Writes the Resume State the next launch continues from (FR-EMB-6).
+    fn write_resume(&mut self) {
+        let path = self.states.resume();
+        match self.core.serialize() {
+            Ok(state) => {
+                if let Err(e) = saves::write(&path, &state) {
+                    eprintln!("game37: can't write {}: {e}", path.display());
+                }
+            }
+            Err(e) => eprintln!("game37: no Resume State: {e}"),
+        }
+    }
+
+    /// Writes the save memory if it changed and the Resume State, records the Playtime and
+    /// silences the Game. The Core shuts down when the session is dropped.
     fn end(&mut self, ctx: &mut Ctx, now: i64) {
+        self.write_resume();
         if let Some((path, tracker)) = &mut self.save
             && let Some(ram) = self.core.save_ram()
             && tracker.changed(ram)
         {
             write_save(path, tracker, ram);
         }
-        launch::record(ctx, self.game_id, now, self.started.elapsed());
+        launch::record(ctx, self.game_id, now, self.timer.played(Instant::now()));
         self.audio = None;
     }
 }
@@ -259,9 +360,15 @@ pub fn start(game: &GameRow, nav: &mut Nav, ctx: &Ctx, audio: Option<&AudioSubsy
     }
 }
 
-/// The session on top of `nav`, if a Game is running there.
+/// The running session, if a Game runs on `nav`, with or without the Pause Menu over it.
 pub fn running(nav: &mut Nav) -> Option<&mut Session> {
-    nav.top().session()
+    nav.base().session()
+}
+
+/// Whether a Game runs on `nav` without the Pause Menu: it then takes no menu input, as it reads
+/// the keyboard itself.
+pub fn playing(nav: &mut Nav) -> bool {
+    nav.modal().is_none() && running(nav).is_some()
 }
 
 /// Ticks the running session, if any (see [`Session::tick`]), and handles its pause trigger.
@@ -273,24 +380,83 @@ pub fn tick(
     pads: &[(usize, PadState)],
     down: impl Fn(Scancode) -> bool,
 ) {
-    if let Some(session) = running(nav)
-        && session.tick(gfx, dt, pads, down)
-    {
-        on_pause(nav, ctx);
+    let paused = nav.modal().is_some();
+    let Some(session) = running(nav) else { return };
+    session.set_paused(paused);
+    if !paused {
+        if session.tick(gfx, dt, pads, down) {
+            on_pause(nav);
+        }
+        return;
+    }
+    let resume = session.resume_trigger(pads, down);
+    let request = nav.top().pause_menu().and_then(PauseMenu::take_request);
+    match request {
+        Some(Request::Save(n)) => {
+            let info = running(nav).expect("found above").save_slot(n);
+            let info = info.map_err(|e| eprintln!("game37: can't save to slot {n}: {e}"));
+            if let Some(menu) = nav.top().pause_menu() {
+                menu.saved(n, info);
+            }
+        }
+        Some(Request::Load(n)) => match running(nav).expect("found above").load_slot(n) {
+            Ok(()) => nav.pop(),
+            Err(e) => {
+                eprintln!("game37: can't load slot {n}: {e}");
+                if let Some(menu) = nav.top().pause_menu() {
+                    menu.load_failed(n);
+                }
+            }
+        },
+        Some(Request::Quit) => end(nav, ctx),
+        None if resume => nav.pop(),
+        None => {}
     }
 }
 
-/// What the pause trigger does. The Pause Menu replaces this; for now it ends the session.
-pub fn on_pause(nav: &mut Nav, ctx: &mut Ctx) {
-    end(nav, ctx);
+/// What the pause trigger does: opens the Pause Menu over the session (FR-EMB-3).
+pub fn on_pause(nav: &mut Nav) {
+    let Some(session) = running(nav) else { return };
+    let slots = (1..=SLOTS).map(|n| session.slot_info(n)).collect();
+    let menu = PauseMenu::new(&session.title, session.meta(), slots);
+    nav.push(Box::new(menu));
 }
 
-/// Ends the running session, if any: writes its save memory, records its Playtime, shuts its
-/// Core down and pops back to where it started.
+/// Ends the running session, if any, paused or not: writes its save memory and Resume State,
+/// records its Playtime, shuts its Core down and pops back to where it started.
 pub fn end(nav: &mut Nav, ctx: &mut Ctx) {
     if let Some(session) = running(nav) {
         session.end(ctx, ctx::now());
+        while nav.modal().is_some() {
+            nav.pop();
+        }
         nav.pop();
+    }
+}
+
+/// A file time as the Pause Menu shows it, in local time (see [`states::when_label`]).
+fn when_label(time: std::time::SystemTime) -> String {
+    use sdl3::sys::time::{SDL_DateTime, SDL_GetCurrentTime, SDL_TimeToDateTime};
+    let local = |ns: i64| {
+        let mut dt = SDL_DateTime::default();
+        // SAFETY: only writes to the local passed in.
+        unsafe { SDL_TimeToDateTime(ns, &mut dt, true) }.then_some(states::Local {
+            year: dt.year,
+            month: dt.month as u32,
+            day: dt.day as u32,
+            hour: dt.hour as u32,
+            minute: dt.minute as u32,
+        })
+    };
+    let then = time
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as i64);
+    let mut now = 0;
+    // SAFETY: only writes to the local passed in.
+    let now = unsafe { SDL_GetCurrentTime(&mut now) }.then_some(now);
+    match (local(then), now.and_then(local)) {
+        (Some(then), Some(now)) => states::when_label(then, now),
+        _ => String::new(),
     }
 }
 
@@ -304,6 +470,72 @@ mod tests {
     use crate::libretro::tests::serial;
 
     const TESTDATA: &str = "/home/matei/Game37/.testdata";
+
+    fn frame_hash(session: &Session) -> u64 {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        session.core.frame().hash(&mut h);
+        h.finish()
+    }
+
+    /// Runs `n` frames without input; returns the last one's hash.
+    fn run(session: &mut Session, n: usize) -> u64 {
+        for _ in 0..n {
+            session.core.run_frame(&Default::default());
+        }
+        frame_hash(session)
+    }
+
+    /// Save States and the Resume State on bsnes (FR-EMB-5, FR-EMB-6): loading slot 1 replays
+    /// the same frames, and a relaunch continues from the frame shown when the player quit.
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn pause_slots_and_resume_state_round_trip_on_a_real_core() {
+        let _serial = serial();
+        let root = TempDir::new().unwrap();
+        let rel = "snes/240p Test Suite (World).sfc";
+        fs::create_dir_all(root.path().join("snes")).unwrap();
+        fs::copy(Path::new(TESTDATA).join("games").join(rel), root.path().join(rel)).unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = root.path().to_path_buf();
+        ctx.data_dir = Path::new(TESTDATA).join("data");
+        let game = GameRow {
+            id: 1,
+            system: "snes".into(),
+            rel_path: rel.into(),
+            title: "240p Test Suite".into(),
+            date_added: 0,
+            last_played: None,
+            playtime_secs: 0,
+            favorite: false,
+        };
+
+        let mut session = Session::start(&game, &ctx, None, None).unwrap_or_else(|e| panic!("{e}"));
+        run(&mut session, 100);
+        let info = session.save_slot(1).unwrap();
+        assert!(info.thumb.is_some_and(|t| t.width > 0), "slot 1 has a screenshot");
+        assert!(info.when.starts_with("Today, "), "{}", info.when);
+        let states = root.path().join("states/snes");
+        assert!(states.join("240p Test Suite (World).slot1.state").exists());
+        assert!(states.join("240p Test Suite (World).slot1.png").exists());
+        let first = run(&mut session, 30);
+        session.load_slot(1).unwrap();
+        assert_eq!(
+            run(&mut session, 30),
+            first,
+            "loading slot 1 replays the same frames"
+        );
+
+        run(&mut session, 200);
+        session.end(&mut ctx, 0);
+        // What the quit-time state shows next. bsnes's first frame after restoring a state into a
+        // freshly loaded Core is a stale one, so compare the second.
+        let next = run(&mut session, 2);
+        drop(session);
+        assert!(states.join("240p Test Suite (World).resume.state").exists());
+        let mut session = Session::start(&game, &ctx, None, None).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(run(&mut session, 2), next, "the relaunch continues where it quit");
+    }
 
     /// In-game Saves are always written (FR-EMB-7): a real Core's save RAM round-trips through
     /// the same save path a session uses, and lands in a `saves/<system>/` temp dir. Of mGBA,

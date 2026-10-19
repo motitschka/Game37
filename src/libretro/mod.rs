@@ -373,6 +373,11 @@ impl Core {
         }
     }
 
+    /// The last video frame the Core produced.
+    pub fn frame(&self) -> &Frame {
+        &self.video
+    }
+
     /// The Core's state, for [`Core::unserialize`] later.
     pub fn serialize(&mut self) -> Result<Vec<u8>, CoreError> {
         // SAFETY: the Core is loaded with a Game.

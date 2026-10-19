@@ -106,6 +106,8 @@ pub struct Gfx<'tc> {
     /// The running Game's last frame. Kept here rather than in its screen, because a texture
     /// borrows the texture creator and a `Box<dyn Screen>` can't.
     game: Option<GameTexture<'tc>>,
+    /// Images screens set by key, such as Save State screenshots.
+    images: HashMap<&'static str, Texture<'tc>>,
 }
 
 struct GameTexture<'tc> {
@@ -232,6 +234,7 @@ impl<'tc> Gfx<'tc> {
             texts: FrameCache::new(),
             widths: FrameCache::new(),
             game: None,
+            images: HashMap::new(),
         }
     }
 
@@ -279,6 +282,37 @@ impl<'tc> Gfx<'tc> {
                 .canvas
                 .copy(&game.texture, None, FRect::new(r.x, r.y, r.w, r.h));
         }
+    }
+
+    /// Sets the image drawn for `key` from RGB pixels, or forgets it for `None`.
+    pub fn set_image(&mut self, key: &'static str, image: Option<&crate::session::states::Rgb>) {
+        self.images.remove(key);
+        let Some(image) = image else { return };
+        let made = self
+            .creator
+            .create_texture_static(sdl3::pixels::PixelFormat::RGB24, image.width, image.height)
+            .map_err(|e| e.to_string())
+            .and_then(|mut t| {
+                t.update(None, &image.data, image.width as usize * 3)
+                    .map_err(|e| e.to_string())?;
+                Ok(t)
+            });
+        match made {
+            Ok(texture) => {
+                set_pixel_art_scaling(&texture);
+                self.images.insert(key, texture);
+            }
+            Err(e) => eprintln!("game37: can't make an image: {e}"),
+        }
+    }
+
+    /// Draws the image set for `key` stretched over `r`; returns whether there is one.
+    pub fn draw_image(&mut self, key: &str, r: Rect) -> bool {
+        let Some(texture) = self.images.get(key) else {
+            return false;
+        };
+        let _ = self.canvas.copy(texture, None, FRect::new(r.x, r.y, r.w, r.h));
+        true
     }
 
     /// The window's display refresh rate in Hz, if SDL knows it.
