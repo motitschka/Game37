@@ -20,6 +20,9 @@ pub struct Ctx {
     pub button_style: ButtonStyle,
     /// Which Standalone Emulators are installed, as last checked.
     pub emulators: Emulators,
+    /// Text a screen wants put on the system clipboard (FR-CAR-9): the screen layer has no SDL
+    /// handle, so it leaves the request here for the app's event loop to carry out.
+    pub clipboard_request: Option<String>,
 }
 
 impl Ctx {
@@ -32,6 +35,7 @@ impl Ctx {
             input_kind: InputKind::Controller,
             button_style: ButtonStyle::default(),
             emulators: Emulators::all_installed(),
+            clipboard_request: None,
         }
     }
 

@@ -44,6 +44,7 @@ pub fn run(options: Options) -> Result<(), String> {
             if has_library {
                 ctx.scan_all(ctx::now()).map_err(|e| e.to_string())?;
             }
+            ctx.emulators = shot.missing_emulators.clone();
             let nav = screens::start(loaded, &path, &ctx);
             screenshot(nav, ctx, shot)
         }
@@ -139,6 +140,7 @@ fn interactive(mut nav: Nav, mut ctx: Ctx, mut watcher: Option<LibraryWatcher>) 
                 break 'frames;
             }
         }
+        copy_clipboard_request(&mut ctx, &video);
         if !shown {
             continue;
         }
@@ -188,6 +190,7 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, shot: Screenshot) -> Result<(), String
             if nav.handle(i, &hits, &mut ctx) == Flow::Quit {
                 break 'steps;
             }
+            copy_clipboard_request(&mut ctx, &video);
         }
         ctx.input_kind = view.kind;
         hits = draw(&mut gfx, &mut nav, &ctx, &view, &clock);
@@ -223,6 +226,16 @@ fn draw(gfx: &mut Gfx<'_>, nav: &mut Nav, ctx: &Ctx, view: &View, clock: &str) -
         tabs: top.tabs,
         back: top.back,
         hints,
+    }
+}
+
+/// Carries out a screen's clipboard request, if it left one (FR-CAR-9): the screen layer has no
+/// SDL handle, so `Ctx::clipboard_request` is the seam. A failure is logged, not fatal.
+fn copy_clipboard_request(ctx: &mut Ctx, video: &VideoSubsystem) {
+    if let Some(text) = ctx.clipboard_request.take()
+        && let Err(e) = video.clipboard().set_clipboard_text(&text)
+    {
+        eprintln!("game37: can't copy to the clipboard: {e}");
     }
 }
 

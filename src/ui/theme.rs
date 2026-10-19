@@ -49,6 +49,8 @@ pub const MUTED: Colour = Colour::hex(0x8A93A6);
 pub const DIM: Colour = Colour::hex(0x5B6477);
 pub const ACCENT: Colour = Colour::hex(0x8B7BFF);
 pub const STAR: Colour = Colour::hex(0xFFC84A);
+/// Missing-emulator warnings (FR-CAR-9).
+pub const WARN: Colour = Colour::hex(0xFFB020);
 
 #[cfg(test)]
 mod tests {
