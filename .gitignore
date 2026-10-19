@@ -1,0 +1,72 @@
+# Build output
+/target/
+
+# Game files, BIOS, keys and secrets never belong in this repo (NFR-6).
+# Games live in the Games Root (~/Games/), the Config in ~/.config/game37/.
+secrets.toml
+/config.toml
+*.key
+keys.txt
+prod.keys
+title.keys
+aes_keys.txt
+*.bios
+bios/
+saves/
+states/
+*.srm
+*.sav
+*.state
+*.state[0-9]
+
+# Nintendo
+*.nes
+*.fds
+*.unf
+*.unif
+*.gb
+*.gbc
+*.gba
+*.sfc
+*.smc
+*.n64
+*.z64
+*.v64
+*.nds
+*.gcm
+*.rvz
+*.wbfs
+*.wia
+*.ciso
+*.gcz
+*.3ds
+*.3dsx
+*.cci
+*.cxi
+*.cia
+*.wua
+*.wud
+*.wux
+*.rpx
+*.nsp
+*.xci
+*.nca
+*.nro
+*.nso
+
+# Sony and disc images
+*.iso
+*.bin
+*.cue
+*.chd
+*.pbp
+*.m3u
+*.cso
+*.zso
+*.pkg
+*.sfo
+
+# Archives games often ship in
+*.zip
+*.7z
+*.rar

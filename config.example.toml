@@ -1,0 +1,7 @@
+# Game37 Config. Copy to ~/.config/game37/config.toml and edit.
+# Its existence means setup is done: without it, Game37 shows First-run Setup.
+# The SteamGridDB API key does not go here: it lives in ~/.config/game37/secrets.toml.
+
+# The folder that holds one folder per System, plus bios/, saves/ and states/.
+# Default: "~/Games"
+games_root = "~/Games"
