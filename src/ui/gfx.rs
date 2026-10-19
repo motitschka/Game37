@@ -2,11 +2,12 @@
 //! screens. Coordinates are logical 1920×1080 pixels, letterboxed into the window.
 
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::path::Path;
 
 use sdl3::pixels::FColor;
 use sdl3::render::{BlendMode, FPoint, FRect, Texture, TextureCreator, Vertex, VertexIndices, WindowCanvas};
-use sdl3::video::WindowContext;
+use sdl3::video::{WindowContext, WindowFlags};
 
 use super::Rect;
 use super::text::{Fonts, Weight};
@@ -40,23 +41,67 @@ struct TextKey {
     weight: Weight,
 }
 
+impl TextKey {
+    fn new(text: &str, style: TextStyle) -> TextKey {
+        TextKey {
+            text: text.to_owned(),
+            size: style.size,
+            weight: style.weight,
+        }
+    }
+}
+
 struct CachedText<'tc> {
     texture: Texture<'tc>,
     w: f32,
     h: f32,
     ascent: f32,
-    last_used: u64,
 }
 
-/// Rendered text unused for this many frames is dropped from the cache.
+/// Cached text unused for this many frames is dropped from the cache.
 const TEXT_CACHE_FRAMES: u64 = 600;
+
+/// Values kept for as long as they are used: one not used for [`TEXT_CACHE_FRAMES`] frames is
+/// dropped at the end of a frame.
+struct FrameCache<K, V> {
+    /// Each value with the frame it was last used in.
+    entries: HashMap<K, (V, u64)>,
+    frame: u64,
+}
+
+impl<K: Eq + Hash, V> FrameCache<K, V> {
+    fn new() -> FrameCache<K, V> {
+        FrameCache {
+            entries: HashMap::new(),
+            frame: 0,
+        }
+    }
+
+    /// The value for `key`, made with `make` if it isn't cached, marked as used this frame.
+    fn get_or_insert_with(&mut self, key: K, make: impl FnOnce() -> V) -> &mut V {
+        let frame = self.frame;
+        let entry = self.entries.entry(key).or_insert_with(|| (make(), frame));
+        entry.1 = frame;
+        &mut entry.0
+    }
+
+    /// Ends a frame, dropping the values not used for [`TEXT_CACHE_FRAMES`] frames.
+    fn end_frame(&mut self) {
+        self.frame += 1;
+        let frame = self.frame;
+        self.entries
+            .retain(|_, (_, last_used)| frame - *last_used < TEXT_CACHE_FRAMES);
+    }
+}
 
 pub struct Gfx<'tc> {
     canvas: WindowCanvas,
     creator: &'tc TextureCreator<WindowContext>,
     fonts: Fonts,
-    texts: HashMap<TextKey, CachedText<'tc>>,
-    frame: u64,
+    /// Rendered text, or `None` where rendering failed, so it isn't retried every frame.
+    texts: FrameCache<TextKey, Option<CachedText<'tc>>>,
+    /// Text widths, measured without rendering.
+    widths: FrameCache<TextKey, f32>,
 }
 
 fn fcolour(c: Colour) -> FColor {
@@ -112,6 +157,32 @@ fn band_indices(n: usize, outer: usize, inner: usize, indices: &mut Vec<i32>) {
     }
 }
 
+/// Renders `text` into a texture, logging why if it can't.
+fn render<'tc>(
+    fonts: &mut Fonts,
+    creator: &'tc TextureCreator<WindowContext>,
+    text: &str,
+    style: TextStyle,
+) -> Option<CachedText<'tc>> {
+    let face = fonts
+        .face(style.weight, style.size)
+        .map_err(|e| eprintln!("{e}"))
+        .ok()?;
+    let ascent = face.ascent() as f32;
+    let surface = face
+        .render(text)
+        .map_err(|e| eprintln!("Can't render {text:?}: {e}"))
+        .ok()?;
+    let texture = creator.create_texture_from_surface(&surface).ok()?;
+    let (w, h) = (texture.width() as f32, texture.height() as f32);
+    Some(CachedText {
+        texture,
+        w,
+        h,
+        ascent,
+    })
+}
+
 /// Half the width of the soft edge drawn around shapes, standing in for anti-aliasing.
 const FEATHER: f32 = 0.5;
 
@@ -126,8 +197,8 @@ impl<'tc> Gfx<'tc> {
             canvas,
             creator,
             fonts,
-            texts: HashMap::new(),
-            frame: 0,
+            texts: FrameCache::new(),
+            widths: FrameCache::new(),
         }
     }
 
@@ -349,43 +420,26 @@ impl<'tc> Gfx<'tc> {
             .render_geometry(vertices, None, VertexIndices::from(indices));
     }
 
-    /// Makes sure `text` is rendered and cached, returning its key.
-    fn cached(&mut self, text: &str, size: u16, weight: Weight) -> Option<TextKey> {
-        let key = TextKey {
-            text: text.to_owned(),
-            size,
-            weight,
-        };
-        if !self.texts.contains_key(&key) {
-            let face = self.fonts.face(weight, size).map_err(|e| eprintln!("{e}")).ok()?;
-            let ascent = face.ascent() as f32;
-            let surface = face
-                .render(text)
-                .map_err(|e| eprintln!("Can't render {text:?}: {e}"))
-                .ok()?;
-            let texture = self.creator.create_texture_from_surface(&surface).ok()?;
-            let (w, h) = (texture.width() as f32, texture.height() as f32);
-            self.texts.insert(
-                key.clone(),
-                CachedText {
-                    texture,
-                    w,
-                    h,
-                    ascent,
-                    last_used: self.frame,
-                },
-            );
-        }
-        Some(key)
-    }
-
-    /// Width of `text` as [`Gfx::text`] would draw it.
+    /// Width of `text` as [`Gfx::text`] would draw it. Where SDL_ttf can't measure it, an estimate
+    /// on the wide side, so layouts still truncate.
     pub fn measure(&mut self, text: &str, style: TextStyle) -> f32 {
         if text.is_empty() {
             return 0.0;
         }
-        self.cached(text, style.size, style.weight)
-            .map_or(0.0, |key| self.texts[&key].w)
+        let fonts = &mut self.fonts;
+        *self.widths.get_or_insert_with(TextKey::new(text, style), || {
+            match fonts
+                .face(style.weight, style.size)
+                .and_then(|face| face.width(text))
+            {
+                Ok(w) => w as f32,
+                Err(e) => {
+                    let estimate = text.chars().count() as f32 * style.size as f32 * 0.6;
+                    eprintln!("Can't measure {text:?}: {e}; estimating {estimate} px");
+                    estimate
+                }
+            }
+        })
     }
 
     /// Draws one line of text with its baseline at `y`, aligned on `x`. Returns its width.
@@ -393,13 +447,14 @@ impl<'tc> Gfx<'tc> {
         if text.is_empty() {
             return 0.0;
         }
-        let Some(key) = self.cached(text, style.size, style.weight) else {
+        let (fonts, creator) = (&mut self.fonts, self.creator);
+        let cached = self
+            .texts
+            .get_or_insert_with(TextKey::new(text, style), || render(fonts, creator, text, style));
+        let Some(entry) = cached else {
             return 0.0;
         };
         let c = style.colour;
-        let frame = self.frame;
-        let entry = self.texts.get_mut(&key).expect("just cached");
-        entry.last_used = frame;
         entry.texture.set_color_mod(c.r, c.g, c.b);
         entry.texture.set_alpha_mod(c.a);
         let left = match align {
@@ -437,9 +492,8 @@ impl<'tc> Gfx<'tc> {
     /// Shows the frame and drops text not drawn for a while.
     pub fn present(&mut self) {
         self.canvas.present();
-        self.frame += 1;
-        let frame = self.frame;
-        self.texts.retain(|_, t| frame - t.last_used < TEXT_CACHE_FRAMES);
+        self.texts.end_frame();
+        self.widths.end_frame();
     }
 
     /// Writes the current frame (before `present`) as a BMP.
@@ -458,9 +512,61 @@ impl<'tc> Gfx<'tc> {
         (lx, ly)
     }
 
+    /// Whether the window can be seen: neither minimized nor hidden.
+    pub fn is_shown(&self) -> bool {
+        let flags = WindowFlags::from(self.canvas.window().window_flags());
+        !flags.intersects(WindowFlags::MINIMIZED | WindowFlags::HIDDEN)
+    }
+
     pub fn toggle_fullscreen(&mut self) {
         let window = self.canvas.window_mut();
         let fullscreen = window.fullscreen_state() != sdl3::video::FullscreenType::Off;
         let _ = window.set_fullscreen(!fullscreen);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_entry_used_every_frame_is_never_evicted() {
+        let mut cache = FrameCache::new();
+        let mut made = 0;
+        for _ in 0..3 * TEXT_CACHE_FRAMES {
+            cache.get_or_insert_with("Chrono", || {
+                made += 1;
+                6.0
+            });
+            cache.end_frame();
+        }
+        assert_eq!(made, 1);
+    }
+
+    #[test]
+    fn an_unused_entry_is_evicted_after_600_frames() {
+        let mut cache = FrameCache::new();
+        cache.get_or_insert_with("Chrono", || 6.0);
+        for _ in 0..TEXT_CACHE_FRAMES - 1 {
+            cache.end_frame();
+        }
+        assert!(cache.entries.contains_key("Chrono"));
+        cache.end_frame();
+        assert!(!cache.entries.contains_key("Chrono"));
+    }
+
+    #[test]
+    fn a_cached_failure_is_not_retried() {
+        let mut cache: FrameCache<&str, Option<f32>> = FrameCache::new();
+        let mut tries = 0;
+        for _ in 0..10 {
+            let value = cache.get_or_insert_with("too wide", || {
+                tries += 1;
+                None
+            });
+            assert_eq!(*value, None);
+            cache.end_frame();
+        }
+        assert_eq!(tries, 1);
     }
 }
