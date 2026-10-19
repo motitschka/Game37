@@ -3,6 +3,7 @@
 pub mod db;
 pub mod scan;
 pub mod title;
+pub mod watch;
 
 /// One Game found on disk by a scan.
 #[derive(Debug, Clone, PartialEq, Eq)]
