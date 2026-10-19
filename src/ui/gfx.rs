@@ -144,12 +144,35 @@ impl<'tc> Gfx<'tc> {
     }
 
     pub fn fill_round_rect(&mut self, r: Rect, radius: f32, c: Colour) {
+        self.fill_round_rect_with(r, radius, |_| c);
+    }
+
+    /// A rounded rect filled with a linear gradient from `from` at its top-left corner to `to` at
+    /// `end`, given as fractions of the rect's width and height: an SVG `linearGradient` from
+    /// (0, 0) to `end` in bounding-box units.
+    pub fn fill_round_rect_gradient(
+        &mut self,
+        r: Rect,
+        radius: f32,
+        from: Colour,
+        to: Colour,
+        end: (f32, f32),
+    ) {
+        let (ex, ey) = end;
+        let len2 = ex * ex + ey * ey;
+        self.fill_round_rect_with(r, radius, |p| {
+            let (u, v) = ((p.x - r.x) / r.w, (p.y - r.y) / r.h);
+            from.mix(to, (u * ex + v * ey) / len2)
+        });
+    }
+
+    /// A rounded rect coloured `colour_at` each point of its outline, interpolated in between.
+    fn fill_round_rect_with(&mut self, r: Rect, radius: f32, colour_at: impl Fn(FPoint) -> Colour) {
         let inner = rounded_outline(r.inset(FEATHER), radius - FEATHER);
         let outer = rounded_outline(r.inset(-FEATHER), radius + FEATHER);
         let n = inner.len();
-        let (solid, clear) = (fcolour(c), fcolour(c.alpha(0.0)));
-        let mut vertices: Vec<Vertex> = inner.iter().map(|&p| vertex(p, solid)).collect();
-        vertices.extend(outer.iter().map(|&p| vertex(p, clear)));
+        let mut vertices: Vec<Vertex> = inner.iter().map(|&p| vertex(p, fcolour(colour_at(p)))).collect();
+        vertices.extend(outer.iter().map(|&p| vertex(p, fcolour(colour_at(p).alpha(0.0)))));
         let mut indices = Vec::with_capacity(n * 9);
         for i in 1..n - 1 {
             indices.extend_from_slice(&[0, i as i32, i as i32 + 1]);

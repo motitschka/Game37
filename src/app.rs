@@ -37,16 +37,18 @@ pub fn run(options: Options) -> Result<(), String> {
         }
         _ => (Ctx::empty(), false),
     };
-    let nav = screens::start(loaded, &path);
     match options.screenshot {
         Some(shot) => {
             // Scan in the foreground, so the screenshot shows every Game.
             if has_library {
                 ctx.scan_all(ctx::now()).map_err(|e| e.to_string())?;
             }
+            let nav = screens::start(loaded, &path, &ctx);
             screenshot(nav, ctx, shot)
         }
         None => {
+            ctx.animate = true;
+            let nav = screens::start(loaded, &path, &ctx);
             let watcher = has_library.then(|| LibraryWatcher::start(ctx.games_root.clone()));
             interactive(nav, ctx, watcher)
         }
