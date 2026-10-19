@@ -75,6 +75,27 @@ impl PadState {
     }
 }
 
+/// Every button `PadState` reads from SDL: the positional ones (see [`BY_POSITION`]) plus Guide,
+/// which only the pause trigger reads. The thin SDL adapter in `session::sdl` presses these from
+/// an open `Gamepad` each frame.
+pub const ALL_BUTTONS: [Pad; 15] = [
+    Pad::South,
+    Pad::East,
+    Pad::West,
+    Pad::North,
+    Pad::Back,
+    Pad::Start,
+    Pad::LeftShoulder,
+    Pad::RightShoulder,
+    Pad::LeftStick,
+    Pad::RightStick,
+    Pad::DPadUp,
+    Pad::DPadDown,
+    Pad::DPadLeft,
+    Pad::DPadRight,
+    Pad::Guide,
+];
+
 /// Half an axis' travel: sticks and triggers past it count as pressed.
 const HALF: i16 = i16::MAX / 2;
 
