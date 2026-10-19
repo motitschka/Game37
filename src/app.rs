@@ -155,6 +155,14 @@ fn interactive(
         if launcher.poll(&mut nav, &mut ctx, ctx::now()).is_some() {
             gfx.restore();
         }
+        // Lets a Core download (FR-EMB-2) progress every frame, not only on input.
+        if nav.tick(&mut ctx) == Flow::Quit {
+            break 'frames;
+        }
+        if let Some(game) = ctx.play.take() {
+            let refresh = if vsync { gfx.refresh_rate() } else { None };
+            sdl::start(&game, &mut nav, &ctx, audio.as_ref(), refresh);
+        }
         inputs.extend(input.controls.poll(sdl3::timer::ticks()));
         for i in inputs.drain(..) {
             // A running Game takes no menu input: it reads the keyboard itself.
@@ -254,6 +262,17 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
         sdl::tick(&mut nav, &mut ctx, &mut gfx, 1.0 / SHOT_REFRESH, |k| {
             esc && k == Scancode::Escape
         });
+        // A Core download (FR-EMB-2) runs on its own thread; block until it settles so the
+        // screenshot is deterministic, with a cap in case it never does.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while nav.top().busy() && Instant::now() < deadline {
+            if nav.tick(&mut ctx) == Flow::Quit {
+                break 'steps;
+            }
+            if let Some(game) = ctx.play.take() {
+                sdl::start(&game, &mut nav, &ctx, audio.as_ref(), Some(SHOT_REFRESH));
+            }
+        }
         ctx.input_kind = view.kind;
         hits = draw(&mut gfx, &mut nav, &ctx, &view, &clock);
         gfx.present();

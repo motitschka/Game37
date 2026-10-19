@@ -32,6 +32,16 @@ pub trait Screen {
     fn session(&mut self) -> Option<&mut Session> {
         None
     }
+    /// Called once a frame for the top screen, outside input handling: the seam asynchronous
+    /// work (a Core download, say) uses to progress and transition without waiting for input.
+    fn tick(&mut self, _ctx: &mut Ctx) -> Transition {
+        Transition::None
+    }
+    /// Whether the screen has asynchronous work pending that screenshot mode should keep
+    /// ticking through before drawing the next step, e.g. a Core still downloading.
+    fn busy(&self) -> bool {
+        false
+    }
 }
 
 pub enum Transition {
@@ -185,6 +195,18 @@ impl Nav {
 
     pub fn push(&mut self, screen: Box<dyn Screen>) {
         self.tabs[self.active].stack.push(screen);
+    }
+
+    /// Polls the top screen's pending async work and carries out its transition. Call once a
+    /// frame, for every frame, not only when there is input.
+    pub fn tick(&mut self, ctx: &mut Ctx) -> Flow {
+        match self.top().tick(ctx) {
+            Transition::None => {}
+            Transition::Push(screen) => self.push(screen),
+            Transition::Pop => self.pop(),
+            Transition::Quit => return Flow::Quit,
+        }
+        Flow::Continue
     }
 
     fn switch_to(&mut self, tab: usize, ctx: &Ctx) {
