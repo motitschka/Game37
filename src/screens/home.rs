@@ -167,9 +167,11 @@ impl Home {
         }
     }
 
-    fn reload_if_changed(&mut self, ctx: &Ctx) {
+    /// Reloads if `ctx.revision` changed since the last load; tells the caller so it can ignore a
+    /// pointer event that was hit-tested against the previous frame's rects.
+    fn reload_if_changed(&mut self, ctx: &Ctx) -> bool {
         if self.revision == Some(ctx.revision) {
-            return;
+            return false;
         }
         for (i, row) in self.shelves.iter_mut().enumerate() {
             let loaded = ctx
@@ -189,6 +191,7 @@ impl Home {
             self.reveal(i);
         }
         self.reveal_shelf();
+        true
     }
 
     fn counts(&self) -> [usize; SHELVES] {
@@ -346,6 +349,18 @@ impl Home {
     }
 }
 
+/// Clips each hit rect to `view`, as `GameGrid` does, so a cover scrolled partly under the top
+/// bar or hint bar doesn't take clicks there (FR-UI-1).
+fn clip_hits(hits: &[(Rect, Target)], view: Rect) -> Vec<(Rect, Target)> {
+    hits.iter()
+        .filter_map(|&(r, t)| {
+            let y0 = r.y.max(view.y);
+            let y1 = (r.y + r.h).min(view.y + view.h);
+            (y1 > y0).then(|| (Rect::new(r.x, y0, r.w, y1 - y0), t))
+        })
+        .collect()
+}
+
 fn draw_see_all(gfx: &mut Gfx<'_>, r: Rect, count: usize, focused: bool) {
     if focused {
         cover::focus_ring(gfx, r, COVER_RADIUS);
@@ -383,7 +398,7 @@ impl Screen for Home {
     }
 
     fn handle(&mut self, input: Input, ctx: &mut Ctx) -> Transition {
-        self.reload_if_changed(ctx);
+        let reloaded = self.reload_if_changed(ctx);
         match input {
             Input::Action(Action::Confirm) => return self.confirm(),
             Input::Action(dir) if dir.is_direction() => {
@@ -392,16 +407,19 @@ impl Screen for Home {
                     self.reveal_shelf();
                 }
             }
+            // The hit rects below are from the previous frame; a reload just now may have moved or
+            // removed what they pointed at, so skip this pointer event rather than act on stale rects.
+            Input::Pointer(_) if reloaded => {}
             Input::Pointer(Pointer::Move { x, y }) => {
                 if let Some(Target::Item(s, c)) = hit(&self.hits, x, y) {
                     self.focus.shelf = s;
-                    self.focus.cols[s] = c;
+                    self.focus.cols[s] = c.min(self.counts()[s].saturating_sub(1));
                 }
             }
             Input::Pointer(Pointer::Click { x, y }) => match hit(&self.hits, x, y) {
                 Some(Target::Item(s, c)) => {
                     self.focus.shelf = s;
-                    self.focus.cols[s] = c;
+                    self.focus.cols[s] = c.min(self.counts()[s].saturating_sub(1));
                     return self.confirm();
                 }
                 Some(Target::Page(s, dir)) => {
@@ -445,10 +463,7 @@ impl Screen for Home {
             );
         }
         gfx.clip(None);
-        // Hits outside the visible area don't count.
-        let view = Rect::new(0.0, VIEW_TOP, W, VIEW_H);
-        self.hits
-            .retain(|(r, _)| r.y < view.y + view.h && r.y + r.h > view.y);
+        self.hits = clip_hits(&self.hits, Rect::new(0.0, VIEW_TOP, W, VIEW_H));
     }
 
     fn hints(&self) -> Vec<Hint> {
@@ -573,5 +588,73 @@ mod tests {
         assert_eq!(tilde(Path::new("/home/ann"), Some(home)), "~");
         assert_eq!(tilde(Path::new("/mnt/games"), Some(home)), "/mnt/games");
         assert_eq!(tilde(Path::new("/mnt/games"), None), "/mnt/games");
+    }
+
+    use crate::library::FoundGame;
+
+    fn found(n: usize) -> FoundGame {
+        FoundGame {
+            system: "snes",
+            rel_path: format!("snes/g{n:03}.sfc"),
+            title: format!("Game {n:03}"),
+        }
+    }
+
+    #[test]
+    fn a_click_that_lands_in_the_reload_frame_is_ignored() {
+        let mut ctx = Ctx::empty();
+        let many: Vec<_> = (0..20).map(found).collect();
+        ctx.library.sync_system("snes", &many, 0).unwrap();
+        let mut home = Home::new();
+        home.handle(Input::Action(Action::Confirm), &mut ctx); // initial load
+        let recently_added = 2; // Shelf::ALL's index for Shelf::RecentlyAdded
+        assert_eq!(home.shelves[recently_added].games.len(), 20);
+
+        // Focus Game 10 on the Shelf, and record where a click there would land, as the previous
+        // frame's hit rects would.
+        home.focus.shelf = recently_added;
+        home.focus.cols[recently_added] = 10;
+        home.hits = vec![(
+            Rect::new(500.0, 400.0, 50.0, 50.0),
+            Target::Item(recently_added, 10),
+        )];
+
+        // The Shelf shrinks to 3 Games, and a click lands where Game 10 used to be.
+        let shrunk: Vec<_> = (0..3).map(found).collect();
+        ctx.library.sync_system("snes", &shrunk, 0).unwrap();
+        ctx.revision += 1;
+        home.handle(Input::Pointer(Pointer::Click { x: 510.0, y: 410.0 }), &mut ctx);
+
+        assert_eq!(
+            home.shelves[recently_added].games.len(),
+            3,
+            "the Shelf did reload"
+        );
+        assert_eq!(
+            home.focus.cols[recently_added], 3,
+            "the stale click was ignored; focus stays where the reload's own refocus clamped it"
+        );
+    }
+
+    #[test]
+    fn a_hit_rect_above_the_view_is_clipped_so_a_click_there_misses() {
+        let view = Rect::new(0.0, VIEW_TOP, W, VIEW_H);
+        // A cover scrolled so most of it sits above the top bar; only its bottom sliver is
+        // visible.
+        let hits = vec![(
+            Rect::new(100.0, VIEW_TOP - 80.0, COVER_W, COVER_H),
+            Target::Item(0, 2),
+        )];
+        let clipped = clip_hits(&hits, view);
+        assert_eq!(
+            hit(&clipped, 150.0, VIEW_TOP - 40.0),
+            None,
+            "a click under the top bar misses"
+        );
+        assert_eq!(
+            hit(&clipped, 150.0, VIEW_TOP + 5.0),
+            Some(Target::Item(0, 2)),
+            "a click on the visible sliver still hits"
+        );
     }
 }

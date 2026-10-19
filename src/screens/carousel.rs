@@ -182,6 +182,8 @@ pub struct Carousel {
     /// Game counts in System Order, and the library revision they were read at.
     counts: [usize; SYSTEMS.len()],
     counted: Option<u64>,
+    /// The index last written as the last-viewed System (FR-CAR-6).
+    saved: usize,
 }
 
 impl Carousel {
@@ -194,6 +196,7 @@ impl Carousel {
             last_frame: None,
             counts: [0; SYSTEMS.len()],
             counted: None,
+            saved: focus,
         }
     }
 
@@ -205,21 +208,40 @@ impl Carousel {
         &SYSTEMS[self.focus()]
     }
 
-    /// Moves the focus `steps` Systems right (left when negative) and remembers it (FR-CAR-6).
-    fn step(&mut self, steps: i32, ctx: &Ctx) {
+    /// Moves the focus `steps` Systems right (left when negative) (FR-CAR-7). Doesn't save: while
+    /// a direction is held, this runs about every 35 ms, and saving the focused System is deferred
+    /// to `save` (FR-CAR-6).
+    fn step(&mut self, steps: i32) {
         self.target += steps;
         // Keep both in range together so the slide in progress carries on.
         let n = SYSTEMS.len() as i32;
         let shift = self.target.div_euclid(n) * n;
         self.target -= shift;
         self.position -= shift as f32;
+    }
+
+    /// Writes the focused System as the last viewed, if it isn't already saved (FR-CAR-6).
+    fn save(&mut self, ctx: &Ctx) {
+        if self.saved == self.focus() {
+            return;
+        }
+        self.saved = self.focus();
         if let Err(e) = ctx.library.set_last_system(self.system().id) {
             eprintln!("game37: can't save the last System: {e}");
         }
     }
 
-    fn open(&self, ctx: &Ctx) -> Transition {
+    fn open(&mut self, ctx: &Ctx) -> Transition {
+        self.save(ctx);
         Transition::Push(console_page(self.system(), ctx))
+    }
+
+    /// Saves the focused System once the slide has settled, rather than on every step while a
+    /// direction is held (FR-CAR-6).
+    fn settle(&mut self, ctx: &Ctx) {
+        if self.position == self.target as f32 {
+            self.save(ctx);
+        }
     }
 
     /// Re-reads the Game counts when the library changed.
@@ -294,14 +316,14 @@ impl Screen for Carousel {
 
     fn handle(&mut self, input: Input, ctx: &mut Ctx) -> Transition {
         match input {
-            Input::Action(Action::Left) => self.step(-1, ctx),
-            Input::Action(Action::Right) => self.step(1, ctx),
+            Input::Action(Action::Left) => self.step(-1),
+            Input::Action(Action::Right) => self.step(1),
             Input::Action(Action::Confirm) => return self.open(ctx),
-            Input::Pointer(Pointer::Wheel { dy }) if dy > 0.0 => self.step(-1, ctx),
-            Input::Pointer(Pointer::Wheel { dy }) if dy < 0.0 => self.step(1, ctx),
+            Input::Pointer(Pointer::Wheel { dy }) if dy > 0.0 => self.step(-1),
+            Input::Pointer(Pointer::Wheel { dy }) if dy < 0.0 => self.step(1),
             Input::Pointer(Pointer::Click { x, y }) => match card_at(x, y) {
                 Some(0) => return self.open(ctx),
-                Some(offset) => self.step(offset, ctx),
+                Some(offset) => self.step(offset),
                 None => {}
             },
             _ => {}
@@ -312,6 +334,7 @@ impl Screen for Carousel {
     fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
         self.refresh(ctx);
         self.advance(ctx.animate);
+        self.settle(ctx);
 
         // The System's colour tints the screen in place of the accent glow, blending while the
         // cards slide.
@@ -537,9 +560,36 @@ mod tests {
         let mut carousel = Carousel::new(&ctx.library);
         assert_eq!(carousel.system().id, "nes");
         act(&mut carousel, &mut ctx, Input::Action(Action::Left));
+        carousel.advance(ctx.animate);
+        carousel.settle(&ctx);
         let reopened = Carousel::new(&ctx.library);
         assert_eq!(reopened.system().id, "ps4");
         assert_eq!(reopened.position, at("ps4") as f32, "starts settled");
+    }
+
+    #[test]
+    fn the_last_system_is_saved_once_a_held_direction_settles_not_on_every_step() {
+        let mut ctx = Ctx::empty();
+        ctx.animate = true;
+        let mut carousel = Carousel::new(&ctx.library);
+        assert_eq!(carousel.system().id, "nes");
+        // A direction held down steps several times before any frame draws, as it would every
+        // ~35 ms while held; none of those steps should write to the database.
+        for _ in 0..5 {
+            act(&mut carousel, &mut ctx, Input::Action(Action::Right));
+            carousel.advance(ctx.animate);
+            carousel.settle(&ctx);
+            assert_eq!(
+                ctx.library.last_system().unwrap(),
+                "nes",
+                "still sliding: not settled yet"
+            );
+        }
+        assert_ne!(carousel.system().id, "nes");
+        // Settle the slide (as turning animation off, e.g. for screenshots, does in one step).
+        carousel.advance(false);
+        carousel.settle(&ctx);
+        assert_eq!(ctx.library.last_system().unwrap(), carousel.system().id);
     }
 
     #[test]
