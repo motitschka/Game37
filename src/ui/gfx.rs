@@ -147,6 +147,11 @@ impl<'tc> Gfx<'tc> {
         self.fill_round_rect_with(r, radius, |_| c);
     }
 
+    /// A rounded rect filled with a vertical gradient from `top` to `bottom`.
+    pub fn fill_round_rect_vgradient(&mut self, r: Rect, radius: f32, top: Colour, bottom: Colour) {
+        self.fill_round_rect_gradient(r, radius, top, bottom, (0.0, 1.0));
+    }
+
     /// A rounded rect filled with a linear gradient from `from` at its top-left corner to `to` at
     /// `end`, given as fractions of the rect's width and height: an SVG `linearGradient` from
     /// (0, 0) to `end` in bounding-box units.
@@ -201,6 +206,96 @@ impl<'tc> Gfx<'tc> {
             band_indices(n, k * n, (k + 1) * n, &mut indices);
         }
         self.geometry(&vertices, &indices);
+    }
+
+    /// A dashed outline of `width` centred on the rect's edge, like an SVG stroke with
+    /// `stroke-dasharray="dash gap"`.
+    pub fn stroke_round_rect_dashed(
+        &mut self,
+        r: Rect,
+        radius: f32,
+        width: f32,
+        dash: f32,
+        gap: f32,
+        c: Colour,
+    ) {
+        let outline = rounded_outline(r, radius);
+        let n = outline.len();
+        let mut along = 0.0;
+        for i in 0..n {
+            let (a, b) = (outline[i], outline[(i + 1) % n]);
+            let len = ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt();
+            if len == 0.0 {
+                continue;
+            }
+            // Walk this edge in pieces that end at dash or gap boundaries.
+            let mut t = 0.0;
+            while t < len {
+                let phase = along % (dash + gap);
+                let (on, left) = if phase < dash {
+                    (true, dash - phase)
+                } else {
+                    (false, dash + gap - phase)
+                };
+                let step = left.min(len - t);
+                if on {
+                    let p = |d: f32| (a.x + (b.x - a.x) * d / len, a.y + (b.y - a.y) * d / len);
+                    let (x1, y1) = p(t);
+                    let (x2, y2) = p(t + step);
+                    self.line(x1, y1, x2, y2, width, c);
+                }
+                t += step;
+                along += step;
+            }
+        }
+    }
+
+    /// A straight line of `width` with square ends.
+    pub fn line(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, width: f32, c: Colour) {
+        let len = ((x2 - x1).powi(2) + (y2 - y1).powi(2)).sqrt();
+        if len == 0.0 {
+            return;
+        }
+        let (nx, ny) = (-(y2 - y1) / len * width / 2.0, (x2 - x1) / len * width / 2.0);
+        self.fill_polygon(
+            &[
+                (x1 + nx, y1 + ny),
+                (x2 + nx, y2 + ny),
+                (x2 - nx, y2 - ny),
+                (x1 - nx, y1 - ny),
+            ],
+            c,
+        );
+    }
+
+    /// Fills a convex polygon.
+    pub fn fill_polygon(&mut self, points: &[(f32, f32)], c: Colour) {
+        if points.len() < 3 {
+            return;
+        }
+        let colour = fcolour(c);
+        let vertices: Vec<Vertex> = points
+            .iter()
+            .map(|&(x, y)| vertex(FPoint::new(x, y), colour))
+            .collect();
+        let mut indices = Vec::with_capacity(3 * (points.len() - 2));
+        for i in 1..points.len() as i32 - 1 {
+            indices.extend_from_slice(&[0, i, i + 1]);
+        }
+        self.geometry(&vertices, &indices);
+    }
+
+    /// Restricts drawing to `r` until called again; `None` draws everywhere.
+    pub fn clip(&mut self, r: Option<Rect>) {
+        let rect = r.map(|r| {
+            sdl3::rect::Rect::new(
+                r.x.floor() as i32,
+                r.y.floor() as i32,
+                r.w.ceil().max(1.0) as u32,
+                r.h.ceil().max(1.0) as u32,
+            )
+        });
+        self.canvas.set_clip_rect(rect);
     }
 
     pub fn fill_circle(&mut self, cx: f32, cy: f32, radius: f32, c: Colour) {

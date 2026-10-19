@@ -108,6 +108,8 @@ fn interactive(mut nav: Nav, mut ctx: Ctx, mut watcher: Option<LibraryWatcher>) 
                 return Ok(());
             }
         }
+        ctx.input_kind = input.kind;
+        ctx.button_style = input.style;
         hits = draw(&mut gfx, &mut nav, &ctx, &input.view(), &clock());
         gfx.present();
     }
@@ -148,6 +150,7 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, shot: Screenshot) -> Result<(), String
                 break;
             }
         }
+        ctx.input_kind = view.kind;
         hits = draw(&mut gfx, &mut nav, &ctx, &view, &clock);
         gfx.present();
     }

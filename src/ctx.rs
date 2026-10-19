@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use crate::library::db::{DbError, Library};
 use crate::library::scan;
 use crate::systems::SYSTEMS;
+use crate::ui::input::{ButtonStyle, InputKind};
 
 pub struct Ctx {
     pub library: Library,
@@ -13,6 +14,9 @@ pub struct Ctx {
     pub revision: u64,
     /// Whether screens animate. Off in screenshot mode and tests, so they draw the settled state.
     pub animate: bool,
+    /// What the player last used, so screens can show matching glyphs in their own text.
+    pub input_kind: InputKind,
+    pub button_style: ButtonStyle,
 }
 
 impl Ctx {
@@ -22,6 +26,8 @@ impl Ctx {
             games_root,
             revision: 0,
             animate: false,
+            input_kind: InputKind::Controller,
+            button_style: ButtonStyle::default(),
         }
     }
 
