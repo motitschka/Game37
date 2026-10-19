@@ -6,13 +6,14 @@ use std::path::Path;
 use std::time::Instant;
 
 use crate::ctx::Ctx;
+use crate::emulators::Emulator;
 use crate::library::db::Library;
 use crate::systems::{self, SYSTEMS, System};
 use crate::ui::gfx::{Align, Gfx, TextStyle};
 use crate::ui::input::{Action, Input, Pointer};
 use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
-use crate::ui::theme::{BG, Colour, MUTED, TEXT};
+use crate::ui::theme::{BG, Colour, MUTED, TEXT, WARN};
 use crate::ui::{H, Rect, W};
 
 use super::game_grid::GameGrid;
@@ -103,9 +104,18 @@ fn visible(position: f32) -> Vec<(usize, f32)> {
     cards
 }
 
-/// A card's opacity at `offset` from the centre, dimmed when its System has no Games (FR-CAR-4).
-fn card_opacity(offset: f32, games: usize) -> f32 {
-    slot(offset).opacity * if games == 0 { DIM } else { 1.0 }
+/// A card's opacity at `offset` from the centre, dimmed when its System has no Games (FR-CAR-4)
+/// and again when its Standalone Emulator is missing (FR-CAR-9), combining the same way for a
+/// System where both apply.
+fn card_opacity(offset: f32, games: usize, missing: bool) -> f32 {
+    let mut opacity = slot(offset).opacity;
+    if games == 0 {
+        opacity *= DIM;
+    }
+    if missing {
+        opacity *= DIM;
+    }
+    opacity
 }
 
 /// The settled square a card fills at a whole-number `offset`.
@@ -169,7 +179,7 @@ fn console_page(system: &'static System, ctx: &Ctx) -> Box<dyn Screen> {
     let source =
         Box::new(move |library: &Library| library.system_games(id, library.sort_order().unwrap_or_default()));
     let hint = empty_hint(system, &ctx.games_root, dirs::home_dir().as_deref());
-    Box::new(GameGrid::new(system.name, source).sortable(Colour::hex(system.colour), hint))
+    Box::new(GameGrid::new(system.name, source).sortable(Colour::hex(system.colour), hint, system))
 }
 
 pub struct Carousel {
@@ -275,7 +285,14 @@ impl Carousel {
         }
     }
 
-    fn draw_card(&self, gfx: &mut Gfx<'_>, system: &System, offset: f32, opacity: f32) {
+    fn draw_card(
+        &self,
+        gfx: &mut Gfx<'_>,
+        system: &System,
+        offset: f32,
+        opacity: f32,
+        missing: Option<&'static Emulator>,
+    ) {
         let Slot { cx, size, .. } = slot(offset);
         let cy = CARD_Y;
         let card = Rect::new(cx - size / 2.0, cy - size / 2.0, size, size);
@@ -306,6 +323,27 @@ impl Carousel {
             TEXT.alpha(0.75 * opacity),
         );
         gfx.text(cx, cy + size * 0.32, &system.caption(), caption, Align::Centre);
+
+        // The warning badge and "<Emulator> not installed" line (FR-CAR-9), drawn at full
+        // opacity like mockup 03's.
+        if let Some(emulator) = missing {
+            let (bx, by) = (cx + size / 2.0 - 8.0, cy - size / 2.0 + 8.0);
+            gfx.fill_circle(bx, by, 22.0, WARN);
+            gfx.text(
+                bx,
+                by + 9.0,
+                "!",
+                TextStyle::new(26, Weight::ExtraBold, BG),
+                Align::Centre,
+            );
+            gfx.text(
+                cx,
+                cy + size / 2.0 + 40.0,
+                &format!("{} not installed", emulator.name),
+                TextStyle::new(18, Weight::SemiBold, WARN),
+                Align::Centre,
+            );
+        }
     }
 }
 
@@ -347,8 +385,9 @@ impl Screen for Carousel {
         gfx.radial_glow(W / 2.0, 0.42 * H, 0.6 * W, 0.6 * H, tint, 0.55);
 
         for (index, offset) in visible(self.position) {
-            let opacity = card_opacity(offset, self.counts[index]);
-            self.draw_card(gfx, &SYSTEMS[index], offset, opacity);
+            let missing = ctx.emulators.missing(&SYSTEMS[index]);
+            let opacity = card_opacity(offset, self.counts[index], missing.is_some());
+            self.draw_card(gfx, &SYSTEMS[index], offset, opacity, missing);
         }
         let frame = card_rect(0).inset(-5.0);
         gfx.stroke_round_rect(frame, 46.0, 4.0, Colour::hex(0xFFFFFF));
@@ -494,10 +533,19 @@ mod tests {
 
     #[test]
     fn empty_systems_are_dimmed() {
-        assert_eq!(card_opacity(0.0, 3), 1.0);
-        assert_eq!(card_opacity(0.0, 0), DIM);
-        assert_eq!(card_opacity(1.0, 1), 0.55);
-        assert!((card_opacity(1.0, 0) - 0.55 * DIM).abs() < 1e-6);
+        assert_eq!(card_opacity(0.0, 3, false), 1.0);
+        assert_eq!(card_opacity(0.0, 0, false), DIM);
+        assert_eq!(card_opacity(1.0, 1, false), 0.55);
+        assert!((card_opacity(1.0, 0, false) - 0.55 * DIM).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_missing_emulator_dims_like_an_empty_system_and_combines_with_it() {
+        assert_eq!(card_opacity(0.0, 3, true), DIM, "missing alone");
+        assert!(
+            (card_opacity(0.0, 0, true) - DIM * DIM).abs() < 1e-6,
+            "both apply"
+        );
     }
 
     #[test]

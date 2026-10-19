@@ -2,10 +2,12 @@
 
 use std::path::PathBuf;
 
+use crate::emulators::{self, Emulators};
+use crate::systems::{self, Kind};
 use crate::ui::input::{Action, Input, Pointer};
 
-pub const USAGE: &str =
-    "usage: game37 [--config <path>] [--data-dir <path>] [--screenshot <out.bmp> [--actions <a,b,...>]]";
+pub const USAGE: &str = "usage: game37 [--config <path>] [--data-dir <path>] \
+[--screenshot <out.bmp> [--actions <a,b,...>] [--missing-emulators <system ids>]]";
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Options {
@@ -21,6 +23,9 @@ pub struct Options {
 pub struct Screenshot {
     pub out: PathBuf,
     pub steps: Vec<Step>,
+    /// Which Systems' Standalone Emulators count as missing; every other emulator counts as
+    /// installed (FR-CAR-9). `Emulators::all_installed()` when `--missing-emulators` wasn't given.
+    pub missing_emulators: Emulators,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -49,6 +54,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
     let mut options = Options::default();
     let mut out = None;
     let mut actions = None;
+    let mut missing_emulators = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or_else(|| format!("{arg} needs a value"));
@@ -57,18 +63,52 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
             "--data-dir" => options.data_dir = Some(PathBuf::from(value()?)),
             "--screenshot" => out = Some(PathBuf::from(value()?)),
             "--actions" => actions = Some(value()?),
+            "--missing-emulators" => missing_emulators = Some(value()?),
             _ => return Err(format!("unknown argument {arg:?}")),
         }
     }
-    options.screenshot = match (out, actions) {
-        (Some(out), actions) => Some(Screenshot {
+    options.screenshot = match (out, actions, missing_emulators) {
+        (Some(out), actions, missing_emulators) => Some(Screenshot {
             out,
             steps: parse_steps(actions.as_deref().unwrap_or(""))?,
+            missing_emulators: parse_missing_emulators(missing_emulators.as_deref())?,
         }),
-        (None, Some(_)) => return Err("--actions only works with --screenshot".to_owned()),
-        (None, None) => None,
+        (None, Some(_), _) => return Err("--actions only works with --screenshot".to_owned()),
+        (None, None, Some(_)) => {
+            return Err("--missing-emulators only works with --screenshot".to_owned());
+        }
+        (None, None, None) => None,
     };
     Ok(options)
+}
+
+/// The `--missing-emulators` ids, resolved to the `Emulators` state they stand for: every
+/// emulator installed except those Systems'. An unknown or Embedded System id is an error.
+fn parse_missing_emulators(list: Option<&str>) -> Result<Emulators, String> {
+    let Some(list) = list else {
+        return Ok(Emulators::all_installed());
+    };
+    let mut missing = Vec::new();
+    for id in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let system = systems::by_id(id).ok_or_else(|| format!("unknown System {id:?}"))?;
+        if system.kind != Kind::External {
+            return Err(format!(
+                "{id:?} is an Embedded System: it has no Standalone Emulator"
+            ));
+        }
+        missing.push(system);
+    }
+    let missing_ids: Vec<&str> = missing
+        .iter()
+        .filter_map(|s| emulators::for_system(s))
+        .map(|e| e.flatpak_id)
+        .collect();
+    let installed = systems::SYSTEMS
+        .iter()
+        .filter_map(emulators::for_system)
+        .filter(|e| !missing_ids.contains(&e.flatpak_id))
+        .map(|e| e.flatpak_id.to_owned());
+    Ok(Emulators::from_installed(installed))
 }
 
 fn parse_steps(list: &str) -> Result<Vec<Step>, String> {
@@ -140,5 +180,49 @@ mod tests {
         assert!(parse(args("--actions up")).is_err());
         assert!(parse(args("--config")).is_err());
         assert!(parse(args("--fast")).is_err());
+    }
+
+    #[test]
+    fn missing_emulators_marks_only_the_named_systems() {
+        let options = parse(args("--screenshot o.bmp --missing-emulators wiiu,ps3")).unwrap();
+        let emulators = options.screenshot.unwrap().missing_emulators;
+        assert_eq!(
+            emulators.missing(systems::by_id("wiiu").unwrap()),
+            Some(&emulators::CEMU)
+        );
+        assert_eq!(
+            emulators.missing(systems::by_id("ps3").unwrap()),
+            Some(&emulators::RPCS3)
+        );
+        assert_eq!(
+            emulators.missing(systems::by_id("gc").unwrap()),
+            None,
+            "Dolphin isn't named"
+        );
+    }
+
+    #[test]
+    fn no_missing_emulators_flag_leaves_everything_installed() {
+        let options = parse(args("--screenshot o.bmp")).unwrap();
+        let emulators = options.screenshot.unwrap().missing_emulators;
+        assert_eq!(emulators.missing(systems::by_id("wiiu").unwrap()), None);
+    }
+
+    #[test]
+    fn missing_emulators_without_screenshot_is_an_error() {
+        let err = parse(args("--missing-emulators wiiu")).unwrap_err();
+        assert!(err.contains("--screenshot"), "{err}");
+    }
+
+    #[test]
+    fn an_unknown_system_id_is_an_error() {
+        let err = parse(args("--screenshot o.bmp --missing-emulators dreamcast")).unwrap_err();
+        assert!(err.contains("dreamcast"), "{err}");
+    }
+
+    #[test]
+    fn an_embedded_system_id_is_an_error() {
+        let err = parse(args("--screenshot o.bmp --missing-emulators snes")).unwrap_err();
+        assert!(err.contains("snes"), "{err}");
     }
 }
