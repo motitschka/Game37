@@ -13,7 +13,7 @@ use sdl3::audio::{AudioFormat, AudioSpec, AudioStreamOwner};
 use sdl3::gamepad::{Axis, Gamepad};
 use sdl3::keyboard::Scancode;
 
-use super::input::{self, PadState, PauseTrigger};
+use super::input::{self, HeldOver, PadState, PauseTrigger};
 use super::saves::{self, Tracker};
 use super::states::{self, SLOTS, StatePaths};
 use super::timing::{self, AUDIO_MAX, PlayTimer, Scheduler};
@@ -21,7 +21,7 @@ use crate::cores;
 use crate::ctx::{self, Ctx};
 use crate::launch::{self, FAILED_TITLE};
 use crate::library::db::GameRow;
-use crate::libretro::{Core, CoreDirs};
+use crate::libretro::{Core, CoreDirs, Frame};
 use crate::screens::message::Message;
 use crate::screens::pause::{PauseMenu, Request, SlotInfo};
 use crate::systems::{self, System};
@@ -40,6 +40,13 @@ pub struct Session {
     audio: Option<Audio>,
     scheduler: Scheduler,
     pause: PauseTrigger,
+    /// Buttons held when play started or resumed, kept from the Core until let go.
+    held: HeldOver,
+    /// The display's refresh rate frames sync to, if any (see [`Scheduler::new`]).
+    refresh: Option<f64>,
+    /// The Core's frame rate and sample rate the scheduler and sound are set up for.
+    fps: f64,
+    sample_rate: f64,
     /// The Game's save memory file and its change tracker; `None` when it has no save memory.
     save: Option<(PathBuf, Tracker)>,
     system: &'static System,
@@ -69,6 +76,19 @@ impl Audio {
         Ok(Audio { stream, rate })
     }
 
+    /// Plays the Core's sound at its new sample `rate` from now on.
+    fn set_rate(&mut self, rate: f64) -> Result<(), String> {
+        let spec = AudioSpec::new(Some(rate.round() as i32), Some(2), Some(AudioFormat::S16LE));
+        let spec: sdl3::sys::audio::SDL_AudioSpec = (&spec).into();
+        // SAFETY: the stream is alive; a null output spec leaves the device side as it is.
+        if !unsafe { sdl3::sys::audio::SDL_SetAudioStreamFormat(self.stream.raw(), &spec, std::ptr::null()) }
+        {
+            return Err(sdl3::get_error().to_string());
+        }
+        self.rate = rate;
+        Ok(())
+    }
+
     /// Seconds of sound waiting to be played.
     fn queued(&self) -> f64 {
         // 2 channels of 2-byte samples.
@@ -86,6 +106,17 @@ impl Audio {
         let ratio = timing::audio_ratio(base_ratio, queued) as f32;
         // SAFETY: the stream is alive.
         unsafe { sdl3::sys::audio::SDL_SetAudioStreamFrequencyRatio(self.stream.raw(), ratio) };
+    }
+}
+
+/// Where a running Game's new frames go: the [`Gfx`] it is drawn with, or nowhere in tests.
+pub trait GameFrames {
+    fn upload_game_frame(&mut self, frame: &Frame);
+}
+
+impl GameFrames for Gfx<'_> {
+    fn upload_game_frame(&mut self, frame: &Frame) {
+        Gfx::upload_game_frame(self, frame);
     }
 }
 
@@ -162,6 +193,10 @@ impl Session {
             audio,
             scheduler: Scheduler::new(av.fps, refresh),
             pause: PauseTrigger::default(),
+            held: HeldOver::default(),
+            refresh,
+            fps: av.fps,
+            sample_rate: av.sample_rate,
             save,
             system,
             states,
@@ -179,11 +214,13 @@ impl Session {
             return;
         }
         self.shown = shown;
+        self.timer.set_shown(shown, Instant::now());
         self.sync_audio();
     }
 
     /// The Pause Menu opened or closed: a paused Game runs no frames, plays no sound and counts
-    /// no Playtime. Resuming waits for the pause trigger to be let go before it can fire again.
+    /// no Playtime. Resuming waits for the pause trigger to be let go before it can fire again,
+    /// and keeps the buttons held then (the menu's Confirm) from the Core until they are let go.
     fn set_paused(&mut self, paused: bool) {
         if paused == self.paused {
             return;
@@ -192,6 +229,7 @@ impl Session {
         self.timer.set_paused(paused, Instant::now());
         if !paused {
             self.pause = PauseTrigger::default();
+            self.held = HeldOver::default();
         }
         self.sync_audio();
     }
@@ -214,16 +252,18 @@ impl Session {
     /// fired, in which case no frame runs.
     pub fn tick(
         &mut self,
-        gfx: &mut Gfx<'_>,
+        gfx: &mut impl GameFrames,
         dt: f64,
         pads: &[(usize, PadState)],
         down: impl Fn(Scancode) -> bool,
     ) -> bool {
         let keyboard = input::keyboard_buttons(&down);
-        let (input, paused) = input::frame_input(pads, keyboard, down(Scancode::Escape), &mut self.pause);
+        let (mut input, paused) = input::frame_input(pads, keyboard, down(Scancode::Escape), &mut self.pause);
         if paused {
             return true;
         }
+        self.held.mask(&mut input);
+        self.follow_av_info();
         for _ in 0..self.scheduler.frames(dt) {
             let out = self.core.run_frame(&input);
             if !out.duped {
@@ -248,6 +288,25 @@ impl Session {
         false
     }
 
+    /// Follows a Core's `SET_SYSTEM_AV_INFO`: a new frame rate reschedules frames, a new sample
+    /// rate plays sound at it. A new geometry needs nothing, as the picture follows frame size.
+    fn follow_av_info(&mut self) {
+        let av = self.core.av_info();
+        if av.fps != self.fps && av.fps > 0.0 {
+            self.fps = av.fps;
+            self.scheduler = Scheduler::new(av.fps, self.refresh);
+        }
+        if av.sample_rate != self.sample_rate && av.sample_rate > 0.0 {
+            self.sample_rate = av.sample_rate;
+            if let Some(audio) = &mut self.audio
+                && let Err(e) = audio.set_rate(av.sample_rate)
+            {
+                eprintln!("game37: game sound stopped: {e}");
+                self.audio = None;
+            }
+        }
+    }
+
     /// While paused: whether Guide or Select+Start was pressed again, which resumes. Esc is left
     /// to the Pause Menu, as its Back.
     fn resume_trigger(&mut self, pads: &[(usize, PadState)], down: impl Fn(Scancode) -> bool) -> bool {
@@ -268,7 +327,11 @@ impl Session {
             .and_then(|m| m.modified())
             .ok()?;
         let thumb = states::read_png(&self.states.thumb(n))
-            .map_err(|e| eprintln!("game37: can't read {}: {e}", self.states.thumb(n).display()))
+            .map_err(|e| {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!("game37: can't read {}: {e}", self.states.thumb(n).display());
+                }
+            })
             .ok();
         Some(SlotInfo {
             when: when_label(modified),
@@ -279,10 +342,9 @@ impl Session {
     /// Writes slot `n`'s Save State and a screenshot of the current frame (FR-EMB-5).
     fn save_slot(&mut self, n: usize) -> Result<SlotInfo, String> {
         let state = self.core.serialize().map_err(|e| e.to_string())?;
-        saves::write(&self.states.slot(n), &state).map_err(|e| e.to_string())?;
-        let rgb = states::frame_rgb(self.core.frame());
-        let png = states::encode_png(&rgb).map_err(|e| e.to_string())?;
-        saves::write(&self.states.thumb(n), &png).map_err(|e| e.to_string())?;
+        let png = states::encode_png(&states::frame_rgb(self.core.frame()));
+        states::write_slot(&self.states.slot(n), &state, &self.states.thumb(n), png)
+            .map_err(|e| e.to_string())?;
         self.slot_info(n).ok_or_else(|| "the slot is gone".to_owned())
     }
 
@@ -293,15 +355,7 @@ impl Session {
 
     /// Writes the Resume State the next launch continues from (FR-EMB-6).
     fn write_resume(&mut self) {
-        let path = self.states.resume();
-        match self.core.serialize() {
-            Ok(state) => {
-                if let Err(e) = saves::write(&path, &state) {
-                    eprintln!("game37: can't write {}: {e}", path.display());
-                }
-            }
-            Err(e) => eprintln!("game37: no Resume State: {e}"),
-        }
+        store_resume(&self.states.resume(), self.core.serialize());
     }
 
     /// Writes the save memory if it changed and the Resume State, records the Playtime and
@@ -316,6 +370,22 @@ impl Session {
         }
         launch::record(ctx, self.game_id, now, self.timer.played(Instant::now()));
         self.audio = None;
+    }
+}
+
+/// Writes the Resume State `state` to `path`. Without a new one, the old one is removed: resuming
+/// from it would put an older state on top of newer save memory.
+fn store_resume(path: &Path, state: Result<Vec<u8>, impl Display>) {
+    let written = match state {
+        Ok(state) => saves::write(path, &state).map_err(|e| format!("can't write {}: {e}", path.display())),
+        Err(e) => Err(format!("no Resume State: {e}")),
+    };
+    if let Err(e) = written {
+        match fs::remove_file(path) {
+            Ok(()) => eprintln!("game37: {e}; removed the old one"),
+            Err(r) if r.kind() == std::io::ErrorKind::NotFound => eprintln!("game37: {e}"),
+            Err(r) => eprintln!("game37: {e}; can't remove the old one: {r}"),
+        }
     }
 }
 
@@ -375,7 +445,7 @@ pub fn playing(nav: &mut Nav) -> bool {
 pub fn tick(
     nav: &mut Nav,
     ctx: &mut Ctx,
-    gfx: &mut Gfx<'_>,
+    gfx: &mut impl GameFrames,
     dt: f64,
     pads: &[(usize, PadState)],
     down: impl Fn(Scancode) -> bool,
@@ -467,7 +537,9 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::app::close;
     use crate::libretro::tests::serial;
+    use crate::ui::input::Input;
 
     const TESTDATA: &str = "/home/matei/Game37/.testdata";
 
@@ -535,6 +607,156 @@ mod tests {
         assert!(states.join("240p Test Suite (World).resume.state").exists());
         let mut session = Session::start(&game, &ctx, None, None).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(run(&mut session, 2), next, "the relaunch continues where it quit");
+    }
+
+    #[test]
+    fn a_failed_resume_state_removes_the_old_one() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("states/snes/T.resume.state");
+        store_resume(&path, Ok::<_, String>(b"new".to_vec()));
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        store_resume(&path, Err::<Vec<u8>, _>("the Core can't serialize"));
+        assert!(
+            !path.exists(),
+            "the next launch starts fresh, not from an older state"
+        );
+        store_resume(&path, Err::<Vec<u8>, _>("again, with nothing to remove"));
+        assert!(!path.exists());
+    }
+
+    /// New frames go nowhere.
+    struct NoPicture;
+
+    impl GameFrames for NoPicture {
+        fn upload_game_frame(&mut self, _: &Frame) {}
+    }
+
+    /// A whole session driven through the functions `app.rs` uses (FR-EMB-3 to FR-EMB-6, US-4):
+    /// start, tick, pause, resume, hide, quit from the Pause Menu, start again, close the window
+    /// while paused.
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn a_session_counts_playtime_only_while_played_and_resumes_where_it_was_left() {
+        use std::thread::sleep;
+
+        use crate::launch::{Launcher, NeverExits};
+        use crate::libretro::Button;
+        use crate::screens::Stub;
+        use crate::ui::input::Action;
+        use crate::ui::nav::Hits;
+
+        let _serial = serial();
+        let root = TempDir::new().unwrap();
+        let rel = "snes/240p Test Suite (World).sfc";
+        fs::create_dir_all(root.path().join("snes")).unwrap();
+        fs::copy(Path::new(TESTDATA).join("games").join(rel), root.path().join(rel)).unwrap();
+        let mut ctx = Ctx::new(
+            crate::library::db::Library::open_in_memory().unwrap(),
+            root.path().to_path_buf(),
+        );
+        ctx.data_dir = Path::new(TESTDATA).join("data");
+        ctx.scan_all(0).unwrap();
+        let games = |ctx: &Ctx| ctx.library.system_games("snes", Default::default()).unwrap();
+        let game = games(&ctx).remove(0);
+        let mut nav = Nav::single(Box::new(Stub::new("Home")));
+        let mut launcher = Launcher::new(Box::new(NeverExits::default()), root.path().join("logs"));
+        let resume = root
+            .path()
+            .join("states/snes/240p Test Suite (World).resume.state");
+
+        let none = |_: Scancode| false;
+        let enter = |k: Scancode| k == Scancode::Return;
+        let esc = |k: Scancode| k == Scancode::Escape;
+        // A tick of 20 ms runs at least one Core frame.
+        let tick = |nav: &mut Nav, ctx: &mut Ctx, down: &dyn Fn(Scancode) -> bool| {
+            tick(nav, ctx, &mut NoPicture, 0.02, &[], down)
+        };
+        let start_held = |nav: &mut Nav| {
+            let session = running(nav).expect("a Game runs");
+            session.core.last_input().is_pressed(0, Button::Start)
+        };
+        let act = |nav: &mut Nav, ctx: &mut Ctx, action: Action| {
+            nav.handle(Input::Action(action), &Hits::default(), ctx);
+        };
+
+        start(&game, &mut nav, &ctx, None, None);
+        tick(&mut nav, &mut ctx, &enter);
+        assert!(
+            !start_held(&mut nav),
+            "the Enter that launched the Game never reaches it"
+        );
+        tick(&mut nav, &mut ctx, &none);
+        tick(&mut nav, &mut ctx, &enter);
+        assert!(start_held(&mut nav), "a new press of Enter does");
+        sleep(Duration::from_millis(700));
+        tick(&mut nav, &mut ctx, &none);
+
+        // Paused for a second: Esc opens the Pause Menu, Enter on Resume closes it.
+        tick(&mut nav, &mut ctx, &esc);
+        assert!(nav.top().pause_menu().is_some(), "Esc pauses");
+        tick(&mut nav, &mut ctx, &none);
+        sleep(Duration::from_secs(1));
+        act(&mut nav, &mut ctx, Action::Confirm);
+        assert!(nav.modal().is_none(), "Resume");
+        tick(&mut nav, &mut ctx, &enter);
+        assert!(
+            !start_held(&mut nav),
+            "the Enter that chose Resume never reaches the Game"
+        );
+
+        // Hidden for a second.
+        running(&mut nav).unwrap().set_shown(false);
+        sleep(Duration::from_secs(1));
+        running(&mut nav).unwrap().set_shown(true);
+        tick(&mut nav, &mut ctx, &none);
+
+        // What the Game shows two frames on from here, which a relaunch must show too. bsnes's
+        // first frame after restoring a state into a freshly loaded Core is a stale one.
+        let session = running(&mut nav).unwrap();
+        let here = session.core.serialize().unwrap();
+        let next = run(session, 2);
+        session.core.unserialize(&here).unwrap();
+
+        // Quit to library, then close the window: the Game ends once.
+        tick(&mut nav, &mut ctx, &esc);
+        tick(&mut nav, &mut ctx, &none);
+        for action in [Action::Down, Action::Down, Action::Down, Action::Confirm] {
+            act(&mut nav, &mut ctx, action);
+        }
+        tick(&mut nav, &mut ctx, &none);
+        assert!(running(&mut nav).is_none(), "Quit to library ends the Game");
+        close(&mut nav, &mut ctx, &mut launcher);
+        let played = games(&ctx)[0].playtime_secs;
+        assert_eq!(
+            played, 1,
+            "about 0.8 s played, without the paused or hidden second, once"
+        );
+        assert!(resume.exists(), "quitting writes the Resume State");
+
+        // The next launch continues where it quit; closing the window while paused writes a new
+        // Resume State and records the Playtime.
+        let game = games(&ctx).remove(0);
+        start(&game, &mut nav, &ctx, None, None);
+        assert_eq!(run(running(&mut nav).unwrap(), 2), next, "the relaunch resumes");
+        fs::remove_file(&resume).unwrap();
+        tick(&mut nav, &mut ctx, &none);
+        tick(&mut nav, &mut ctx, &esc);
+        tick(&mut nav, &mut ctx, &none);
+        assert!(nav.top().pause_menu().is_some());
+        let before = games(&ctx)[0].last_played;
+        sleep(Duration::from_secs(1));
+        close(&mut nav, &mut ctx, &mut launcher);
+        assert!(running(&mut nav).is_none());
+        assert!(
+            resume.exists(),
+            "closing the window while paused writes the Resume State"
+        );
+        let game = &games(&ctx)[0];
+        assert_eq!(game.playtime_secs, played, "the paused second isn't Playtime");
+        assert!(
+            game.last_played >= before && game.last_played.is_some(),
+            "the play is recorded"
+        );
     }
 
     /// In-game Saves are always written (FR-EMB-7): a real Core's save RAM round-trips through

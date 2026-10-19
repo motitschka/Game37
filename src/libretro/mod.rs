@@ -373,6 +373,12 @@ impl Core {
         }
     }
 
+    /// The input the Core was last given.
+    #[cfg(test)]
+    pub fn last_input(&self) -> InputState {
+        callbacks::with(|s| s.input).unwrap_or_default()
+    }
+
     /// The last video frame the Core produced.
     pub fn frame(&self) -> &Frame {
         &self.video

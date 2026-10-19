@@ -205,12 +205,17 @@ fn interactive(
             std::thread::sleep(left);
         }
     }
-    // Closing the window ends a running Game first, saving it.
-    sdl::end(&mut nav, &mut ctx);
-    // Quitting while an emulator runs leaves it running, with Playtime counted up to now.
-    launcher.quit(&mut nav, &mut ctx, ctx::now());
-    nav.leave_all(&ctx);
+    close(&mut nav, &mut ctx, &mut launcher);
     Ok(())
+}
+
+/// What closing the window does once the loop has stopped.
+pub(crate) fn close(nav: &mut Nav, ctx: &mut Ctx, launcher: &mut Launcher) {
+    // A running Game ends first, saving it, paused or not.
+    sdl::end(nav, ctx);
+    // Quitting while an emulator runs leaves it running, with Playtime counted up to now.
+    launcher.quit(nav, ctx, ctx::now());
+    nav.leave_all(ctx);
 }
 
 fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screenshot) -> Result<(), String> {
@@ -508,11 +513,11 @@ impl InputState {
 mod tests {
     use super::*;
 
-    /// `InputState` feeds `GamepadAdded`/`GamepadRemoved` ids straight into its `Ports` (FR-EMB-8):
-    /// player order follows connection order, the other pads keep their ports when one leaves, and
-    /// a reconnecting id can land on a different port than before.
+    /// `Ports` keyed by the SDL joystick ids `InputState` gets from `GamepadAdded` and
+    /// `GamepadRemoved` (FR-EMB-8): player order follows connection order, the other pads keep
+    /// their ports when one leaves, and a reconnecting id can land on a different port than before.
     #[test]
-    fn ports_persist_across_added_and_removed_events_even_when_ids_reconnect_reordered() {
+    fn joystick_ids_keep_their_ports_and_a_reconnecting_one_takes_the_lowest_free_port() {
         let mut ports: Ports<JoystickId> = Ports::default();
         let (a, b, c) = (JoystickId::new(1), JoystickId::new(2), JoystickId::new(3));
         assert_eq!(ports.connect(a), Some(0), "player 1 by connection order");

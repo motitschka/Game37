@@ -1,5 +1,6 @@
 //! Save States and Resume States: the Core's serialized machine state, kept in
-//! `<Games Root>/states/<system>/` (FR-LIB-9) as `<game file stem>.slot<N>.state` with a
+//! `<Games Root>/states/<system>/`, in the Game's subfolder there (FR-LIB-9; see
+//! [`saves::game_dir`]), as `<game file stem>.slot<N>.state` with a
 //! `.slot<N>.png` screenshot for the three manual slots (FR-EMB-5), and as
 //! `<game file stem>.resume.state` for the Resume State written on quitting (FR-EMB-6).
 
@@ -7,6 +8,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use super::saves;
 use crate::libretro::{Frame, PixelFormat};
 
 /// How many manual Save State slots each Game has.
@@ -24,7 +26,7 @@ impl StatePaths {
     pub fn new(games_root: &Path, system: &str, rel_path: &Path) -> StatePaths {
         let stem = rel_path.file_stem().unwrap_or(rel_path.as_os_str());
         StatePaths {
-            dir: games_root.join("states").join(system),
+            dir: saves::game_dir(&games_root.join("states").join(system), system, rel_path),
             stem: stem.to_string_lossy().into_owned(),
         }
     }
@@ -42,6 +44,36 @@ impl StatePaths {
     pub fn resume(&self) -> PathBuf {
         self.dir.join(format!("{}.resume.state", self.stem))
     }
+}
+
+/// Writes slot `n`'s Save State `state` to `state_path` and its screenshot `png` to `thumb_path`
+/// so that the two always match: the screenshot goes to a temporary file first, then the state
+/// is written, then the screenshot takes its place. When there is no screenshot (`png` failed or
+/// can't be written), the state is saved anyway and the old screenshot removed, so the slot shows
+/// its time without one. `Err` only when the state couldn't be written; the slot is then unchanged.
+pub fn write_slot(
+    state_path: &Path,
+    state: &[u8],
+    thumb_path: &Path,
+    png: io::Result<Vec<u8>>,
+) -> io::Result<()> {
+    let tmp = saves::tmp_path(thumb_path);
+    let png = png.and_then(|png| {
+        if let Some(dir) = tmp.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        fs::write(&tmp, png)
+    });
+    if let Err(e) = saves::write(state_path, state) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = png.and_then(|()| fs::rename(&tmp, thumb_path)) {
+        eprintln!("game37: no screenshot for {}: {e}", state_path.display());
+        let _ = fs::remove_file(&tmp);
+        let _ = fs::remove_file(thumb_path);
+    }
+    Ok(())
 }
 
 /// An RGB image, 3 bytes per pixel, rows packed.
@@ -177,6 +209,58 @@ mod tests {
             p.resume(),
             Path::new("/g/states/snes/Super Metroid (Europe).resume.state")
         );
+    }
+
+    #[test]
+    fn games_with_the_same_stem_in_different_subfolders_keep_separate_states() {
+        let top = StatePaths::new(Path::new("/g"), "snes", Path::new("snes/Super Mario World.sfc"));
+        let hack = StatePaths::new(
+            Path::new("/g"),
+            "snes",
+            Path::new("snes/hacks/Super Mario World.sfc"),
+        );
+        assert_eq!(
+            top.resume(),
+            Path::new("/g/states/snes/Super Mario World.resume.state")
+        );
+        assert_eq!(
+            hack.slot(1),
+            Path::new("/g/states/snes/hacks/Super Mario World.slot1.state")
+        );
+        assert_eq!(
+            hack.thumb(1),
+            Path::new("/g/states/snes/hacks/Super Mario World.slot1.png")
+        );
+        assert_eq!(
+            hack.resume(),
+            Path::new("/g/states/snes/hacks/Super Mario World.resume.state")
+        );
+    }
+
+    #[test]
+    fn a_slot_is_saved_with_its_screenshot_or_without_one_but_never_half() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = StatePaths::new(dir.path(), "snes", Path::new("snes/hacks/T.sfc"));
+        let (state, thumb) = (p.slot(1), p.thumb(1));
+        write_slot(&state, b"s1", &thumb, Ok(b"p1".to_vec())).unwrap();
+        assert_eq!(fs::read(&state).unwrap(), b"s1");
+        assert_eq!(fs::read(&thumb).unwrap(), b"p1");
+        assert!(!saves::tmp_path(&thumb).exists());
+
+        write_slot(&state, b"s2", &thumb, Err(io::Error::other("no PNG"))).unwrap();
+        assert_eq!(fs::read(&state).unwrap(), b"s2", "the state is saved anyway");
+        assert!(!thumb.exists(), "without the old screenshot");
+
+        write_slot(&state, b"s3", &thumb, Ok(b"p3".to_vec())).unwrap();
+        fs::remove_file(&state).unwrap();
+        fs::create_dir(&state).unwrap();
+        assert!(write_slot(&state, b"s4", &thumb, Ok(b"p4".to_vec())).is_err());
+        assert_eq!(
+            fs::read(&thumb).unwrap(),
+            b"p3",
+            "a failed state keeps the old screenshot"
+        );
+        assert!(!saves::tmp_path(&thumb).exists());
     }
 
     #[test]

@@ -3,15 +3,14 @@
 //! it carries out saving, loading and quitting (see `session::sdl`).
 
 use crate::ctx::Ctx;
-use crate::screens::message::dim;
 use crate::session::states::{Rgb, SLOTS};
 use crate::ui::cover::fit_lines;
 use crate::ui::gfx::{Align, Gfx, TextStyle};
 use crate::ui::input::{Action, Input, Pointer};
 use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
-use crate::ui::theme::{ACCENT, DIM, LINE, MUTED, SURFACE, SURFACE2, TEXT, WARN};
-use crate::ui::{H, M, Rect, hit};
+use crate::ui::theme::{ACCENT, Colour, DIM, LINE, MUTED, SURFACE, SURFACE2, TEXT, WARN};
+use crate::ui::{H, M, Rect, W, hit};
 
 /// What the player asked the session to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +42,9 @@ const CARD_H: f32 = 270.0;
 const CARD_X: f32 = 680.0;
 const CARD_Y: f32 = 366.0;
 const CARD_PITCH: f32 = 392.0;
+/// How dark the frozen Game is behind the menu: darker than the mockup's `dim(sv, 0.6)`, so the
+/// slot labels stay legible over a bright Game.
+const BACKDROP: f32 = 0.72;
 
 struct Slot {
     /// `None` when empty.
@@ -230,7 +232,7 @@ impl Screen for PauseMenu {
         for (i, thumb) in self.uploads.drain(..) {
             gfx.set_image(THUMB_KEYS[i], thumb.as_ref());
         }
-        dim(gfx);
+        gfx.fill_rect(Rect::new(0.0, 0.0, W, H), Colour::hex(0x000000).alpha(BACKDROP));
         gfx.fill_rect(Rect::new(0.0, 0.0, 600.0, H), SURFACE.alpha(0.94));
         gfx.fill_rect(Rect::new(600.0, 0.0, 1.0, H), LINE);
         let mut x = M;

@@ -81,12 +81,15 @@ pub fn fit(aspect: f32) -> Rect {
     }
 }
 
-/// Playtime counted while the Game runs, not while the Pause Menu is open.
+/// Playtime counted while the Game runs: not while the Pause Menu is open, nor while the window
+/// is hidden.
 #[derive(Debug, Clone)]
 pub struct PlayTimer {
     counted: Duration,
-    /// When the current stretch of play started; `None` while paused.
+    /// When the current stretch of play started; `None` while paused or hidden.
     since: Option<Instant>,
+    paused: bool,
+    hidden: bool,
 }
 
 impl PlayTimer {
@@ -94,12 +97,26 @@ impl PlayTimer {
         PlayTimer {
             counted: Duration::ZERO,
             since: Some(now),
+            paused: false,
+            hidden: false,
         }
     }
 
-    /// Stops or restarts counting at `now`.
+    /// The Pause Menu opened or closed at `now`.
     pub fn set_paused(&mut self, paused: bool, now: Instant) {
-        match (paused, self.since) {
+        self.paused = paused;
+        self.sync(now);
+    }
+
+    /// The window was hidden or shown at `now`.
+    pub fn set_shown(&mut self, shown: bool, now: Instant) {
+        self.hidden = !shown;
+        self.sync(now);
+    }
+
+    /// Stops or restarts counting at `now`.
+    fn sync(&mut self, now: Instant) {
+        match (self.paused || self.hidden, self.since) {
             (true, Some(since)) => {
                 self.counted += now.saturating_duration_since(since);
                 self.since = None;
@@ -133,6 +150,22 @@ mod tests {
         timer.set_paused(false, at(100));
         timer.set_paused(false, at(105));
         assert_eq!(timer.played(at(130)), Duration::from_secs(40));
+    }
+
+    #[test]
+    fn playtime_stops_while_hidden_and_while_hidden_and_paused() {
+        let t0 = Instant::now();
+        let at = |s| t0 + Duration::from_secs(s);
+        let mut timer = PlayTimer::start(t0);
+        timer.set_shown(false, at(10));
+        assert_eq!(timer.played(at(50)), Duration::from_secs(10));
+        timer.set_shown(true, at(50));
+        timer.set_paused(true, at(60));
+        timer.set_shown(false, at(70));
+        timer.set_paused(false, at(80));
+        assert_eq!(timer.played(at(90)), Duration::from_secs(20), "still hidden");
+        timer.set_shown(true, at(90));
+        assert_eq!(timer.played(at(95)), Duration::from_secs(25));
     }
 
     const NES: f64 = 60.0988;
