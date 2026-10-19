@@ -84,6 +84,9 @@ pub struct GameGrid {
     extra: Option<Extra>,
     /// Where the sort chip was last drawn, for the mouse.
     sort_hit: Option<Rect>,
+    /// The global sort order, cached from `reload()` so `draw()` never queries the database
+    /// (NFR-3). Meaningless when `extra` is `None`.
+    sort_order: SortOrder,
 }
 
 impl GameGrid {
@@ -98,6 +101,7 @@ impl GameGrid {
             hits: Vec::new(),
             extra: None,
             sort_hit: None,
+            sort_order: SortOrder::default(),
         }
     }
 
@@ -116,26 +120,36 @@ impl GameGrid {
         self.focus = refocus(&self.games, self.focus, &games);
         self.games = games;
         self.revision = Some(ctx.revision);
+        if self.extra.is_some() {
+            self.sort_order = ctx.library.sort_order().unwrap_or_default();
+        }
         self.scroll = scroll::clamp(self.scroll, self.content_h(), BOTTOM - TOP);
+        self.reveal_focus();
     }
 
-    fn reload_if_changed(&mut self, ctx: &Ctx) {
+    /// Reloads if `ctx.revision` changed since the last load; tells the caller so it can ignore a
+    /// pointer event that was hit-tested against the previous frame's rects.
+    fn reload_if_changed(&mut self, ctx: &Ctx) -> bool {
         if self.revision != Some(ctx.revision) {
             self.reload(ctx);
+            true
+        } else {
+            false
         }
     }
 
-    /// Cycles the global sort order and reloads (FR-CAR-5).
+    /// Cycles the global sort order and reloads (FR-CAR-5); a no-op on an empty Console Page, where
+    /// it would change the order with no visible effect.
     fn cycle_sort(&mut self, ctx: &mut Ctx) {
-        if self.extra.is_none() {
+        if self.extra.is_none() || self.games.is_empty() {
             return;
         }
-        let next = ctx.library.sort_order().unwrap_or_default().next();
+        let next = self.sort_order.next();
         if let Err(e) = ctx.library.set_sort_order(next) {
             eprintln!("game37: can't save the sort order: {e}");
         }
+        self.sort_order = next;
         self.reload(ctx);
-        self.reveal_focus();
     }
 
     fn content_h(&self) -> f32 {
@@ -205,7 +219,7 @@ impl Screen for GameGrid {
     }
 
     fn handle(&mut self, input: Input, ctx: &mut Ctx) -> Transition {
-        self.reload_if_changed(ctx);
+        let reloaded = self.reload_if_changed(ctx);
         match input {
             Input::Action(Action::Back) => return Transition::Pop,
             Input::Action(Action::Sort) if self.extra.is_some() => self.cycle_sort(ctx),
@@ -213,13 +227,16 @@ impl Screen for GameGrid {
                 self.focus = step(self.focus, self.games.len(), COLS, dir);
                 self.reveal_focus();
             }
+            // The hit rects below are from the previous frame; a reload just now may have moved or
+            // removed what they pointed at, so skip this pointer event rather than act on stale rects.
+            Input::Pointer(_) if reloaded => {}
             Input::Pointer(Pointer::Click { x, y }) if self.sort_hit.is_some_and(|r| r.contains(x, y)) => {
                 self.cycle_sort(ctx);
             }
             Input::Pointer(Pointer::Move { x, y }) | Input::Pointer(Pointer::Click { x, y }) => {
                 // Confirm on a Game does nothing until launching exists, so a click only focuses.
                 if let Some(i) = hit(&self.hits, x, y) {
-                    self.focus = i;
+                    self.focus = i.min(self.games.len().saturating_sub(1));
                 }
             }
             Input::Pointer(Pointer::Wheel { dy }) => {
@@ -233,15 +250,11 @@ impl Screen for GameGrid {
     fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
         self.reload_if_changed(ctx);
         let mut title_x = M;
-        let order = match &self.extra {
-            Some(extra) => {
-                chrome::background_tinted(gfx, extra.tint, 0.35);
-                gfx.fill_round_rect(Rect::new(M, 152.0, 8.0, 76.0), 4.0, extra.tint);
-                title_x += 30.0;
-                Some(ctx.library.sort_order().unwrap_or_default())
-            }
-            None => None,
-        };
+        if let Some(extra) = &self.extra {
+            chrome::background_tinted(gfx, extra.tint, 0.35);
+            gfx.fill_round_rect(Rect::new(M, 152.0, 8.0, 76.0), 4.0, extra.tint);
+            title_x += 30.0;
+        }
         gfx.text(
             title_x,
             202.0,
@@ -249,20 +262,26 @@ impl Screen for GameGrid {
             TextStyle::new(52, Weight::ExtraBold, TEXT),
             Align::Left,
         );
-        gfx.text(
-            title_x + 2.0,
-            236.0,
-            &header(self.games.len(), order),
-            TextStyle::new(20, Weight::Medium, MUTED),
-            Align::Left,
-        );
         self.sort_hit = None;
-        if let Some(order) = order {
-            self.sort_hit = Some(self.draw_sort_chip(gfx, order, ctx));
+        // An empty Console Page shows no header line, sort chip or grid: sorting it would change
+        // the global order with no visible effect.
+        let empty_console_page = self.extra.is_some() && self.games.is_empty();
+        if !empty_console_page {
+            let order = self.extra.is_some().then_some(self.sort_order);
+            gfx.text(
+                title_x + 2.0,
+                236.0,
+                &header(self.games.len(), order),
+                TextStyle::new(20, Weight::Medium, MUTED),
+                Align::Left,
+            );
+            if let Some(order) = order {
+                self.sort_hit = Some(self.draw_sort_chip(gfx, order, ctx));
+            }
         }
 
         self.hits.clear();
-        if self.extra.is_some() && self.games.is_empty() {
+        if empty_console_page {
             self.draw_empty(gfx);
             return;
         }
@@ -389,5 +408,107 @@ mod tests {
         assert_eq!(refocus(&old, 3, &new), 1, "Game 4 moved to index 1");
         assert_eq!(refocus(&old, 4, &new), 3, "Game 5 is gone: clamp");
         assert_eq!(refocus(&old, 0, &[]), 0);
+    }
+
+    use crate::library::FoundGame;
+
+    /// A Game sorting after "A..", so a System's Console Page starting with these keeps a
+    /// predictable A–Z position when earlier-sorting Games are added.
+    fn found(n: usize) -> FoundGame {
+        FoundGame {
+            system: "snes",
+            rel_path: format!("snes/b{n:03}.sfc"),
+            title: format!("B{n:03}"),
+        }
+    }
+
+    fn console_source() -> Source {
+        Box::new(|library| library.system_games("snes", SortOrder::AZ))
+    }
+
+    #[test]
+    fn reload_reveals_a_focused_game_that_moved_far_down_the_grid() {
+        let mut ctx = Ctx::empty();
+        let initial: Vec<_> = (0..50).map(found).collect();
+        ctx.library.sync_system("snes", &initial, 0).unwrap();
+        let mut grid = GameGrid::new("NES", console_source()).sortable(Colour::hex(0), "hint".into());
+        grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+        grid.focus = 40; // row 5
+        grid.reveal_focus();
+
+        // 40 Games sorting earlier are added: the focused Game (old index 40) moves to index 80.
+        let earlier = (0..40).map(|n| FoundGame {
+            system: "snes",
+            rel_path: format!("snes/a{n:03}.sfc"),
+            title: format!("A{n:03}"),
+        });
+        let all: Vec<_> = initial.into_iter().chain(earlier).collect();
+        ctx.library.sync_system("snes", &all, 0).unwrap();
+        ctx.revision += 1;
+
+        grid.handle(Input::Action(Action::Back), &mut ctx);
+        assert_eq!(grid.focus, 80, "the focused Game moved to row 10");
+        let row_top = (grid.focus / COLS) as f32 * PITCH_Y;
+        assert!(
+            row_top - grid.scroll >= 0.0 && row_top - grid.scroll <= BOTTOM - TOP,
+            "row 10 should be scrolled into view, but scroll is {}",
+            grid.scroll
+        );
+    }
+
+    #[test]
+    fn cycle_sort_updates_the_cached_sort_order() {
+        let mut ctx = Ctx::empty();
+        ctx.library.sync_system("snes", &[found(0)], 0).unwrap();
+        let mut grid = GameGrid::new("NES", console_source()).sortable(Colour::hex(0), "hint".into());
+        grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+        assert_eq!(grid.sort_order, SortOrder::AZ);
+
+        grid.handle(Input::Action(Action::Sort), &mut ctx);
+
+        assert_eq!(grid.sort_order, SortOrder::LastPlayed);
+        assert_eq!(ctx.library.sort_order().unwrap(), SortOrder::LastPlayed);
+    }
+
+    #[test]
+    fn sort_is_ignored_on_an_empty_console_page() {
+        let mut ctx = Ctx::empty();
+        let mut grid = GameGrid::new("NES", console_source()).sortable(Colour::hex(0), "hint".into());
+        grid.handle(Input::Action(Action::Back), &mut ctx); // initial load, no games
+        assert!(grid.games.is_empty());
+
+        grid.handle(Input::Action(Action::Sort), &mut ctx);
+
+        assert_eq!(
+            ctx.library.sort_order().unwrap(),
+            SortOrder::AZ,
+            "the global order is unchanged"
+        );
+        assert_eq!(grid.sort_order, SortOrder::AZ);
+    }
+
+    #[test]
+    fn a_click_that_lands_in_the_reload_frame_is_ignored() {
+        let mut ctx = Ctx::empty();
+        let many: Vec<_> = (0..20).map(found).collect();
+        ctx.library.sync_system("snes", &many, 0).unwrap();
+        let mut grid = GameGrid::new("NES", console_source()).sortable(Colour::hex(0), "hint".into());
+        grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+        assert_eq!(grid.games.len(), 20);
+        // The previous frame's hit rect for item 10.
+        grid.hits = vec![(Rect::new(0.0, 0.0, 50.0, 50.0), 10)];
+        grid.focus = 0;
+
+        // The System shrinks to 3 Games, and a click lands where item 10 used to be.
+        let shrunk: Vec<_> = (0..3).map(found).collect();
+        ctx.library.sync_system("snes", &shrunk, 0).unwrap();
+        ctx.revision += 1;
+        grid.handle(Input::Pointer(Pointer::Click { x: 10.0, y: 10.0 }), &mut ctx);
+
+        assert_eq!(grid.games.len(), 3, "the grid did reload");
+        assert_eq!(
+            grid.focus, 0,
+            "the stale click was ignored, not focusing a gone item"
+        );
     }
 }
