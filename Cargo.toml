@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 dirs = "7"
+notify = "8"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.9"
