@@ -26,6 +26,8 @@ const DEBOUNCE: Duration = Duration::from_millis(500);
 pub struct LibraryWatcher {
     inbox: Sender<Msg>,
     results: Receiver<Scanned>,
+    /// A scan that failed to apply, tried again before any newer one.
+    retry: Option<Scanned>,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -50,21 +52,45 @@ impl LibraryWatcher {
         let changes = inbox.clone();
         let worker = thread::Builder::new()
             .name("library-watch".into())
-            .spawn(move || run(games_root, changes, messages, finished))
+            .spawn(move || {
+                let mut worker = Worker {
+                    watcher: None,
+                    root: games_root,
+                    messages,
+                    finished,
+                    pending: HashMap::new(),
+                    warned: false,
+                };
+                // The worker only returns once told to stop; the folder watcher stops with it.
+                let _ = worker.run(changes);
+            })
             .expect("failed to spawn the library watcher thread");
         LibraryWatcher {
             inbox,
             results,
+            retry: None,
             worker: Some(worker),
         }
     }
 
     /// Applies every scan finished since the last call, without blocking. Call once per frame on
-    /// the UI thread. Returns whether any view changed.
+    /// the UI thread. Returns whether any view changed. A scan that fails to apply is kept and
+    /// applied first at the next call.
     pub fn poll(&mut self, library: &mut Library, now: i64) -> Result<bool, DbError> {
+        self.apply(|scanned| library.sync_system(scanned.system, &scanned.games, now))
+    }
+
+    /// [`poll`](Self::poll), with the step that applies one scan passed in.
+    fn apply(&mut self, mut sync: impl FnMut(&Scanned) -> Result<bool, DbError>) -> Result<bool, DbError> {
         let mut changed = false;
-        while let Ok(scanned) = self.results.try_recv() {
-            changed |= library.sync_system(scanned.system, &scanned.games, now)?;
+        while let Some(scanned) = self.retry.take().or_else(|| self.results.try_recv().ok()) {
+            match sync(&scanned) {
+                Ok(synced) => changed |= synced,
+                Err(e) => {
+                    self.retry = Some(scanned);
+                    return Err(e);
+                }
+            }
         }
         Ok(changed)
     }
@@ -79,53 +105,15 @@ impl Drop for LibraryWatcher {
     }
 }
 
-/// The worker thread. Returns when told to stop; the folder watcher stops with it.
-fn run(root: PathBuf, changes: Sender<Msg>, messages: Receiver<Msg>, finished: Sender<Scanned>) {
-    let mut worker = Worker {
-        watcher: None,
-        root,
-        finished,
-        pending: HashMap::new(),
-        warned: false,
-    };
-    worker.watch_root(changes);
+/// The worker was told to stop, or the [`LibraryWatcher`] is gone.
+struct Stopped;
 
-    // Each System folder is watched before it is scanned, so no change slips between the two.
-    for system in &SYSTEMS {
-        loop {
-            match messages.try_recv() {
-                Ok(Msg::Changed(change)) => worker.on_change(change),
-                Ok(Msg::Stop) | Err(TryRecvError::Disconnected) => return,
-                Err(TryRecvError::Empty) => break,
-            }
-        }
-        worker.watch_system(system);
-        worker.scan(system);
-    }
-
-    loop {
-        let message = match worker.next_due() {
-            None => messages.recv().ok(),
-            Some(due) => match messages.recv_timeout(due.saturating_duration_since(Instant::now())) {
-                Ok(message) => Some(message),
-                Err(RecvTimeoutError::Timeout) => {
-                    worker.rescan_due();
-                    continue;
-                }
-                Err(RecvTimeoutError::Disconnected) => None,
-            },
-        };
-        match message {
-            Some(Msg::Changed(change)) => worker.on_change(change),
-            Some(Msg::Stop) | None => return,
-        }
-    }
-}
-
+/// The worker thread's state.
 struct Worker {
     /// `None` when the Games Root can't be watched: Games then only update at the next start.
     watcher: Option<RecommendedWatcher>,
     root: PathBuf,
+    messages: Receiver<Msg>,
     finished: Sender<Scanned>,
     /// Systems waiting for a rescan, by id, with the time of their latest change.
     pending: HashMap<&'static str, Instant>,
@@ -133,6 +121,50 @@ struct Worker {
 }
 
 impl Worker {
+    fn run(&mut self, changes: Sender<Msg>) -> Result<(), Stopped> {
+        self.watch_root(changes);
+
+        // Each System folder is watched before it is scanned, so no change slips between the two.
+        for system in &SYSTEMS {
+            self.drain()?;
+            self.watch_system(system);
+            self.scan(system);
+        }
+
+        loop {
+            let message = match self.next_due() {
+                None => self.messages.recv().ok(),
+                Some(due) => match self
+                    .messages
+                    .recv_timeout(due.saturating_duration_since(Instant::now()))
+                {
+                    Ok(message) => Some(message),
+                    Err(RecvTimeoutError::Timeout) => {
+                        self.rescan_due()?;
+                        continue;
+                    }
+                    Err(RecvTimeoutError::Disconnected) => None,
+                },
+            };
+            match message {
+                Some(Msg::Changed(change)) => self.on_change(change),
+                Some(Msg::Stop) | None => return Err(Stopped),
+            }
+        }
+    }
+
+    /// Handles the messages already waiting, without blocking. Every loop over Systems calls it
+    /// between Systems, so dropping the [`LibraryWatcher`] never waits for more than one scan.
+    fn drain(&mut self) -> Result<(), Stopped> {
+        loop {
+            match self.messages.try_recv() {
+                Ok(Msg::Changed(change)) => self.on_change(change),
+                Ok(Msg::Stop) | Err(TryRecvError::Disconnected) => return Err(Stopped),
+                Err(TryRecvError::Empty) => return Ok(()),
+            }
+        }
+    }
+
     /// Watches the Games Root itself, not recursively: that is enough to see System folders
     /// appear. Each System folder gets its own recursive watch, so `bios/` and `saves/` are never
     /// watched, and running out of inotify watches in one System leaves the others watched.
@@ -208,7 +240,7 @@ impl Worker {
     }
 
     /// Rescans, in System Order, every pending System that has been quiet for long enough.
-    fn rescan_due(&mut self) {
+    fn rescan_due(&mut self) -> Result<(), Stopped> {
         let now = Instant::now();
         for system in &SYSTEMS {
             if self
@@ -218,8 +250,10 @@ impl Worker {
             {
                 self.pending.remove(system.id);
                 self.scan(system);
+                self.drain()?;
             }
         }
+        Ok(())
     }
 
     fn scan(&self, system: &'static System) {
@@ -468,5 +502,39 @@ mod tests {
         });
         done.recv_timeout(Duration::from_secs(2))
             .expect("dropping the watcher took longer than 2 s");
+    }
+
+    #[test]
+    fn a_scan_that_fails_to_apply_is_retried_at_the_next_poll() {
+        let root = TempDir::new().unwrap();
+        touch(&root.path().join("snes/Chrono Trigger (USA).sfc"));
+        let mut watcher = LibraryWatcher::start(root.path().to_owned());
+        let mut library = Library::open_in_memory().unwrap();
+
+        // The snes scan fails to apply once, as if the database were busy.
+        let deadline = Instant::now() + DEADLINE;
+        let mut failed = false;
+        while !failed {
+            let applied = watcher.apply(|scanned| {
+                if scanned.system == "snes" {
+                    failed = true;
+                    return Err(DbError::UnknownSchemaVersion(0));
+                }
+                library.sync_system(scanned.system, &scanned.games, NOW)
+            });
+            assert_eq!(
+                applied.is_err(),
+                failed,
+                "the failure is reported by the poll that hit it"
+            );
+            assert!(Instant::now() < deadline, "timed out waiting for the snes scan");
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(paths(&library, "snes").is_empty());
+
+        // Nothing in the snes folder changes again, so only the retry can bring the Game in.
+        poll_until(&mut watcher, &mut library, |l| {
+            paths(l, "snes") == ["snes/Chrono Trigger (USA).sfc"]
+        });
     }
 }
