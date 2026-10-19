@@ -138,6 +138,10 @@ impl Face {
 
     /// Renders `text` in white with alpha; colour comes from the texture's colour modulation.
     pub fn render(&self, text: &str) -> Result<Surface<'static>, String> {
+        // SDL_ttf reads a length of 0 as "NUL-terminated", which an empty `&str` isn't.
+        if text.is_empty() {
+            return Err("there is no text to render".to_owned());
+        }
         let white = SDL_Color {
             r: 255,
             g: 255,
@@ -152,6 +156,24 @@ impl Face {
                 return Err(sdl3::get_error().to_string());
             }
             Ok(Surface::from_ll(surface))
+        }
+    }
+
+    /// Width in pixels of `text` rendered by [`Face::render`], without rendering it.
+    pub fn width(&self, text: &str) -> Result<i32, String> {
+        // SDL_ttf reads a length of 0 as "NUL-terminated", which an empty `&str` isn't.
+        if text.is_empty() {
+            return Ok(0);
+        }
+        let (mut w, mut h) = (0, 0);
+        // SAFETY: `self.raw` is an open font; the pointer and length describe `text`, and SDL_ttf
+        // only writes the two locals.
+        let ok =
+            unsafe { ttf::TTF_GetStringSize(self.raw, text.as_ptr().cast(), text.len(), &mut w, &mut h) };
+        if ok {
+            Ok(w)
+        } else {
+            Err(sdl3::get_error().to_string())
         }
     }
 }

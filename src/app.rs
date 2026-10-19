@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::ffi::CStr;
+use std::time::{Duration, Instant};
 
 use sdl3::event::{Event, WindowEvent};
 use sdl3::gamepad::{Axis, Gamepad};
@@ -71,6 +72,11 @@ fn canvas(video: &VideoSubsystem, w: u32, h: u32, driver: &CStr) -> Result<Windo
     Ok(canvas)
 }
 
+/// How long a frame takes at 60 fps, the cap when vsync isn't available.
+const FRAME: Duration = Duration::from_nanos(1_000_000_000 / 60);
+/// The longest the loop sleeps while the window is minimized or hidden.
+const HIDDEN_WAIT: Duration = Duration::from_millis(100);
+
 fn interactive(mut nav: Nav, mut ctx: Ctx, mut watcher: Option<LibraryWatcher>) -> Result<(), String> {
     let sdl = sdl3::init().map_err(|e| e.to_string())?;
     let video = sdl.video().map_err(|e| e.to_string())?;
@@ -78,8 +84,11 @@ fn interactive(mut nav: Nav, mut ctx: Ctx, mut watcher: Option<LibraryWatcher>) 
     let fonts = Fonts::new()?;
     // OpenGL, because later milestones host libretro OpenGL cores in this renderer.
     let canvas = canvas(&video, 1600, 900, c"opengl")?;
-    // SAFETY: the renderer is alive; vsync is best effort.
-    unsafe { sdl3::sys::render::SDL_SetRenderVSync(canvas.raw(), 1) };
+    // SAFETY: the renderer is alive.
+    let vsync = unsafe { sdl3::sys::render::SDL_SetRenderVSync(canvas.raw(), 1) };
+    if !vsync {
+        eprintln!("game37: no vsync ({}); capping at 60 fps", sdl3::get_error());
+    }
     let creator = canvas.texture_creator();
     let mut gfx = Gfx::new(canvas, &creator, fonts);
     let mut events = sdl.event_pump().map_err(|e| e.to_string())?;
@@ -89,7 +98,16 @@ fn interactive(mut nav: Nav, mut ctx: Ctx, mut watcher: Option<LibraryWatcher>) 
     let mut inputs = Vec::new();
     let mut sync_failing = false;
     loop {
-        for event in events.poll_iter() {
+        let frame_start = Instant::now();
+        // Nothing is drawn while the window can't be seen: sleep until an event, or long enough
+        // for the watcher to keep up.
+        let shown = gfx.is_shown();
+        let woken_by = if shown {
+            None
+        } else {
+            events.wait_event_timeout(HIDDEN_WAIT)
+        };
+        for event in woken_by.into_iter().chain(events.poll_iter()) {
             if input.event(event, &mut gfx, &mut inputs) == Flow::Quit {
                 return Ok(());
             }
@@ -120,10 +138,16 @@ fn interactive(mut nav: Nav, mut ctx: Ctx, mut watcher: Option<LibraryWatcher>) 
                 return Ok(());
             }
         }
+        if !shown {
+            continue;
+        }
         ctx.input_kind = input.kind;
         ctx.button_style = input.style;
         hits = draw(&mut gfx, &mut nav, &ctx, &input.view(), &clock());
         gfx.present();
+        if !vsync && let Some(left) = FRAME.checked_sub(frame_start.elapsed()) {
+            std::thread::sleep(left);
+        }
     }
 }
 
@@ -147,7 +171,7 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, shot: Screenshot) -> Result<(), String
     let clock = clock();
     let mut hits = draw(&mut gfx, &mut nav, &ctx, &view, &clock);
     gfx.present();
-    for step in shot.steps {
+    'steps: for step in shot.steps {
         for i in step.inputs() {
             match i {
                 Input::Action(_) => view.kind = InputKind::Controller,
@@ -159,7 +183,7 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, shot: Screenshot) -> Result<(), String
                 }
             }
             if nav.handle(i, &hits, &mut ctx) == Flow::Quit {
-                break;
+                break 'steps;
             }
         }
         ctx.input_kind = view.kind;
