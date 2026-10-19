@@ -16,6 +16,7 @@ use sdl3::{GamepadSubsystem, VideoSubsystem};
 use crate::cli::{Options, Screenshot};
 use crate::config;
 use crate::ctx::{self, Ctx};
+use crate::emulators::Emulators;
 use crate::library::db::Library;
 use crate::library::watch::LibraryWatcher;
 use crate::screens;
@@ -48,6 +49,9 @@ pub fn run(options: Options) -> Result<(), String> {
         }
         None => {
             ctx.animate = true;
+            if has_library {
+                ctx.emulators = Emulators::detect();
+            }
             let nav = screens::start(loaded, &path, &ctx);
             let watcher = has_library.then(|| LibraryWatcher::start(ctx.games_root.clone()));
             interactive(nav, ctx, watcher)

@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use crate::emulators::Emulators;
 use crate::library::db::{DbError, Library};
 use crate::library::scan;
 use crate::systems::SYSTEMS;
@@ -17,6 +18,8 @@ pub struct Ctx {
     /// What the player last used, so screens can show matching glyphs in their own text.
     pub input_kind: InputKind,
     pub button_style: ButtonStyle,
+    /// Which Standalone Emulators are installed, as last checked.
+    pub emulators: Emulators,
 }
 
 impl Ctx {
@@ -28,6 +31,7 @@ impl Ctx {
             animate: false,
             input_kind: InputKind::Controller,
             button_style: ButtonStyle::default(),
+            emulators: Emulators::all_installed(),
         }
     }
 
