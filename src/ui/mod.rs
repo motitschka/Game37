@@ -3,9 +3,11 @@
 //! All layout uses the logical 1920×1080 coordinates of the mockups in `design/mockups/`.
 
 pub mod chrome;
+pub mod cover;
 pub mod gfx;
 pub mod input;
 pub mod nav;
+pub mod scroll;
 pub mod text;
 pub mod theme;
 

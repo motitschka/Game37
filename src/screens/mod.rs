@@ -1,5 +1,7 @@
 //! The screens, and which ones Game37 starts on (FR-CFG-1).
 
+pub mod game_grid;
+pub mod home;
 mod no_config;
 mod stub;
 
@@ -8,6 +10,8 @@ use std::path::Path;
 use crate::config::{Config, ConfigError};
 use crate::ui::nav::Nav;
 
+pub use game_grid::GameGrid;
+pub use home::Home;
 pub use no_config::NoConfig;
 pub use stub::Stub;
 
@@ -16,7 +20,7 @@ pub use stub::Stub;
 pub fn start(config: Result<Option<Config>, ConfigError>, path: &Path) -> Nav {
     match config {
         Ok(Some(_config)) => Nav::with_tabs(vec![
-            ("Home", Box::new(Stub::new("Home"))),
+            ("Home", Box::new(Home::new())),
             ("Consoles", Box::new(Stub::new("Consoles"))),
         ]),
         Ok(None) => Nav::single(Box::new(NoConfig::missing(path))),

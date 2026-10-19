@@ -5,12 +5,16 @@ use std::path::PathBuf;
 use crate::library::db::{DbError, Library};
 use crate::library::scan;
 use crate::systems::SYSTEMS;
+use crate::ui::input::{ButtonStyle, InputKind};
 
 pub struct Ctx {
     pub library: Library,
     pub games_root: PathBuf,
     /// Bumped whenever the library's Games changed on disk, so screens know to reload them.
     pub revision: u64,
+    /// What the player last used, so screens can show matching glyphs in their own text.
+    pub input_kind: InputKind,
+    pub button_style: ButtonStyle,
 }
 
 impl Ctx {
@@ -19,6 +23,8 @@ impl Ctx {
             library,
             games_root,
             revision: 0,
+            input_kind: InputKind::Controller,
+            button_style: ButtonStyle::default(),
         }
     }
 
