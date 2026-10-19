@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use crate::emulators::Emulators;
-use crate::library::db::{DbError, Library};
+use crate::library::db::{DbError, GameRow, Library};
 use crate::library::scan;
 use crate::systems::SYSTEMS;
 use crate::ui::input::{ButtonStyle, InputKind};
@@ -23,6 +23,8 @@ pub struct Ctx {
     /// Text a screen wants put on the system clipboard (FR-CAR-9): the screen layer has no SDL
     /// handle, so it leaves the request here for the app's event loop to carry out.
     pub clipboard_request: Option<String>,
+    /// A Game a screen asked to play; `app.rs` takes it and starts its Standalone Emulator.
+    pub launch: Option<GameRow>,
 }
 
 impl Ctx {
@@ -36,6 +38,7 @@ impl Ctx {
             button_style: ButtonStyle::default(),
             emulators: Emulators::all_installed(),
             clipboard_request: None,
+            launch: None,
         }
     }
 

@@ -17,6 +17,12 @@ pub trait Screen {
     /// Called when the screen stops being shown without being popped: its tab is switched away
     /// from, or Game37 quits. A place to save state that is otherwise saved lazily.
     fn leave(&mut self, _ctx: &Ctx) {}
+    /// A modal is drawn over the screen below it and gets all input: tabs, the back affordance
+    /// and the mouse Back button don't act while it is on top. Only hint clicks still turn into
+    /// their actions.
+    fn is_modal(&self) -> bool {
+        false
+    }
 }
 
 pub enum Transition {
@@ -107,15 +113,40 @@ impl Nav {
             .as_mut()
     }
 
-    /// Title of the screen Back returns to, when the active screen was pushed.
+    /// Index of the topmost screen that isn't a modal on the active tab's stack.
+    fn base_index(&self) -> usize {
+        let stack = &self.tabs[self.active].stack;
+        stack.iter().rposition(|s| !s.is_modal()).unwrap_or(0)
+    }
+
+    /// The topmost screen that isn't a modal: the one drawn full-screen.
+    pub fn base(&mut self) -> &mut dyn Screen {
+        let i = self.base_index();
+        self.tabs[self.active].stack[i].as_mut()
+    }
+
+    /// The modal on top, if any.
+    pub fn modal(&mut self) -> Option<&mut dyn Screen> {
+        let top = self.top();
+        if top.is_modal() { Some(top) } else { None }
+    }
+
+    /// Title of the screen Back returns to, when the active screen (below any modal) was pushed.
     pub fn back_title(&self) -> Option<&str> {
         let stack = &self.tabs[self.active].stack;
-        (stack.len() > 1).then(|| stack[stack.len() - 2].title())
+        let base = self.base_index();
+        (base > 0).then(|| stack[base - 1].title())
     }
 
     pub fn handle(&mut self, input: Input, hits: &Hits, ctx: &mut Ctx) -> Flow {
         let tabs = self.tabs.len();
+        let modal = self.top().is_modal();
         match input {
+            Input::Pointer(Pointer::Click { x, y }) if hit(&hits.hints, x, y).is_some() => {
+                let action = hit(&hits.hints, x, y).unwrap();
+                return self.handle(Input::Action(action), &Hits::default(), ctx);
+            }
+            _ if modal => return self.apply(input, ctx),
             Input::Action(Action::PrevTab) if tabs > 1 => {
                 self.switch_to((self.active + tabs - 1) % tabs, ctx)
             }
@@ -127,18 +158,24 @@ impl Nav {
             Input::Pointer(Pointer::Click { x, y }) if hits.back.is_some_and(|r| r.contains(x, y)) => {
                 self.pop()
             }
-            Input::Pointer(Pointer::Click { x, y }) if hit(&hits.hints, x, y).is_some() => {
-                let action = hit(&hits.hints, x, y).unwrap();
-                return self.handle(Input::Action(action), &Hits::default(), ctx);
-            }
-            _ => match self.top().handle(input, ctx) {
-                Transition::None => {}
-                Transition::Push(screen) => self.tabs[self.active].stack.push(screen),
-                Transition::Pop => self.pop(),
-                Transition::Quit => return Flow::Quit,
-            },
+            _ => return self.apply(input, ctx),
         }
         Flow::Continue
+    }
+
+    /// Hands `input` to the top screen and carries out its transition.
+    fn apply(&mut self, input: Input, ctx: &mut Ctx) -> Flow {
+        match self.top().handle(input, ctx) {
+            Transition::None => {}
+            Transition::Push(screen) => self.push(screen),
+            Transition::Pop => self.pop(),
+            Transition::Quit => return Flow::Quit,
+        }
+        Flow::Continue
+    }
+
+    pub fn push(&mut self, screen: Box<dyn Screen>) {
+        self.tabs[self.active].stack.push(screen);
     }
 
     fn switch_to(&mut self, tab: usize, ctx: &Ctx) {
@@ -156,7 +193,7 @@ impl Nav {
     }
 
     /// Pops the active tab's top screen; a root screen stays.
-    fn pop(&mut self) {
+    pub fn pop(&mut self) {
         let stack = &mut self.tabs[self.active].stack;
         if stack.len() > 1 {
             stack.pop();

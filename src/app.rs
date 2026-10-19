@@ -17,6 +17,7 @@ use crate::cli::{Options, Screenshot};
 use crate::config;
 use crate::ctx::{self, Ctx};
 use crate::emulators::Emulators;
+use crate::launch::{Launcher, NeverExits, Processes};
 use crate::library::db::Library;
 use crate::library::watch::LibraryWatcher;
 use crate::screens;
@@ -30,9 +31,10 @@ use crate::ui::text::Fonts;
 pub fn run(options: Options) -> Result<(), String> {
     let path = options.config.unwrap_or_else(config::config_path);
     let loaded = config::load(&path);
+    let data_dir = options.data_dir.unwrap_or_else(config::data_dir);
+    let log_dir = data_dir.join("logs");
     let (mut ctx, has_library) = match &loaded {
         Ok(Some(config)) => {
-            let data_dir = options.data_dir.unwrap_or_else(config::data_dir);
             let library = Library::open(&data_dir.join("library.db")).map_err(|e| e.to_string())?;
             (Ctx::new(library, config.games_root.clone()), true)
         }
@@ -46,7 +48,9 @@ pub fn run(options: Options) -> Result<(), String> {
             }
             ctx.emulators = shot.missing_emulators.clone();
             let nav = screens::start(loaded, &path, &ctx);
-            screenshot(nav, ctx, shot)
+            // Never starts a process: a launch shows the Playing screen for good.
+            let launcher = Launcher::new(Box::new(NeverExits::default()), log_dir);
+            screenshot(nav, ctx, launcher, shot)
         }
         None => {
             ctx.animate = true;
@@ -55,7 +59,8 @@ pub fn run(options: Options) -> Result<(), String> {
             }
             let nav = screens::start(loaded, &path, &ctx);
             let watcher = has_library.then(|| LibraryWatcher::start(ctx.games_root.clone()));
-            interactive(nav, ctx, watcher)
+            let launcher = Launcher::new(Box::new(Processes), log_dir);
+            interactive(nav, ctx, watcher, launcher)
         }
     }
 }
@@ -81,7 +86,12 @@ const FRAME: Duration = Duration::from_nanos(1_000_000_000 / 60);
 /// The longest the loop sleeps while the window is minimized or hidden.
 const HIDDEN_WAIT: Duration = Duration::from_millis(100);
 
-fn interactive(mut nav: Nav, mut ctx: Ctx, mut watcher: Option<LibraryWatcher>) -> Result<(), String> {
+fn interactive(
+    mut nav: Nav,
+    mut ctx: Ctx,
+    mut watcher: Option<LibraryWatcher>,
+    mut launcher: Launcher,
+) -> Result<(), String> {
     let sdl = sdl3::init().map_err(|e| e.to_string())?;
     let video = sdl.video().map_err(|e| e.to_string())?;
     let gamepads = sdl.gamepad().map_err(|e| e.to_string())?;
@@ -134,10 +144,20 @@ fn interactive(mut nav: Nav, mut ctx: Ctx, mut watcher: Option<LibraryWatcher>) 
                 Err(_) => {}
             }
         }
+        // The emulator exited: come back in front (FR-EXT-2).
+        if launcher.poll(&mut nav, &mut ctx, ctx::now()).is_some() {
+            gfx.restore();
+        }
         inputs.extend(input.controls.poll(sdl3::timer::ticks()));
         for i in inputs.drain(..) {
             if nav.handle(i, &hits, &mut ctx) == Flow::Quit {
                 break 'frames;
+            }
+            if let Some(game) = ctx.launch.take() {
+                gfx.minimize();
+                if !launcher.start(&game, &mut nav, &ctx) {
+                    gfx.restore();
+                }
             }
         }
         copy_clipboard_request(&mut ctx, &video);
@@ -152,11 +172,13 @@ fn interactive(mut nav: Nav, mut ctx: Ctx, mut watcher: Option<LibraryWatcher>) 
             std::thread::sleep(left);
         }
     }
+    // Quitting while an emulator runs leaves it running, with Playtime counted up to now.
+    launcher.quit(&mut nav, &mut ctx, ctx::now());
     nav.leave_all(&ctx);
     Ok(())
 }
 
-fn screenshot(mut nav: Nav, mut ctx: Ctx, shot: Screenshot) -> Result<(), String> {
+fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screenshot) -> Result<(), String> {
     sdl3::hint::set("SDL_VIDEO_DRIVER", "offscreen");
     let sdl = sdl3::init().map_err(|e| e.to_string())?;
     let video = sdl.video().map_err(|e| e.to_string())?;
@@ -191,6 +213,9 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, shot: Screenshot) -> Result<(), String
                 break 'steps;
             }
             copy_clipboard_request(&mut ctx, &video);
+            if let Some(game) = ctx.launch.take() {
+                launcher.start(&game, &mut nav, &ctx);
+            }
         }
         ctx.input_kind = view.kind;
         hits = draw(&mut gfx, &mut nav, &ctx, &view, &clock);
@@ -210,7 +235,7 @@ struct View {
 /// Draws a frame (without presenting it) and returns where its clickable chrome went.
 fn draw(gfx: &mut Gfx<'_>, nav: &mut Nav, ctx: &Ctx, view: &View, clock: &str) -> Hits {
     chrome::background(gfx);
-    nav.top().draw(gfx, ctx);
+    nav.base().draw(gfx, ctx);
     let labels = nav.tab_labels();
     let bar = TopBar {
         tabs: labels.as_deref().map(|l| (l, nav.active_tab())),
@@ -221,6 +246,10 @@ fn draw(gfx: &mut Gfx<'_>, nav: &mut Nav, ctx: &Ctx, view: &View, clock: &str) -
         pointer: view.pointer,
     };
     let top = chrome::topbar(gfx, &bar);
+    // A modal dims everything below it, top bar included.
+    if let Some(modal) = nav.modal() {
+        modal.draw(gfx, ctx);
+    }
     let hints = chrome::hintbar(gfx, &nav.top().hints(), view.kind, view.style, view.pointer);
     Hits {
         tabs: top.tabs,
