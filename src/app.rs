@@ -20,10 +20,9 @@ use crate::library::db::Library;
 use crate::library::watch::LibraryWatcher;
 use crate::screens;
 use crate::ui::chrome::{self, TopBar};
+use crate::ui::controls::{ControlEvent, Controls, StickAxis};
 use crate::ui::gfx::Gfx;
-use crate::ui::input::{
-    Action, ButtonStyle, Input, InputKind, Pointer, Repeat, button_action, key_action, stick_direction,
-};
+use crate::ui::input::{ButtonStyle, Input, InputKind, Pointer};
 use crate::ui::nav::{Flow, Hits, Nav};
 use crate::ui::text::Fonts;
 
@@ -130,9 +129,7 @@ fn interactive(mut nav: Nav, mut ctx: Ctx, mut watcher: Option<LibraryWatcher>) 
                 Err(_) => {}
             }
         }
-        if let Some(dir) = input.repeat.poll(sdl3::timer::ticks()) {
-            inputs.push(Input::Action(dir));
-        }
+        inputs.extend(input.controls.poll(sdl3::timer::ticks()));
         for i in inputs.drain(..) {
             if nav.handle(i, &hits, &mut ctx) == Flow::Quit {
                 return Ok(());
@@ -141,8 +138,8 @@ fn interactive(mut nav: Nav, mut ctx: Ctx, mut watcher: Option<LibraryWatcher>) 
         if !shown {
             continue;
         }
-        ctx.input_kind = input.kind;
-        ctx.button_style = input.style;
+        ctx.input_kind = input.controls.kind;
+        ctx.button_style = input.controls.style;
         hits = draw(&mut gfx, &mut nav, &ctx, &input.view(), &clock());
         gfx.present();
         if !vsync && let Some(left) = FRAME.checked_sub(frame_start.elapsed()) {
@@ -237,136 +234,102 @@ fn clock() -> String {
     }
 }
 
-/// Turns SDL events into UI inputs, tracking held directions, sticks and the last input kind.
+/// Turns SDL events into UI inputs: keys and gamepads through [`Controls`], the mouse directly.
 struct InputState {
     subsystem: GamepadSubsystem,
     pads: HashMap<JoystickId, Gamepad>,
-    /// Left stick axes and the direction they last pointed, per pad.
-    sticks: HashMap<JoystickId, (i16, i16, Option<Action>)>,
-    repeat: Repeat,
-    kind: InputKind,
-    style: ButtonStyle,
+    controls: Controls,
     pointer: Option<(f32, f32)>,
 }
 
 impl InputState {
     fn new(subsystem: GamepadSubsystem) -> InputState {
         let has_pad = subsystem.gamepads().is_ok_and(|pads| !pads.is_empty());
+        let kind = if has_pad {
+            InputKind::Controller
+        } else {
+            InputKind::Keyboard
+        };
         InputState {
             subsystem,
             pads: HashMap::new(),
-            sticks: HashMap::new(),
-            repeat: Repeat::default(),
-            kind: if has_pad {
-                InputKind::Controller
-            } else {
-                InputKind::Keyboard
-            },
-            style: ButtonStyle::default(),
+            controls: Controls::new(kind),
             pointer: None,
         }
     }
 
     fn view(&self) -> View {
         View {
-            kind: self.kind,
-            style: self.style,
+            kind: self.controls.kind,
+            style: self.controls.style,
             pointer: self.pointer,
         }
     }
 
-    fn press(&mut self, action: Action, out: &mut Vec<Input>) {
-        if action.is_direction() {
-            self.repeat.press(action, sdl3::timer::ticks());
-        }
-        out.push(Input::Action(action));
-    }
-
     fn event(&mut self, event: Event, gfx: &mut Gfx<'_>, out: &mut Vec<Input>) -> Flow {
-        match event {
+        let control = match event {
             Event::Quit { .. } => return Flow::Quit,
             Event::Window {
                 win_event: WindowEvent::FocusLost,
                 ..
-            } => self.repeat.release_all(),
+            } => ControlEvent::FocusLost,
 
             Event::KeyDown {
                 keycode: Some(Keycode::F11),
                 repeat: false,
                 ..
-            } => gfx.toggle_fullscreen(),
+            } => {
+                gfx.toggle_fullscreen();
+                return Flow::Continue;
+            }
             Event::KeyDown {
                 keycode: Some(key),
-                repeat: false,
+                repeat,
                 ..
-            } => {
-                self.kind = InputKind::Keyboard;
-                if let Some(action) = key_action(key) {
-                    self.press(action, out);
-                }
-            }
+            } => ControlEvent::KeyDown { key, repeat },
             Event::KeyUp {
                 keycode: Some(key), ..
-            } => {
-                if let Some(action) = key_action(key) {
-                    self.repeat.release(action);
-                }
-            }
+            } => ControlEvent::KeyUp { key },
 
             Event::GamepadAdded { which, .. } => {
                 if let Ok(pad) = self.subsystem.open(which) {
                     self.pads.insert(which, pad);
                 }
+                return Flow::Continue;
             }
             Event::GamepadRemoved { which, .. } => {
                 self.pads.remove(&which);
-                self.sticks.remove(&which);
-                self.repeat.release_all();
+                ControlEvent::PadRemoved { pad: which }
             }
-            Event::GamepadButtonDown { button, .. } => {
-                self.kind = InputKind::Controller;
-                if let Some(action) = button_action(self.style, button) {
-                    self.press(action, out);
-                }
+            Event::GamepadButtonDown { which, button, .. } => {
+                ControlEvent::PadButtonDown { pad: which, button }
             }
-            Event::GamepadButtonUp { button, .. } => {
-                if let Some(action) = button_action(self.style, button) {
-                    self.repeat.release(action);
-                }
-            }
+            Event::GamepadButtonUp { which, button, .. } => ControlEvent::PadButtonUp { pad: which, button },
             Event::GamepadAxisMotion {
                 which,
                 axis: axis @ (Axis::LeftX | Axis::LeftY),
                 value,
                 ..
-            } => {
-                let stick = self.sticks.entry(which).or_insert((0, 0, None));
-                match axis {
-                    Axis::LeftX => stick.0 = value,
-                    _ => stick.1 = value,
-                }
-                let (old, new) = (stick.2, stick_direction(stick.0, stick.1));
-                if new != old {
-                    stick.2 = new;
-                    if let Some(old) = old {
-                        self.repeat.release(old);
-                    }
-                    if let Some(new) = new {
-                        self.kind = InputKind::Controller;
-                        self.press(new, out);
-                    }
-                }
-            }
+            } => ControlEvent::StickMotion {
+                pad: which,
+                axis: if axis == Axis::LeftX {
+                    StickAxis::X
+                } else {
+                    StickAxis::Y
+                },
+                value,
+            },
 
             Event::MouseMotion { x, y, .. } => {
                 let (x, y) = gfx.to_logical(x, y);
-                self.kind = InputKind::Keyboard;
+                self.controls.kind = InputKind::Keyboard;
                 self.pointer = Some((x, y));
                 out.push(Input::Pointer(Pointer::Move { x, y }));
+                return Flow::Continue;
             }
             Event::MouseButtonUp { mouse_btn, x, y, .. } => {
                 let (x, y) = gfx.to_logical(x, y);
-                self.kind = InputKind::Keyboard;
+                self.controls.kind = InputKind::Keyboard;
                 let pointer = match mouse_btn {
                     MouseButton::Left => Pointer::Click { x, y },
                     MouseButton::Right => Pointer::RightClick { x, y },
@@ -374,13 +337,16 @@ impl InputState {
                     _ => return Flow::Continue,
                 };
                 out.push(Input::Pointer(pointer));
+                return Flow::Continue;
             }
             Event::MouseWheel { y, .. } => {
-                self.kind = InputKind::Keyboard;
+                self.controls.kind = InputKind::Keyboard;
                 out.push(Input::Pointer(Pointer::Wheel { dy: y }));
+                return Flow::Continue;
             }
-            _ => {}
-        }
+            _ => return Flow::Continue,
+        };
+        self.controls.handle(sdl3::timer::ticks(), control, out);
         Flow::Continue
     }
 }
