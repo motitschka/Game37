@@ -22,6 +22,10 @@ use crate::systems::{SYSTEMS, System};
 /// (copying a big file, extracting a folder Game) leads to one rescan.
 const DEBOUNCE: Duration = Duration::from_millis(500);
 
+/// How often the worker checks whether the Games Root is there. inotify can't see a missing root
+/// appear, nor the drive or network share it is on being unmounted.
+const ROOT_CHECK: Duration = Duration::from_secs(2);
+
 /// Scans the Games Root in the background and watches it for changes. Dropping it stops watching.
 pub struct LibraryWatcher {
     inbox: Sender<Msg>,
@@ -45,7 +49,8 @@ enum Msg {
 
 impl LibraryWatcher {
     /// Starts the worker thread: it scans every System in System Order, one result per System,
-    /// then watches the Games Root. A missing Games Root scans as empty and is not watched.
+    /// then watches the Games Root. A missing Games Root scans as empty, and is watched and
+    /// rescanned once it appears.
     pub fn start(games_root: PathBuf) -> LibraryWatcher {
         let (inbox, messages) = mpsc::channel();
         let (finished, results) = mpsc::channel();
@@ -56,13 +61,15 @@ impl LibraryWatcher {
                 let mut worker = Worker {
                     watcher: None,
                     root: games_root,
+                    root_found: false,
+                    changes,
                     messages,
                     finished,
                     pending: HashMap::new(),
                     warned: false,
                 };
                 // The worker only returns once told to stop; the folder watcher stops with it.
-                let _ = worker.run(changes);
+                let _ = worker.run();
             })
             .expect("failed to spawn the library watcher thread");
         LibraryWatcher {
@@ -110,9 +117,13 @@ struct Stopped;
 
 /// The worker thread's state.
 struct Worker {
-    /// `None` when the Games Root can't be watched: Games then only update at the next start.
+    /// `None` while the Games Root is missing or can't be watched.
     watcher: Option<RecommendedWatcher>,
     root: PathBuf,
+    /// Whether the Games Root was there when last looked at.
+    root_found: bool,
+    /// Where the folder watcher sends its changes.
+    changes: Sender<Msg>,
     messages: Receiver<Msg>,
     finished: Sender<Scanned>,
     /// Systems waiting for a rescan, by id, with the time of their latest change.
@@ -121,8 +132,13 @@ struct Worker {
 }
 
 impl Worker {
-    fn run(&mut self, changes: Sender<Msg>) -> Result<(), Stopped> {
-        self.watch_root(changes);
+    fn run(&mut self) -> Result<(), Stopped> {
+        self.root_found = self.root.is_dir();
+        if self.root_found {
+            self.watch_root();
+        } else {
+            self.log_root_missing();
+        }
 
         // Each System folder is watched before it is scanned, so no change slips between the two.
         for system in &SYSTEMS {
@@ -131,26 +147,67 @@ impl Worker {
             self.scan(system);
         }
 
+        let mut next_check = Instant::now() + ROOT_CHECK;
         loop {
-            let message = match self.next_due() {
-                None => self.messages.recv().ok(),
-                Some(due) => match self
-                    .messages
-                    .recv_timeout(due.saturating_duration_since(Instant::now()))
-                {
-                    Ok(message) => Some(message),
-                    Err(RecvTimeoutError::Timeout) => {
-                        self.rescan_due()?;
-                        continue;
-                    }
-                    Err(RecvTimeoutError::Disconnected) => None,
-                },
-            };
-            match message {
-                Some(Msg::Changed(change)) => self.on_change(change),
-                Some(Msg::Stop) | None => return Err(Stopped),
+            let wake = self.next_due().map_or(next_check, |due| due.min(next_check));
+            match self
+                .messages
+                .recv_timeout(wake.saturating_duration_since(Instant::now()))
+            {
+                Ok(Msg::Changed(change)) => self.on_change(change),
+                Ok(Msg::Stop) | Err(RecvTimeoutError::Disconnected) => return Err(Stopped),
+                Err(RecvTimeoutError::Timeout) => {}
             }
+            if Instant::now() >= next_check {
+                self.check_root()?;
+                next_check = Instant::now() + ROOT_CHECK;
+            }
+            self.rescan_due()?;
         }
+    }
+
+    /// Notices the Games Root appearing, or disappearing in a way inotify doesn't report.
+    fn check_root(&mut self) -> Result<(), Stopped> {
+        match (self.root_found, self.root.is_dir()) {
+            (false, true) => self.root_appeared()?,
+            (true, false) => self.root_lost(),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Watches the Games Root and every System folder in it, then rescans every System.
+    fn root_appeared(&mut self) -> Result<(), Stopped> {
+        self.root_found = true;
+        self.watch_root();
+        for system in &SYSTEMS {
+            self.drain()?;
+            self.watch_system(system);
+        }
+        self.rescan_all();
+        Ok(())
+    }
+
+    /// Stops watching the Games Root and rescans every System. A missing Games Root scans as
+    /// empty, so its Games are marked absent and keep their data.
+    fn root_lost(&mut self) {
+        self.root_found = false;
+        self.watcher = None;
+        self.log_root_missing();
+        self.rescan_all();
+    }
+
+    /// Logged once each time the Games Root goes missing, not at every check.
+    fn log_root_missing(&self) {
+        eprintln!(
+            "Games Root {} not found: watching for it to appear",
+            self.root.display()
+        );
+    }
+
+    fn rescan_all(&mut self) {
+        let now = Instant::now();
+        self.pending.extend(SYSTEMS.iter().map(|system| (system.id, now)));
     }
 
     /// Handles the messages already waiting, without blocking. Every loop over Systems calls it
@@ -168,14 +225,8 @@ impl Worker {
     /// Watches the Games Root itself, not recursively: that is enough to see System folders
     /// appear. Each System folder gets its own recursive watch, so `bios/` and `saves/` are never
     /// watched, and running out of inotify watches in one System leaves the others watched.
-    fn watch_root(&mut self, changes: Sender<Msg>) {
-        if !self.root.is_dir() {
-            eprintln!(
-                "Games Root {} not found: not watching it for changes",
-                self.root.display()
-            );
-            return;
-        }
+    fn watch_root(&mut self) {
+        let changes = self.changes.clone();
         let watcher = notify::recommended_watcher(move |change| {
             let _ = changes.send(Msg::Changed(change));
         });
@@ -215,13 +266,23 @@ impl Worker {
         let now = Instant::now();
         if event.need_rescan() {
             // The watcher lost events (e.g. the inotify queue overflowed): any System may have changed.
-            self.pending.extend(SYSTEMS.iter().map(|system| (system.id, now)));
-            return;
+            return self.rescan_all();
         }
         if !changes_content(&event.kind) {
             return;
         }
         for path in &event.paths {
+            if *path == self.root {
+                // The Games Root itself was deleted or renamed away, and its watch went with it.
+                let gone = matches!(
+                    event.kind,
+                    EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_))
+                );
+                if gone && self.root_found {
+                    self.root_lost();
+                }
+                continue;
+            }
             // Paths outside every System folder (`bios/`, `saves/`, the root itself) map to None.
             let Some(system) = system_for_path(&self.root, path) else {
                 continue;
@@ -485,6 +546,44 @@ mod tests {
         let (watcher, library) = started(&root.path().join("missing"));
         assert!(library.system_counts().unwrap().is_empty());
         assert!(results_within(&watcher, DEBOUNCE).is_empty());
+    }
+
+    #[test]
+    fn a_games_root_created_while_running_is_scanned_and_watched() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("Games");
+        let (mut watcher, mut library) = started(&root);
+
+        touch(&root.join("snes/Chrono Trigger (USA).sfc"));
+        poll_until(&mut watcher, &mut library, |l| {
+            paths(l, "snes") == ["snes/Chrono Trigger (USA).sfc"]
+        });
+
+        touch(&root.join("snes/Secret of Mana (USA).sfc"));
+        poll_until(&mut watcher, &mut library, |l| paths(l, "snes").len() == 2);
+    }
+
+    #[test]
+    fn a_games_root_removed_and_recreated_goes_absent_and_comes_back() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("Games");
+        touch(&root.join("snes/Chrono Trigger (USA).sfc"));
+        let (mut watcher, mut library) = started(&root);
+        let id = library.system_games("snes", SortOrder::AZ).unwrap()[0].id;
+
+        fs::remove_dir_all(&root).unwrap();
+        poll_until(&mut watcher, &mut library, |l| paths(l, "snes").is_empty());
+
+        touch(&root.join("snes/Chrono Trigger (USA).sfc"));
+        poll_until(&mut watcher, &mut library, |l| {
+            paths(l, "snes") == ["snes/Chrono Trigger (USA).sfc"]
+        });
+        let back = library.system_games("snes", SortOrder::AZ).unwrap();
+        assert_eq!(back[0].id, id, "the Game keeps its row and data");
+
+        // The new Games Root is watched, not just scanned once.
+        touch(&root.join("snes/Secret of Mana (USA).sfc"));
+        poll_until(&mut watcher, &mut library, |l| paths(l, "snes").len() == 2);
     }
 
     #[test]
