@@ -15,48 +15,74 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
+use crate::cores;
 use crate::ctx::Ctx;
 use crate::emulators::{self, Emulator, PATH};
 use crate::library::db::GameRow;
 use crate::screens::home::tilde;
 use crate::screens::message::Message;
 use crate::screens::playing::Playing;
-use crate::systems;
+use crate::systems::{self, Kind, System};
 use crate::ui::nav::{Nav, Transition};
 
 /// A run shorter than this that ends with a non-zero status is a failure to start, not a play.
 pub const EARLY: Duration = Duration::from_secs(3);
-const FAILED_TITLE: &str = "Couldn't start the game";
+pub const FAILED_TITLE: &str = "Couldn't start the game";
 const NOT_PLAYABLE_TITLE: &str = "Not playable yet";
 
-/// What Confirm on a Game does (until the Details Page exists): asks for a launch when its
-/// System's Standalone Emulator is installed, else explains why it can't be played.
+/// What Confirm on a Game does (until the Details Page exists): asks to play it when its System's
+/// Core or Standalone Emulator is installed, else explains why it can't be played.
 pub fn confirm_game(game: &GameRow, ctx: &mut Ctx) -> Transition {
-    let Some(system) = systems::by_id(&game.system) else {
-        return Transition::None;
-    };
-    let message = match (emulators::for_system(system), ctx.emulators.missing(system)) {
-        (None, _) => format!(
-            "Playing {} games inside Game37 comes in a later update.",
-            system.name
-        ),
-        (Some(_), Some(missing)) => format!(
-            "{} isn't installed, so {} games can't be played yet. The install command is on the {} \
-             Console Page.",
-            missing.name, system.name, system.name
-        ),
-        (Some(_), None) => {
-            ctx.launch = Some(game.clone());
-            return Transition::None;
-        }
-    };
-    Transition::Push(Box::new(Message::new(NOT_PLAYABLE_TITLE, message)))
+    match why_not_playable(game, ctx) {
+        Some(message) => Transition::Push(Box::new(Message::new(NOT_PLAYABLE_TITLE, message))),
+        None => Transition::None,
+    }
 }
 
-/// Whether Confirm on `game` launches it (FR-CAR-9), for the "Play" hint.
+/// Asks to play `game` (`Ctx::play` or `Ctx::launch`) and returns `None`, or returns why it can't
+/// be played.
+fn why_not_playable(game: &GameRow, ctx: &mut Ctx) -> Option<String> {
+    let system = systems::by_id(&game.system)?;
+    let message = match system.kind {
+        Kind::Embedded => match cores::for_system(system) {
+            None => later_update(system),
+            Some(core) if !cores::is_installed(&ctx.data_dir, core) => {
+                format!("The {} Core isn't downloaded yet.", core.name)
+            }
+            Some(_) => {
+                ctx.play = Some(game.clone());
+                return None;
+            }
+        },
+        Kind::External => match (emulators::for_system(system), ctx.emulators.missing(system)) {
+            (None, _) => later_update(system),
+            (Some(_), Some(missing)) => format!(
+                "{} isn't installed, so {} games can't be played yet. The install command is on the \
+                 {} Console Page.",
+                missing.name, system.name, system.name
+            ),
+            (Some(_), None) => {
+                ctx.launch = Some(game.clone());
+                return None;
+            }
+        },
+    };
+    Some(message)
+}
+
+fn later_update(system: &System) -> String {
+    format!(
+        "Playing {} games inside Game37 comes in a later update.",
+        system.name
+    )
+}
+
+/// Whether Confirm on `game` plays it (FR-CAR-9), for the "Play" hint.
 pub fn playable(game: &GameRow, ctx: &Ctx) -> bool {
-    systems::by_id(&game.system)
-        .is_some_and(|s| emulators::for_system(s).is_some() && ctx.emulators.missing(s).is_none())
+    systems::by_id(&game.system).is_some_and(|s| match s.kind {
+        Kind::Embedded => cores::for_system(s).is_some_and(|c| cores::is_installed(&ctx.data_dir, c)),
+        Kind::External => emulators::for_system(s).is_some() && ctx.emulators.missing(s).is_none(),
+    })
 }
 
 /// The command that starts `file` in `emulator`, granting it read access to the Games Root,
@@ -332,7 +358,8 @@ impl Launcher {
     }
 }
 
-fn record(ctx: &mut Ctx, game_id: i64, ended_at: i64, elapsed: Duration) {
+/// Records a play of `elapsed` that ended at `ended_at`, and reloads the views.
+pub fn record(ctx: &mut Ctx, game_id: i64, ended_at: i64, elapsed: Duration) {
     let secs = elapsed.as_secs_f64().round() as u64;
     if let Err(e) = ctx.library.record_play(game_id, ended_at, secs) {
         eprintln!("game37: can't record Playtime: {e}");
@@ -676,18 +703,71 @@ mod tests {
         assert!(playable(&game, &w.ctx));
         assert!(matches!(confirm_game(&game, &mut w.ctx), Transition::None));
         assert_eq!(w.ctx.launch.take().map(|g| g.id), Some(game.id));
+        assert!(w.ctx.play.is_none());
 
         w.ctx.emulators = crate::emulators::Emulators::from_installed(Vec::<String>::new());
         assert!(!playable(&game, &w.ctx));
         assert!(matches!(confirm_game(&game, &mut w.ctx), Transition::Push(_)));
         assert!(w.ctx.launch.is_none());
+    }
 
-        let snes = GameRow {
-            system: "snes".into(),
-            ..game
-        };
-        assert!(!playable(&snes, &w.ctx));
-        assert!(matches!(confirm_game(&snes, &mut w.ctx), Transition::Push(_)));
+    fn game_of(w: &World, system: &str) -> GameRow {
+        GameRow {
+            system: system.into(),
+            ..w.game.clone()
+        }
+    }
+
+    #[test]
+    fn confirm_asks_to_play_an_embedded_game_when_its_core_is_installed() {
+        let mut w = world("exit 0");
+        w.ctx.data_dir = w._dir.path().join("data");
+        touch(&w.ctx.data_dir.join("cores/bsnes_libretro.so"));
+        let snes = game_of(&w, "snes");
+        assert!(playable(&snes, &w.ctx));
+        assert!(matches!(confirm_game(&snes, &mut w.ctx), Transition::None));
+        assert_eq!(w.ctx.play.take().map(|g| g.system), Some("snes".to_owned()));
         assert!(w.ctx.launch.is_none());
+    }
+
+    #[test]
+    fn an_embedded_game_whose_core_is_missing_says_so() {
+        let mut w = world("exit 0");
+        w.ctx.data_dir = w._dir.path().join("data");
+        touch(&w.ctx.data_dir.join("cores/bsnes_libretro.so"));
+        let gba = game_of(&w, "gba");
+        assert!(!playable(&gba, &w.ctx));
+        assert_eq!(
+            why_not_playable(&gba, &mut w.ctx).as_deref(),
+            Some("The mGBA Core isn't downloaded yet.")
+        );
+        assert!(matches!(confirm_game(&gba, &mut w.ctx), Transition::Push(_)));
+        assert!(w.ctx.play.is_none() && w.ctx.launch.is_none());
+    }
+
+    #[test]
+    fn an_embedded_system_without_a_core_comes_later() {
+        let mut w = world("exit 0");
+        w.ctx.data_dir = w._dir.path().join("data");
+        let n64 = game_of(&w, "n64");
+        assert!(!playable(&n64, &w.ctx));
+        assert_eq!(
+            why_not_playable(&n64, &mut w.ctx).as_deref(),
+            Some("Playing Nintendo 64 games inside Game37 comes in a later update.")
+        );
+        assert!(w.ctx.play.is_none() && w.ctx.launch.is_none());
+        let coreless = systems::SYSTEMS
+            .iter()
+            .filter(|s| s.kind == Kind::Embedded && cores::for_system(s).is_none());
+        for system in coreless {
+            let game = game_of(&w, system.id);
+            assert!(!playable(&game, &w.ctx), "{}", system.id);
+            assert!(
+                why_not_playable(&game, &mut w.ctx)
+                    .unwrap()
+                    .contains("later update")
+            );
+            assert!(w.ctx.play.is_none());
+        }
     }
 }

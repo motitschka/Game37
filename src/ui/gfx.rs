@@ -12,6 +12,7 @@ use sdl3::video::{WindowContext, WindowFlags};
 use super::Rect;
 use super::text::{Fonts, Weight};
 use super::theme::Colour;
+use crate::libretro;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Align {
@@ -102,6 +103,25 @@ pub struct Gfx<'tc> {
     texts: FrameCache<TextKey, Option<CachedText<'tc>>>,
     /// Text widths, measured without rendering.
     widths: FrameCache<TextKey, f32>,
+    /// The running Game's last frame. Kept here rather than in its screen, because a texture
+    /// borrows the texture creator and a `Box<dyn Screen>` can't.
+    game: Option<GameTexture<'tc>>,
+}
+
+struct GameTexture<'tc> {
+    texture: Texture<'tc>,
+    width: u32,
+    height: u32,
+    format: libretro::PixelFormat,
+}
+
+fn sdl_format(format: libretro::PixelFormat) -> sdl3::pixels::PixelFormat {
+    use sdl3::pixels::PixelFormat;
+    match format {
+        libretro::PixelFormat::Xrgb1555 => PixelFormat::XRGB1555,
+        libretro::PixelFormat::Rgb565 => PixelFormat::RGB565,
+        libretro::PixelFormat::Xrgb8888 => PixelFormat::XRGB8888,
+    }
 }
 
 fn fcolour(c: Colour) -> FColor {
@@ -183,6 +203,18 @@ fn render<'tc>(
     })
 }
 
+/// Sharp pixels at any scale: SDL's pixel-art filter (SDL 3.4), else nearest neighbour.
+fn set_pixel_art_scaling(texture: &Texture<'_>) {
+    use sdl3::sys::render::SDL_SetTextureScaleMode;
+    use sdl3::sys::surface::{SDL_SCALEMODE_NEAREST, SDL_SCALEMODE_PIXELART};
+    // SAFETY: the texture is alive.
+    unsafe {
+        if !SDL_SetTextureScaleMode(texture.raw(), SDL_SCALEMODE_PIXELART) {
+            SDL_SetTextureScaleMode(texture.raw(), SDL_SCALEMODE_NEAREST);
+        }
+    }
+}
+
 /// Half the width of the soft edge drawn around shapes, standing in for anti-aliasing.
 const FEATHER: f32 = 0.5;
 
@@ -199,7 +231,70 @@ impl<'tc> Gfx<'tc> {
             fonts,
             texts: FrameCache::new(),
             widths: FrameCache::new(),
+            game: None,
         }
+    }
+
+    /// Copies a Core's video frame into the game texture, remaking it when the frame's size or
+    /// pixel format changed. Don't pass a duped frame: it's the one already uploaded.
+    pub fn upload_game_frame(&mut self, frame: &libretro::Frame) {
+        if frame.width == 0 || frame.height == 0 {
+            return;
+        }
+        let fits = self
+            .game
+            .as_ref()
+            .is_some_and(|g| (g.width, g.height, g.format) == (frame.width, frame.height, frame.format));
+        if !fits {
+            self.game = None;
+            let texture = match self.creator.create_texture_streaming(
+                sdl_format(frame.format),
+                frame.width,
+                frame.height,
+            ) {
+                Ok(texture) => texture,
+                Err(e) => {
+                    eprintln!("game37: can't make the game texture: {e}");
+                    return;
+                }
+            };
+            set_pixel_art_scaling(&texture);
+            self.game = Some(GameTexture {
+                texture,
+                width: frame.width,
+                height: frame.height,
+                format: frame.format,
+            });
+        }
+        let game = self.game.as_mut().expect("made above");
+        if let Err(e) = game.texture.update(None, &frame.data, frame.pitch) {
+            eprintln!("game37: can't upload the game frame: {e}");
+        }
+    }
+
+    /// Draws the game texture stretched over `r`.
+    pub fn draw_game_frame(&mut self, r: Rect) {
+        if let Some(game) = &self.game {
+            let _ = self
+                .canvas
+                .copy(&game.texture, None, FRect::new(r.x, r.y, r.w, r.h));
+        }
+    }
+
+    /// The window's display refresh rate in Hz, if SDL knows it.
+    pub fn refresh_rate(&self) -> Option<f64> {
+        use sdl3::sys::video::{SDL_GetCurrentDisplayMode, SDL_GetDisplayForWindow};
+        // SAFETY: the window is alive for as long as `self.canvas`. SDL returns null or a display
+        // mode that stays valid until the display changes; it's read right away.
+        let mode = unsafe {
+            SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(self.canvas.window().raw())).as_ref()
+        }?;
+        let rate = if mode.refresh_rate_numerator > 0 && mode.refresh_rate_denominator > 0 {
+            mode.refresh_rate_numerator as f64 / mode.refresh_rate_denominator as f64
+        } else {
+            mode.refresh_rate as f64
+        };
+        (rate > 0.0).then_some(rate)
     }
 
     pub fn clear(&mut self, c: Colour) {

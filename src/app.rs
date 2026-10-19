@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use sdl3::event::{Event, WindowEvent};
 use sdl3::gamepad::{Axis, Gamepad};
 use sdl3::joystick::JoystickId;
-use sdl3::keyboard::Keycode;
+use sdl3::keyboard::{Keycode, Scancode};
 use sdl3::mouse::MouseButton;
 use sdl3::render::{WindowCanvas, create_renderer};
 use sdl3::sys::render::SDL_RendererLogicalPresentation;
@@ -21,12 +21,14 @@ use crate::launch::{Launcher, NeverExits, Processes};
 use crate::library::db::Library;
 use crate::library::watch::LibraryWatcher;
 use crate::screens;
+use crate::session::sdl;
 use crate::ui::chrome::{self, TopBar};
 use crate::ui::controls::{ControlEvent, Controls, StickAxis};
 use crate::ui::gfx::Gfx;
-use crate::ui::input::{ButtonStyle, Input, InputKind, Pointer};
+use crate::ui::input::{Action, ButtonStyle, Input, InputKind, Pointer};
 use crate::ui::nav::{Flow, Hits, Nav};
 use crate::ui::text::Fonts;
+use crate::ui::theme::Colour;
 
 pub fn run(options: Options) -> Result<(), String> {
     let path = options.config.unwrap_or_else(config::config_path);
@@ -40,6 +42,7 @@ pub fn run(options: Options) -> Result<(), String> {
         }
         _ => (Ctx::empty(), false),
     };
+    ctx.data_dir = data_dir;
     match options.screenshot {
         Some(shot) => {
             // Scan in the foreground, so the screenshot shows every Game.
@@ -95,6 +98,7 @@ fn interactive(
     let sdl = sdl3::init().map_err(|e| e.to_string())?;
     let video = sdl.video().map_err(|e| e.to_string())?;
     let gamepads = sdl.gamepad().map_err(|e| e.to_string())?;
+    let audio = sdl.audio().map_err(|e| eprintln!("game37: no sound: {e}")).ok();
     let fonts = Fonts::new()?;
     // OpenGL, because later milestones host libretro OpenGL cores in this renderer.
     let canvas = canvas(&video, 1600, 900, c"opengl")?;
@@ -111,8 +115,11 @@ fn interactive(
     let mut hits = Hits::default();
     let mut inputs = Vec::new();
     let mut sync_failing = false;
+    let mut last_frame = Instant::now();
     'frames: loop {
         let frame_start = Instant::now();
+        let dt = frame_start.duration_since(last_frame).as_secs_f64();
+        last_frame = frame_start;
         // Nothing is drawn while the window can't be seen: sleep until an event, or long enough
         // for the watcher to keep up.
         let shown = gfx.is_shown();
@@ -150,6 +157,10 @@ fn interactive(
         }
         inputs.extend(input.controls.poll(sdl3::timer::ticks()));
         for i in inputs.drain(..) {
+            // A running Game takes no menu input: it reads the keyboard itself.
+            if sdl::running(&mut nav).is_some() {
+                continue;
+            }
             if nav.handle(i, &hits, &mut ctx) == Flow::Quit {
                 break 'frames;
             }
@@ -159,11 +170,21 @@ fn interactive(
                     gfx.restore();
                 }
             }
+            if let Some(game) = ctx.play.take() {
+                // Frames sync to the display only with vsync.
+                let refresh = if vsync { gfx.refresh_rate() } else { None };
+                sdl::start(&game, &mut nav, &ctx, audio.as_ref(), refresh);
+            }
         }
         copy_clipboard_request(&mut ctx, &video);
+        if let Some(session) = sdl::running(&mut nav) {
+            session.set_shown(shown);
+        }
         if !shown {
             continue;
         }
+        let keys = events.keyboard_state();
+        sdl::tick(&mut nav, &mut ctx, &mut gfx, dt, |k| keys.is_scancode_pressed(k));
         ctx.input_kind = input.controls.kind;
         ctx.button_style = input.controls.style;
         hits = draw(&mut gfx, &mut nav, &ctx, &input.view(), &clock());
@@ -172,6 +193,8 @@ fn interactive(
             std::thread::sleep(left);
         }
     }
+    // Closing the window ends a running Game first, saving it.
+    sdl::end(&mut nav, &mut ctx);
     // Quitting while an emulator runs leaves it running, with Playtime counted up to now.
     launcher.quit(&mut nav, &mut ctx, ctx::now());
     nav.leave_all(&ctx);
@@ -180,8 +203,10 @@ fn interactive(
 
 fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screenshot) -> Result<(), String> {
     sdl3::hint::set("SDL_VIDEO_DRIVER", "offscreen");
+    sdl3::hint::set("SDL_AUDIO_DRIVER", "dummy");
     let sdl = sdl3::init().map_err(|e| e.to_string())?;
     let video = sdl.video().map_err(|e| e.to_string())?;
+    let audio = sdl.audio().map_err(|e| eprintln!("game37: no sound: {e}")).ok();
     let fonts = Fonts::new()?;
     let canvas = canvas(&video, 1920, 1080, c"opengl").or_else(|e| {
         eprintln!("game37: {e}; using the software renderer for the screenshot");
@@ -199,7 +224,13 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
     let mut hits = draw(&mut gfx, &mut nav, &ctx, &view, &clock);
     gfx.present();
     'steps: for step in shot.steps {
+        let mut esc = false;
         for i in step.inputs() {
+            // A running Game takes no menu input; `back` stands for Esc.
+            if sdl::running(&mut nav).is_some() {
+                esc |= i == Input::Action(Action::Back);
+                continue;
+            }
             match i {
                 Input::Action(_) => view.kind = InputKind::Controller,
                 Input::Pointer(p) => {
@@ -216,14 +247,34 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
             if let Some(game) = ctx.launch.take() {
                 launcher.start(&game, &mut nav, &ctx);
             }
+            if let Some(game) = ctx.play.take() {
+                sdl::start(&game, &mut nav, &ctx, audio.as_ref(), Some(SHOT_REFRESH));
+            }
         }
+        sdl::tick(&mut nav, &mut ctx, &mut gfx, 1.0 / SHOT_REFRESH, |k| {
+            esc && k == Scancode::Escape
+        });
         ctx.input_kind = view.kind;
         hits = draw(&mut gfx, &mut nav, &ctx, &view, &clock);
         gfx.present();
     }
-    draw(&mut gfx, &mut nav, &ctx, &view, &clock);
-    gfx.save_bmp(&shot.out)
+    for frame in 1..=shot.frames {
+        sdl::tick(&mut nav, &mut ctx, &mut gfx, 1.0 / SHOT_REFRESH, |_| false);
+        draw(&mut gfx, &mut nav, &ctx, &view, &clock);
+        if frame < shot.frames {
+            gfx.present();
+        }
+    }
+    let saved = gfx.save_bmp(&shot.out);
+    sdl::end(&mut nav, &mut ctx);
+    saved
 }
+
+/// The display refresh rate screenshot mode pretends to have: each step and frame is 1/60 s.
+const SHOT_REFRESH: f64 = 60.0;
+
+/// Around a screen without chrome, such as a running Game's bars.
+const BLACK: Colour = Colour::hex(0x000000);
 
 /// What the chrome needs to know about input.
 struct View {
@@ -234,6 +285,14 @@ struct View {
 
 /// Draws a frame (without presenting it) and returns where its clickable chrome went.
 fn draw(gfx: &mut Gfx<'_>, nav: &mut Nav, ctx: &Ctx, view: &View, clock: &str) -> Hits {
+    if !nav.base().chrome() {
+        gfx.clear(BLACK);
+        nav.base().draw(gfx, ctx);
+        if let Some(modal) = nav.modal() {
+            modal.draw(gfx, ctx);
+        }
+        return Hits::default();
+    }
     chrome::background(gfx);
     nav.base().draw(gfx, ctx);
     let labels = nav.tab_labels();

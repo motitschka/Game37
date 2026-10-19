@@ -11,6 +11,9 @@ use crate::ui::input::{ButtonStyle, InputKind};
 pub struct Ctx {
     pub library: Library,
     pub games_root: PathBuf,
+    /// Where the library database and the downloaded Cores live (`config::data_dir()` unless
+    /// `--data-dir` overrides it).
+    pub data_dir: PathBuf,
     /// Bumped whenever the library's Games changed on disk, so screens know to reload them.
     pub revision: u64,
     /// Whether screens animate. Off in screenshot mode and tests, so they draw the settled state.
@@ -28,6 +31,9 @@ pub struct Ctx {
     pub clipboard_request: Option<String>,
     /// A Game a screen asked to play; `app.rs` takes it and starts its Standalone Emulator.
     pub launch: Option<GameRow>,
+    /// A Game of an Embedded System a screen asked to play; `app.rs` takes it and starts it on
+    /// its Core.
+    pub play: Option<GameRow>,
 }
 
 impl Ctx {
@@ -35,6 +41,7 @@ impl Ctx {
         Ctx {
             library,
             games_root,
+            data_dir: PathBuf::new(),
             revision: 0,
             animate: false,
             input_kind: InputKind::Controller,
@@ -43,6 +50,7 @@ impl Ctx {
             detect_emulators: Box::new(Emulators::detect),
             clipboard_request: None,
             launch: None,
+            play: None,
         }
     }
 

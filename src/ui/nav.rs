@@ -5,6 +5,7 @@ use super::gfx::Gfx;
 use super::input::{Action, Input, Pointer};
 use super::{Rect, hit};
 use crate::ctx::Ctx;
+use crate::session::sdl::Session;
 
 /// A full-screen view. The app draws the background, top bar and hint bar around it.
 pub trait Screen {
@@ -22,6 +23,14 @@ pub trait Screen {
     /// their actions.
     fn is_modal(&self) -> bool {
         false
+    }
+    /// Whether the background, top bar and hint bar are drawn around it. A running Game has none.
+    fn chrome(&self) -> bool {
+        true
+    }
+    /// The embedded game session it runs, if it is a running Game.
+    fn session(&mut self) -> Option<&mut Session> {
+        None
     }
 }
 
