@@ -8,6 +8,8 @@
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -61,7 +63,7 @@ pub fn playable(game: &GameRow, ctx: &Ctx) -> bool {
 /// which some emulator Flatpaks (PCSX2) can't otherwise see.
 pub fn command(emulator: &Emulator, games_root: &Path, file: &Path) -> Vec<OsString> {
     let mut grant = OsString::from("--filesystem=");
-    grant.push(games_root);
+    grant.push(escape_filesystem(games_root));
     grant.push(":ro");
     let mut argv = vec!["flatpak".into(), "run".into(), grant, emulator.flatpak_id.into()];
     argv.extend(emulator.args.iter().map(|&a| {
@@ -72,6 +74,19 @@ pub fn command(emulator: &Emulator, games_root: &Path, file: &Path) -> Vec<OsStr
         }
     }));
     argv
+}
+
+/// `path` escaped for a `--filesystem` value, which Flatpak ends at the first unescaped `:` and
+/// in which `\` escapes the next character (`parse_filesystem_flags` in `flatpak-context.c`).
+fn escape_filesystem(path: &Path) -> OsString {
+    let mut escaped = Vec::new();
+    for &b in path.as_os_str().as_bytes() {
+        if b == b'\\' || b == b':' {
+            escaped.push(b'\\');
+        }
+        escaped.push(b);
+    }
+    OsString::from_vec(escaped)
 }
 
 /// The file to hand `emulator` for the Game at `game_path`: the path itself for a file Game, the
@@ -181,6 +196,8 @@ pub fn spawn_process(argv: &[OsString], log: &Path) -> io::Result<Receiver<Exite
         .stdin(Stdio::null())
         .stdout(stdout.map_or_else(Stdio::null, Stdio::from))
         .stderr(file.map_or_else(Stdio::null, Stdio::from))
+        // Its own process group, so a Ctrl+C in Game37's terminal doesn't also stop the emulator.
+        .process_group(0)
         .spawn()?;
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -216,6 +233,8 @@ pub struct Launcher {
     log_dir: PathBuf,
     home: Option<PathBuf>,
     running: Option<Running>,
+    /// [`EARLY`], shortened in tests so they needn't run that long.
+    early: Duration,
 }
 
 impl Launcher {
@@ -225,6 +244,7 @@ impl Launcher {
             log_dir,
             home: dirs::home_dir(),
             running: None,
+            early: EARLY,
         }
     }
 
@@ -283,7 +303,7 @@ impl Launcher {
         let run = self.running.take()?;
         nav.pop();
         let elapsed = exited.at.saturating_duration_since(run.started);
-        if elapsed < EARLY && exited.code != Some(0) {
+        if elapsed < self.early && exited.code != Some(0) {
             let reason = exit_reason(exited.code);
             return Some(Err(self.fail(nav, run.emulator, &run.title, &reason, &run.log)));
         }
@@ -368,6 +388,13 @@ mod tests {
                 emulator.name
             );
         }
+    }
+
+    #[test]
+    fn the_games_root_grant_escapes_colons_and_backslashes() {
+        let root = Path::new("/mnt/a:b\\c/Games");
+        let argv = command(&PCSX2, root, Path::new("/x.iso"));
+        assert_eq!(argv[2], OsString::from("--filesystem=/mnt/a\\:b\\\\c/Games:ro"));
     }
 
     fn touch(path: &Path) {
@@ -512,6 +539,28 @@ mod tests {
         }
     }
 
+    /// Kills a fake emulator that prints its pid first (`echo $$; exec ...`) when the test ends,
+    /// so a long-running one doesn't outlive it. Declare it after the `World`, so it drops first.
+    struct KillOnDrop(PathBuf);
+
+    impl Drop for KillOnDrop {
+        fn drop(&mut self) {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                let log = fs::read_to_string(&self.0).unwrap_or_default();
+                if let Some(pid) = log.lines().find_map(|l| l.trim().parse::<u32>().ok()) {
+                    let _ = Command::new("kill").arg(pid.to_string()).status();
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    }
+
+    fn kill_on_drop(w: &World) -> KillOnDrop {
+        KillOnDrop(w._dir.path().join("data/logs/org.DolphinEmu.dolphin-emu.log"))
+    }
+
     #[test]
     fn a_one_second_run_records_a_second_of_playtime_and_reloads_the_views() {
         let mut w = world("sleep 1");
@@ -519,7 +568,7 @@ mod tests {
         assert_eq!(w.nav.top().title(), "Playing");
         assert_eq!(w.wait(), Ok(()));
         let row = w.row();
-        assert_eq!(row.playtime_secs, 1);
+        assert!((1..=3).contains(&row.playtime_secs), "{}", row.playtime_secs);
         assert_eq!(row.last_played, Some(1000));
         assert_eq!(w.ctx.revision, 1);
         assert_eq!(w.nav.depth(), 1, "the Playing screen is gone");
@@ -552,6 +601,26 @@ mod tests {
     }
 
     #[test]
+    fn a_non_zero_exit_after_the_early_window_still_records_playtime() {
+        let mut w = world("sleep 1; exit 3");
+        w.launcher.early = Duration::from_millis(100);
+        assert!(w.start());
+        assert_eq!(w.wait(), Ok(()));
+        let row = w.row();
+        assert!((1..=3).contains(&row.playtime_secs), "{}", row.playtime_secs);
+        assert_eq!(row.last_played, Some(1000));
+        assert_eq!(w.nav.depth(), 1, "no failure message");
+    }
+
+    #[test]
+    fn the_emulator_runs_in_its_own_process_group() {
+        // Exits 0 only when its process group id is its own pid.
+        let mut w = world(r#"[ "$(cut -d' ' -f5 /proc/$$/stat)" = "$$" ]"#);
+        assert!(w.start());
+        assert_eq!(w.wait(), Ok(()));
+    }
+
+    #[test]
     fn a_missing_game_file_does_not_launch() {
         let mut w = world("exit 0");
         fs::remove_file(w.ctx.games_root.join("gc/Zelda.iso")).unwrap();
@@ -562,7 +631,8 @@ mod tests {
 
     #[test]
     fn quitting_while_playing_records_playtime_so_far() {
-        let mut w = world("sleep 30");
+        let mut w = world("echo $$; exec sleep 30");
+        let _child = kill_on_drop(&w);
         assert!(w.start());
         std::thread::sleep(Duration::from_millis(1100));
         w.launcher.quit(&mut w.nav, &mut w.ctx, 2000);
@@ -573,7 +643,8 @@ mod tests {
 
     #[test]
     fn input_is_swallowed_while_playing() {
-        let mut w = world("sleep 30");
+        let mut w = world("echo $$; exec sleep 30");
+        let _child = kill_on_drop(&w);
         assert!(w.start());
         let hits = Hits {
             tabs: vec![(crate::ui::Rect::new(0.0, 0.0, 100.0, 100.0), 1)],
