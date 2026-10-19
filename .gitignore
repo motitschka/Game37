@@ -70,3 +70,6 @@ states/
 *.zip
 *.7z
 *.rar
+
+# Agent worktrees
+/.claude/worktrees/
