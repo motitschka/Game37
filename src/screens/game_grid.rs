@@ -4,7 +4,7 @@
 use std::time::{Duration, Instant};
 
 use crate::ctx::Ctx;
-use crate::emulators::{Emulator, Emulators};
+use crate::emulators::Emulator;
 use crate::launch;
 use crate::library::db::{DbError, GameRow, Library, SortOrder};
 use crate::systems::System;
@@ -152,9 +152,6 @@ pub struct GameGrid {
     notice_hits: Option<(Rect, Rect)>,
     /// Transient feedback on a notice button after it's pressed, and until when (US-39).
     feedback: Option<(NoticeFocus, &'static str, Instant)>,
-    /// How Check again re-detects installed emulators (FR-CAR-9): `Emulators::detect` in
-    /// production, swapped in tests so they never run `flatpak`.
-    detect_emulators: fn() -> Emulators,
     /// Whether the focused Game is one Confirm launches, as of the last draw, for the hints.
     focus_playable: bool,
 }
@@ -176,7 +173,6 @@ impl GameGrid {
             notice_focus: None,
             notice_hits: None,
             feedback: None,
-            detect_emulators: Emulators::detect,
             focus_playable: false,
         }
     }
@@ -254,6 +250,10 @@ impl GameGrid {
         }
         self.notice_shown = shown;
         self.feedback = None;
+        if !shown {
+            // The buttons are gone: a pointer over where they were must not focus them.
+            self.notice_hits = None;
+        }
         if shown {
             self.notice_focus = Some(NoticeFocus::Copy);
         } else {
@@ -275,7 +275,7 @@ impl GameGrid {
                 self.feedback = Some((NoticeFocus::Copy, "Copied", Instant::now()));
             }
             NoticeFocus::Check => {
-                ctx.emulators = (self.detect_emulators)();
+                ctx.emulators = (ctx.detect_emulators)();
                 self.sync_notice(ctx);
                 if self.notice_shown {
                     self.feedback = Some((NoticeFocus::Check, "Still not installed", Instant::now()));
@@ -284,8 +284,11 @@ impl GameGrid {
         }
     }
 
-    /// Which notice button, if any, is under a point.
+    /// Which notice button, if any, is under a point; `None` while the notice is hidden.
     fn notice_button_at(&self, x: f32, y: f32) -> Option<NoticeFocus> {
+        if !self.notice_shown {
+            return None;
+        }
         let (copy, check) = self.notice_hits?;
         if copy.contains(x, y) {
             Some(NoticeFocus::Copy)
@@ -917,7 +920,7 @@ mod tests {
         ctx.library.sync_system("ps2", &found, 0).unwrap();
         grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
         assert!(grid.notice_shown);
-        grid.detect_emulators = || Emulators::from_installed(["net.pcsx2.PCSX2"]);
+        ctx.detect_emulators = Box::new(|| Emulators::from_installed(["net.pcsx2.PCSX2"]));
 
         grid.handle(Input::Action(Action::Right), &mut ctx); // focus Check again
         grid.handle(Input::Action(Action::Confirm), &mut ctx);
@@ -931,7 +934,7 @@ mod tests {
     fn check_again_keeps_the_notice_when_still_missing() {
         let (mut ctx, mut grid) = missing_pcsx2_page();
         grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
-        grid.detect_emulators = || Emulators::from_installed(Vec::<String>::new());
+        ctx.detect_emulators = Box::new(|| Emulators::from_installed(Vec::<String>::new()));
 
         grid.handle(Input::Action(Action::Right), &mut ctx); // focus Check again
         grid.handle(Input::Action(Action::Confirm), &mut ctx);
@@ -945,7 +948,45 @@ mod tests {
     }
 
     #[test]
-    fn copy_command_leaves_a_clipboard_request_and_check_again_detects() {
+    fn a_pointer_over_the_cleared_notices_buttons_focuses_nothing() {
+        let (mut ctx, mut grid) = missing_pcsx2_page();
+        ctx.library.sync_system("ps2", &[found_ps2(0)], 0).unwrap();
+        grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+        let check = Rect::new(100.0, 100.0, 50.0, 50.0);
+        grid.notice_hits = Some((Rect::new(0.0, 100.0, 50.0, 50.0), check)); // as last drawn
+        ctx.detect_emulators = Box::new(|| Emulators::from_installed(["net.pcsx2.PCSX2"]));
+
+        grid.handle(Input::Action(Action::Right), &mut ctx); // focus Check again
+        grid.handle(Input::Action(Action::Confirm), &mut ctx); // clears the notice
+        // Before the next draw, the mouse moves over where Check again was.
+        grid.handle(Input::Pointer(Pointer::Move { x: 120.0, y: 120.0 }), &mut ctx);
+
+        assert!(!grid.notice_shown);
+        assert_eq!(grid.notice_focus, None, "the hidden button can't take focus");
+        assert_eq!(grid.hints().last(), Some(&Hint::new(&[Action::Back], "Back")));
+        assert!(
+            !grid
+                .hints()
+                .contains(&Hint::new(&[Action::Confirm], "Check again"))
+        );
+    }
+
+    #[test]
+    fn check_again_in_screenshot_mode_keeps_the_simulated_state() {
+        let (mut ctx, mut grid) = missing_pcsx2_page();
+        // As `--missing-emulators ps2` does.
+        ctx.simulate_emulators(Emulators::from_installed(Vec::<String>::new()));
+        grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+
+        grid.handle(Input::Action(Action::Right), &mut ctx); // focus Check again
+        grid.handle(Input::Action(Action::Confirm), &mut ctx);
+
+        assert!(grid.notice_shown, "the simulated missing emulator stays missing");
+        assert_eq!(ctx.emulators, Emulators::from_installed(Vec::<String>::new()));
+    }
+
+    #[test]
+    fn copy_command_leaves_a_clipboard_request() {
         let (mut ctx, mut grid) = missing_pcsx2_page();
         grid.handle(Input::Action(Action::Back), &mut ctx); // initial load, focus on Copy
 

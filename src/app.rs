@@ -46,7 +46,7 @@ pub fn run(options: Options) -> Result<(), String> {
             if has_library {
                 ctx.scan_all(ctx::now()).map_err(|e| e.to_string())?;
             }
-            ctx.emulators = shot.missing_emulators.clone();
+            ctx.simulate_emulators(shot.missing_emulators.clone());
             let nav = screens::start(loaded, &path, &ctx);
             // Never starts a process: a launch shows the Playing screen for good.
             let launcher = Launcher::new(Box::new(NeverExits::default()), log_dir);
