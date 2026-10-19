@@ -6,14 +6,17 @@
 
 use std::fmt;
 use std::fs;
+use std::io;
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
-use std::thread::JoinHandle;
 use std::time::Duration;
+
+use tempfile::NamedTempFile;
 
 use crate::systems::System;
 
@@ -92,21 +95,47 @@ type FetchResult = Result<(Box<dyn Read + Send>, Option<u64>), FetchError>;
 /// [`ureq_fetch`].
 type Fetcher = Arc<dyn Fn(&str) -> FetchResult + Send + Sync>;
 
+/// A cap on a Core's zip size (FR-EMB-2 is for small libretro Cores, not arbitrary downloads).
+const MAX_DOWNLOAD_BYTES: u64 = 100 * 1024 * 1024;
+
+/// A cap on a Core's unzipped size, so a zip bomb can't fill memory or the disk. The real Cores
+/// are under 10 MB.
+const MAX_CORE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// The size caps a download enforces. A parameter so tests can exercise them with tiny inputs.
+#[derive(Debug, Clone, Copy)]
+struct Limits {
+    /// The zip as downloaded.
+    download: u64,
+    /// The Core unzipped from it, declared or actual.
+    core: u64,
+}
+
+const LIMITS: Limits = Limits {
+    download: MAX_DOWNLOAD_BYTES,
+    core: MAX_CORE_BYTES,
+};
+
 /// A Core download running on a background thread. `poll` never blocks; call it every frame.
-/// Dropping a running `Download` stops it promptly and leaves no partial files behind.
+/// Dropping a running `Download` cancels it and returns at once: its thread stops at its next step,
+/// however long the network keeps it waiting, and leaves no partial files behind.
 pub struct Download {
     state: Arc<Mutex<DownloadState>>,
     cancel: Arc<AtomicBool>,
-    handle: Option<JoinHandle<()>>,
 }
 
 impl Download {
     /// Starts downloading `core` into `data_dir` on a background thread.
     pub fn start(core: &'static CoreInfo, data_dir: PathBuf) -> Download {
-        Download::spawn(core, data_dir, Arc::new(ureq_fetch))
+        Download::spawn_limited(core, data_dir, Arc::new(ureq_fetch), LIMITS)
     }
 
+    #[cfg(test)]
     fn spawn(core: &'static CoreInfo, data_dir: PathBuf, fetch: Fetcher) -> Download {
+        Download::spawn_limited(core, data_dir, fetch, LIMITS)
+    }
+
+    fn spawn_limited(core: &'static CoreInfo, data_dir: PathBuf, fetch: Fetcher, limits: Limits) -> Download {
         let state = Arc::new(Mutex::new(DownloadState::Running {
             received: 0,
             total: None,
@@ -114,129 +143,172 @@ impl Download {
         let cancel = Arc::new(AtomicBool::new(false));
         let state_in_thread = Arc::clone(&state);
         let cancel_in_thread = Arc::clone(&cancel);
-        let handle = thread::spawn(move || {
-            let result = run(
-                core,
-                &data_dir,
-                fetch.as_ref(),
-                &state_in_thread,
-                &cancel_in_thread,
-            );
+        // Detached: `Drop` never joins it.
+        thread::spawn(move || {
+            let result = panic::catch_unwind(AssertUnwindSafe(|| {
+                run(
+                    core,
+                    &data_dir,
+                    fetch.as_ref(),
+                    limits,
+                    &state_in_thread,
+                    &cancel_in_thread,
+                )
+            }));
             let final_state = match result {
-                Ok(path) => DownloadState::Done(path),
-                Err(message) => DownloadState::Failed(message),
+                Ok(Ok(path)) => DownloadState::Done(path),
+                Ok(Err(message)) => DownloadState::Failed(message),
+                // A bug, not a network problem: still never leave the screen waiting forever.
+                Err(_) => DownloadState::Failed(format!("Couldn't download the {} Core.", core.name)),
             };
-            *state_in_thread.lock().unwrap() = final_state;
+            *lock(&state_in_thread) = final_state;
         });
-        Download {
-            state,
-            cancel,
-            handle: Some(handle),
-        }
+        Download { state, cancel }
     }
 
     /// Never blocks: reports the last known state.
     pub fn poll(&mut self) -> DownloadState {
-        self.state.lock().unwrap().clone()
+        lock(&self.state).clone()
     }
+}
+
+/// The state is only ever replaced whole, so a poisoned lock still holds a meaningful value.
+fn lock(state: &Mutex<DownloadState>) -> MutexGuard<'_, DownloadState> {
+    state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Drop for Download {
+    /// Never joins: the thread may be blocked in DNS, connect or a read for as long as its timeouts
+    /// allow, and the UI must not freeze meanwhile. It sees `cancel` at its next step and removes its
+    /// own temp files.
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
     }
 }
 
-/// A cap on a Core's zip size (FR-EMB-2 is for small libretro Cores, not arbitrary downloads).
-const MAX_DOWNLOAD_BYTES: u64 = 100 * 1024 * 1024;
-
 /// The ELF magic a valid Linux shared library starts with.
 const ELF_MAGIC: &[u8] = b"\x7fELF";
+
+/// Read and extraction buffer size.
+const CHUNK: usize = 64 * 1024;
+
+/// The error a cancelled download ends with. Nobody sees it: the `Download` is already dropped.
+const CANCELLED: &str = "cancelled";
+
+fn check_cancel(cancel: &AtomicBool) -> Result<(), String> {
+    if cancel.load(Ordering::Relaxed) {
+        Err(CANCELLED.to_string())
+    } else {
+        Ok(())
+    }
+}
 
 fn run(
     core: &CoreInfo,
     data_dir: &Path,
     fetch: &(dyn Fn(&str) -> FetchResult + Send + Sync),
-    state: &Arc<Mutex<DownloadState>>,
-    cancel: &Arc<AtomicBool>,
+    limits: Limits,
+    state: &Mutex<DownloadState>,
+    cancel: &AtomicBool,
 ) -> Result<PathBuf, String> {
     let cores_dir = data_dir.join("cores");
-    let part_path = cores_dir.join(format!(".{}.zip.part", core.file));
-    let tmp_path = cores_dir.join(format!(".{}.tmp", core.file));
-
-    let result = download_and_install(core, &cores_dir, &part_path, &tmp_path, fetch, state, cancel);
-    // Every path, success or failure, leaves no temp files behind.
-    let _ = fs::remove_file(&part_path);
-    let _ = fs::remove_file(&tmp_path);
-    result
-}
-
-fn download_and_install(
-    core: &CoreInfo,
-    cores_dir: &Path,
-    part_path: &Path,
-    tmp_path: &Path,
-    fetch: &(dyn Fn(&str) -> FetchResult + Send + Sync),
-    state: &Arc<Mutex<DownloadState>>,
-    cancel: &Arc<AtomicBool>,
-) -> Result<PathBuf, String> {
-    fs::create_dir_all(cores_dir).map_err(|_| incomplete(core))?;
+    fs::create_dir_all(&cores_dir).map_err(|e| save_failed(core, &e))?;
+    check_cancel(cancel)?;
 
     let (mut reader, total) = fetch(&url(core)).map_err(|e| match e {
         FetchError::Connect => connect_failed(core),
         FetchError::Status(status) => bad_status(core, status),
     })?;
+    check_cancel(cancel)?;
 
-    // Step 2: stream to the `.part` file, reporting progress as we go.
-    let mut file = fs::File::create(part_path).map_err(|_| incomplete(core))?;
-    let mut buf = [0u8; 64 * 1024];
+    // Stream to a temp file of this download's own, reporting progress as we go. Its name is
+    // unique, so a retry of the same Core while this thread is still winding down never shares
+    // it, and dropping it removes it on every path out of here.
+    let mut zip_file = temp_file(&cores_dir, core, ".zip.part").map_err(|e| save_failed(core, &e))?;
+    let mut buf = vec![0u8; CHUNK];
     let mut received: u64 = 0;
     loop {
-        if cancel.load(Ordering::Relaxed) {
-            return Err("cancelled".to_string());
-        }
+        check_cancel(cancel)?;
         let n = reader.read(&mut buf).map_err(|_| incomplete(core))?;
         if n == 0 {
             break;
         }
         received += n as u64;
-        if received > MAX_DOWNLOAD_BYTES {
+        if received > limits.download {
             return Err(incomplete(core));
         }
-        file.write_all(&buf[..n]).map_err(|_| incomplete(core))?;
-        *state.lock().unwrap() = DownloadState::Running { received, total };
+        zip_file.write_all(&buf[..n]).map_err(|e| save_failed(core, &e))?;
+        *lock(state) = DownloadState::Running { received, total };
     }
-    drop(file);
+    drop(reader);
     if let Some(total) = total
         && received < total
     {
         return Err(incomplete(core));
     }
 
-    // Step 3: open the zip and find the one entry we trust.
-    let zip_file = fs::File::open(part_path).map_err(|_| incomplete(core))?;
-    let mut archive = zip::ZipArchive::new(zip_file).map_err(|_| incomplete(core))?;
-    let mut entry = archive.by_name(core.file).map_err(|_| invalid_library(core))?;
-    if !matches!(entry.name(), Ok(name) if name == core.file) {
-        return Err(invalid_library(core));
-    }
-    let mut content = Vec::new();
-    entry.read_to_end(&mut content).map_err(|_| incomplete(core))?;
-    drop(entry);
+    // Open the zip and take the one entry we trust: `by_name` matches the name exactly.
+    let mut archive = zip::ZipArchive::new(zip_file.as_file()).map_err(|_| incomplete(core))?;
+    let entry = archive.by_name(core.file).map_err(|_| invalid_library(core))?;
+    let declared = entry.size();
+    let content = read_core(core, entry, declared, limits.core, cancel)?;
     drop(archive);
+    drop(zip_file);
 
-    // Step 4: extract, verify, make executable, and install.
+    // Verify, make executable, and install with an atomic rename.
     if !content.starts_with(ELF_MAGIC) {
         return Err(invalid_library(core));
     }
-    fs::write(tmp_path, &content).map_err(|_| incomplete(core))?;
-    fs::set_permissions(tmp_path, fs::Permissions::from_mode(0o755)).map_err(|_| incomplete(core))?;
-    let final_path = cores_dir.join(core.file);
-    fs::rename(tmp_path, &final_path).map_err(|_| incomplete(core))?;
+    let mut library = temp_file(&cores_dir, core, ".tmp").map_err(|e| save_failed(core, &e))?;
+    library.write_all(&content).map_err(|e| save_failed(core, &e))?;
+    library
+        .as_file()
+        .set_permissions(fs::Permissions::from_mode(0o755))
+        .map_err(|e| save_failed(core, &e))?;
+    check_cancel(cancel)?;
+    let final_path = installed_path(data_dir, core);
+    library
+        .persist(&final_path)
+        .map_err(|e| save_failed(core, &e.error))?;
     Ok(final_path)
+}
+
+/// Reads a Core out of its zip `entry`, a chunk at a time so a cancel is seen promptly. An entry
+/// over `limit`, by its `declared` size or by what it actually unpacks to, isn't a Core: it is
+/// rejected without reading more than `limit + 1` bytes.
+fn read_core(
+    core: &CoreInfo,
+    entry: impl Read,
+    declared: u64,
+    limit: u64,
+    cancel: &AtomicBool,
+) -> Result<Vec<u8>, String> {
+    if declared > limit {
+        return Err(invalid_library(core));
+    }
+    let mut capped = entry.take(limit + 1);
+    let mut content = Vec::new();
+    let mut buf = vec![0u8; CHUNK];
+    loop {
+        check_cancel(cancel)?;
+        let n = capped.read(&mut buf).map_err(|_| incomplete(core))?;
+        if n == 0 {
+            break;
+        }
+        content.extend_from_slice(&buf[..n]);
+    }
+    if content.len() as u64 > limit {
+        return Err(invalid_library(core));
+    }
+    Ok(content)
+}
+
+/// A uniquely named hidden temp file in `cores/`, removed when dropped unless persisted.
+fn temp_file(cores_dir: &Path, core: &CoreInfo, suffix: &str) -> io::Result<NamedTempFile> {
+    tempfile::Builder::new()
+        .prefix(&format!(".{}.", core.file))
+        .suffix(suffix)
+        .tempfile_in(cores_dir)
 }
 
 fn connect_failed(core: &CoreInfo) -> String {
@@ -248,7 +320,7 @@ fn connect_failed(core: &CoreInfo) -> String {
 
 fn bad_status(core: &CoreInfo, status: u16) -> String {
     format!(
-        "Couldn't download the {} Core. Check your internet connection. (The server returned HTTP {status}.)",
+        "The libretro build server couldn't provide the {} Core (HTTP {status}).",
         core.name
     )
 }
@@ -261,12 +333,27 @@ fn invalid_library(core: &CoreInfo) -> String {
     format!("The downloaded {} Core isn't a valid Linux library.", core.name)
 }
 
-/// The production fetcher: `ureq` over rustls, with a 30 s connect/read timeout.
+fn save_failed(core: &CoreInfo, error: &io::Error) -> String {
+    format!("Couldn't save the {} Core: {error}.", core.name)
+}
+
+/// The production fetcher: `ureq` over rustls.
+///
+/// Each step up to the response headers has its own 30 s timeout. The body gets 10 minutes in
+/// total, as ureq 3 has no idle timeout between reads: enough for the largest Core on a slow but
+/// working connection. The user can cancel at any point regardless.
+///
+/// Redirects are not followed: the build server answers its zip URLs directly, and NFR-5 allows
+/// no other host. A redirect shows up as its HTTP status.
 fn ureq_fetch(url: &str) -> FetchResult {
+    let step = Some(Duration::from_secs(30));
     let config = ureq::Agent::config_builder()
-        .timeout_connect(Some(Duration::from_secs(30)))
-        .timeout_recv_response(Some(Duration::from_secs(30)))
-        .timeout_recv_body(Some(Duration::from_secs(30)))
+        .timeout_resolve(step)
+        .timeout_connect(step)
+        .timeout_send_request(step)
+        .timeout_recv_response(step)
+        .timeout_recv_body(Some(Duration::from_secs(10 * 60)))
+        .max_redirects(0)
         .http_status_as_error(false)
         .build();
     let agent: ureq::Agent = config.into();
@@ -328,9 +415,10 @@ pub(crate) mod testing {
 mod tests {
     use super::*;
     use crate::systems::{SYSTEMS, by_id};
-    use std::io;
     use std::io::Cursor;
-    use std::sync::mpsc;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::{Barrier, mpsc};
+    use std::time::Instant;
 
     fn zip_with(entry_name: &str, content: &[u8]) -> Vec<u8> {
         let mut buf = Vec::new();
@@ -345,10 +433,14 @@ mod tests {
         buf
     }
 
-    fn core_zip() -> Vec<u8> {
+    fn core_content() -> Vec<u8> {
         let mut content = ELF_MAGIC.to_vec();
         content.extend_from_slice(b"rest of a fake core");
-        zip_with(SAMEBOY.file, &content)
+        content
+    }
+
+    fn core_zip() -> Vec<u8> {
+        zip_with(SAMEBOY.file, &core_content())
     }
 
     fn fixed_reader_fetcher(bytes: Vec<u8>) -> Fetcher {
@@ -384,6 +476,48 @@ mod tests {
         panic!("timed out waiting for condition");
     }
 
+    fn wait_for_failure(download: &mut Download) -> String {
+        wait_for(|| match download.poll() {
+            DownloadState::Failed(m) => Some(m),
+            DownloadState::Done(_) => panic!("expected a failure"),
+            DownloadState::Running { .. } => None,
+        })
+    }
+
+    fn wait_for_done(download: &mut Download) -> PathBuf {
+        wait_for(|| match download.poll() {
+            DownloadState::Done(path) => Some(path),
+            DownloadState::Failed(e) => panic!("download failed: {e}"),
+            DownloadState::Running { .. } => None,
+        })
+    }
+
+    /// Everything in `cores/` except an installed SameBoy: any temp file a download left behind.
+    fn leftovers(data_dir: &Path) -> Vec<PathBuf> {
+        let Ok(entries) = fs::read_dir(data_dir.join("cores")) else {
+            return Vec::new();
+        };
+        entries
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.file_name().unwrap() != SAMEBOY.file)
+            .collect()
+    }
+
+    /// `n` zero bytes, counting how many have been read so far into `consumed`.
+    struct Zeros {
+        remaining: u64,
+        consumed: Arc<AtomicU64>,
+    }
+    impl Read for Zeros {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let n = (buf.len() as u64).min(self.remaining) as usize;
+            buf[..n].fill(0);
+            self.remaining -= n as u64;
+            self.consumed.fetch_add(n as u64, Ordering::Relaxed);
+            Ok(n)
+        }
+    }
+
     #[test]
     fn table_has_a_core_for_each_embedded_system_of_this_milestone() {
         assert_eq!(for_system(by_id("nes").unwrap()), Some(&MESEN));
@@ -416,20 +550,14 @@ mod tests {
         let data_dir = dir.path().to_owned();
         let mut download = Download::spawn(&SAMEBOY, data_dir.clone(), fixed_reader_fetcher(core_zip()));
 
-        let path = wait_for(|| match download.poll() {
-            DownloadState::Done(path) => Some(path),
-            DownloadState::Failed(e) => panic!("download failed: {e}"),
-            DownloadState::Running { .. } => None,
-        });
+        let path = wait_for_done(&mut download);
 
         assert_eq!(path, installed_path(&data_dir, &SAMEBOY));
         assert!(is_installed(&data_dir, &SAMEBOY));
+        assert_eq!(fs::read(&path).unwrap(), core_content());
         let mode = fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o755);
-
-        let cores_dir = data_dir.join("cores");
-        assert!(!cores_dir.join(format!(".{}.zip.part", SAMEBOY.file)).exists());
-        assert!(!cores_dir.join(format!(".{}.tmp", SAMEBOY.file)).exists());
+        assert_eq!(leftovers(&data_dir), Vec::<PathBuf>::new());
     }
 
     #[test]
@@ -478,11 +606,7 @@ mod tests {
 
         tx.send(second).unwrap();
         drop(tx);
-        wait_for(|| match download.poll() {
-            DownloadState::Done(_) => Some(()),
-            DownloadState::Failed(e) => panic!("download failed: {e}"),
-            _ => None,
-        });
+        wait_for_done(&mut download);
     }
 
     #[test]
@@ -492,12 +616,7 @@ mod tests {
         let zip = zip_with("other_libretro.so", ELF_MAGIC);
         let mut download = Download::spawn(&SAMEBOY, data_dir.clone(), fixed_reader_fetcher(zip));
 
-        let message = wait_for(|| match download.poll() {
-            DownloadState::Failed(m) => Some(m),
-            DownloadState::Done(_) => panic!("expected a failure"),
-            _ => None,
-        });
-        assert_eq!(message, invalid_library(&SAMEBOY));
+        assert_eq!(wait_for_failure(&mut download), invalid_library(&SAMEBOY));
         assert!(!is_installed(&data_dir, &SAMEBOY));
     }
 
@@ -508,12 +627,7 @@ mod tests {
         let zip = zip_with(&format!("../{}", SAMEBOY.file), ELF_MAGIC);
         let mut download = Download::spawn(&SAMEBOY, data_dir.clone(), fixed_reader_fetcher(zip));
 
-        let message = wait_for(|| match download.poll() {
-            DownloadState::Failed(m) => Some(m),
-            DownloadState::Done(_) => panic!("expected a failure"),
-            _ => None,
-        });
-        assert_eq!(message, invalid_library(&SAMEBOY));
+        assert_eq!(wait_for_failure(&mut download), invalid_library(&SAMEBOY));
         assert!(!is_installed(&data_dir, &SAMEBOY));
     }
 
@@ -524,12 +638,7 @@ mod tests {
         let zip = zip_with(SAMEBOY.file, b"not an elf file");
         let mut download = Download::spawn(&SAMEBOY, data_dir.clone(), fixed_reader_fetcher(zip));
 
-        let message = wait_for(|| match download.poll() {
-            DownloadState::Failed(m) => Some(m),
-            DownloadState::Done(_) => panic!("expected a failure"),
-            _ => None,
-        });
-        assert_eq!(message, invalid_library(&SAMEBOY));
+        assert_eq!(wait_for_failure(&mut download), invalid_library(&SAMEBOY));
         assert!(!is_installed(&data_dir, &SAMEBOY));
     }
 
@@ -545,13 +654,9 @@ mod tests {
             truncated_total_fetcher(zip, claimed_total),
         );
 
-        let message = wait_for(|| match download.poll() {
-            DownloadState::Failed(m) => Some(m),
-            DownloadState::Done(_) => panic!("expected a failure"),
-            _ => None,
-        });
-        assert_eq!(message, incomplete(&SAMEBOY));
+        assert_eq!(wait_for_failure(&mut download), incomplete(&SAMEBOY));
         assert!(!is_installed(&data_dir, &SAMEBOY));
+        assert_eq!(leftovers(&data_dir), Vec::<PathBuf>::new());
     }
 
     #[test]
@@ -560,62 +665,242 @@ mod tests {
         let data_dir = dir.path().to_owned();
         let mut download = Download::spawn(&SAMEBOY, data_dir.clone(), failing_fetcher());
 
-        let message = wait_for(|| match download.poll() {
-            DownloadState::Failed(m) => Some(m),
-            DownloadState::Done(_) => panic!("expected a failure"),
-            _ => None,
-        });
-        assert_eq!(message, connect_failed(&SAMEBOY));
+        assert_eq!(wait_for_failure(&mut download), connect_failed(&SAMEBOY));
         assert!(!is_installed(&data_dir, &SAMEBOY));
     }
 
     #[test]
-    fn dropping_mid_download_leaves_no_partial_files_and_stops_the_thread() {
+    fn an_http_error_says_the_build_server_couldnt_provide_the_core() {
         let dir = tempfile::tempdir().unwrap();
-        let data_dir = dir.path().to_owned();
+        let fetch: Fetcher = Arc::new(|_url: &str| Err(FetchError::Status(404)));
+        let mut download = Download::spawn(&SAMEBOY, dir.path().to_owned(), fetch);
 
-        struct SlowReader {
-            remaining: usize,
-        }
-        impl Read for SlowReader {
-            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-                if self.remaining == 0 {
-                    return Ok(0);
-                }
-                thread::sleep(Duration::from_millis(2));
-                let n = buf.len().min(self.remaining).min(1024);
-                for b in &mut buf[..n] {
-                    *b = 0;
-                }
-                self.remaining -= n;
-                Ok(n)
-            }
-        }
-        let fetch: Fetcher = Arc::new(|_url: &str| {
-            Ok((
-                Box::new(SlowReader {
-                    remaining: 10 * 1024 * 1024,
-                }) as Box<dyn Read + Send>,
-                None,
-            ))
-        });
-
-        let mut download = Download::spawn(&SAMEBOY, data_dir.clone(), fetch);
-        wait_for(|| match download.poll() {
-            DownloadState::Running { received, .. } if received > 0 => Some(()),
-            _ => None,
-        });
-
-        drop(download);
-
-        let cores_dir = data_dir.join("cores");
-        assert!(!cores_dir.join(format!(".{}.zip.part", SAMEBOY.file)).exists());
-        assert!(!cores_dir.join(format!(".{}.tmp", SAMEBOY.file)).exists());
-        assert!(!is_installed(&data_dir, &SAMEBOY));
+        assert_eq!(
+            wait_for_failure(&mut download),
+            "The libretro build server couldn't provide the SameBoy Core (HTTP 404)."
+        );
     }
 
-    /// G2: the only real network access in this suite. Run once with `cargo test -- --ignored
-    /// cores`.
+    #[test]
+    fn a_local_disk_error_says_the_core_couldnt_be_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        // A file where the data directory should be: `cores/` can't be created under it.
+        let data_dir = dir.path().join("not-a-dir");
+        fs::write(&data_dir, b"").unwrap();
+        let mut download = Download::spawn(&SAMEBOY, data_dir, fixed_reader_fetcher(core_zip()));
+
+        let message = wait_for_failure(&mut download);
+        assert!(
+            message.starts_with("Couldn't save the SameBoy Core: "),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_download_over_the_cap_stops_reading_and_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().to_owned();
+        let limits = Limits {
+            download: 100 * 1024,
+            core: MAX_CORE_BYTES,
+        };
+        let consumed = Arc::new(AtomicU64::new(0));
+        let consumed_in_fetch = Arc::clone(&consumed);
+        let fetch: Fetcher = Arc::new(move |_url: &str| {
+            let zeros = Zeros {
+                remaining: 10 * 1024 * 1024,
+                consumed: Arc::clone(&consumed_in_fetch),
+            };
+            Ok((Box::new(zeros) as Box<dyn Read + Send>, None))
+        });
+        let mut download = Download::spawn_limited(&SAMEBOY, data_dir.clone(), fetch, limits);
+
+        assert_eq!(wait_for_failure(&mut download), incomplete(&SAMEBOY));
+        let consumed = consumed.load(Ordering::Relaxed);
+        assert!(
+            consumed <= limits.download + CHUNK as u64,
+            "read {consumed} bytes past a {} byte cap",
+            limits.download
+        );
+        assert!(!is_installed(&data_dir, &SAMEBOY));
+        assert_eq!(leftovers(&data_dir), Vec::<PathBuf>::new());
+    }
+
+    #[test]
+    fn the_real_caps_are_100_mb_downloaded_and_64_mb_unzipped() {
+        assert_eq!(LIMITS.download, 100 * 1024 * 1024);
+        assert_eq!(LIMITS.core, 64 * 1024 * 1024);
+    }
+
+    #[test]
+    fn an_entry_declared_over_the_core_cap_is_the_invalid_library_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().to_owned();
+        let limits = Limits {
+            download: MAX_DOWNLOAD_BYTES,
+            core: 1024,
+        };
+        // A valid-looking library, just bigger than the cap.
+        let mut content = ELF_MAGIC.to_vec();
+        content.resize(2048, 0);
+        let zip = zip_with(SAMEBOY.file, &content);
+        let mut download =
+            Download::spawn_limited(&SAMEBOY, data_dir.clone(), fixed_reader_fetcher(zip), limits);
+
+        assert_eq!(wait_for_failure(&mut download), invalid_library(&SAMEBOY));
+        assert!(!is_installed(&data_dir, &SAMEBOY));
+        assert_eq!(leftovers(&data_dir), Vec::<PathBuf>::new());
+    }
+
+    #[test]
+    fn an_entry_unpacking_past_its_declared_size_stops_at_the_cap() {
+        // A zip bomb lying about its size: declares 0 bytes, unpacks to far more than the cap.
+        let consumed = Arc::new(AtomicU64::new(0));
+        let bomb = Zeros {
+            remaining: 10 * 1024 * 1024,
+            consumed: Arc::clone(&consumed),
+        };
+        let result = read_core(&SAMEBOY, bomb, 0, 1024, &AtomicBool::new(false));
+
+        // Compare lengths, not contents: a failure shouldn't print megabytes of zeros.
+        assert_eq!(
+            result.map(|content| content.len()),
+            Err(invalid_library(&SAMEBOY))
+        );
+        assert_eq!(consumed.load(Ordering::Relaxed), 1025);
+    }
+
+    #[test]
+    fn a_core_at_the_cap_is_read_whole() {
+        let content = vec![7u8; 1024];
+        let result = read_core(
+            &SAMEBOY,
+            Cursor::new(content.clone()),
+            1024,
+            1024,
+            &AtomicBool::new(false),
+        );
+        assert_eq!(result, Ok(content));
+    }
+
+    #[test]
+    fn extraction_stops_when_cancelled() {
+        let result = read_core(
+            &SAMEBOY,
+            Cursor::new(vec![0u8; 16]),
+            16,
+            1024,
+            &AtomicBool::new(true),
+        );
+        assert_eq!(result, Err(CANCELLED.to_string()));
+    }
+
+    #[test]
+    fn a_panicking_worker_is_a_failure_not_running_forever() {
+        let dir = tempfile::tempdir().unwrap();
+        let fetch: Fetcher = Arc::new(|_url: &str| panic!("a bug in the worker"));
+        let mut download = Download::spawn(&SAMEBOY, dir.path().to_owned(), fetch);
+
+        assert_eq!(
+            wait_for_failure(&mut download),
+            "Couldn't download the SameBoy Core."
+        );
+    }
+
+    /// Serves one chunk of zeros, but only once released; until then it blocks, like a read on a
+    /// stalled connection. Tells `entered` when the worker is blocked in it.
+    struct BlockedReader {
+        entered: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+        served: bool,
+    }
+    impl Read for BlockedReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.served {
+                return Ok(0);
+            }
+            let _ = self.entered.send(());
+            let _ = self.release.recv();
+            self.served = true;
+            let n = buf.len().min(16);
+            buf[..n].fill(0);
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn dropping_while_blocked_returns_at_once_and_the_worker_cleans_up_after_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().to_owned();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let reader = Mutex::new(Some(BlockedReader {
+            entered: entered_tx,
+            release: release_rx,
+            served: false,
+        }));
+        let fetch: Fetcher = Arc::new(move |_url: &str| {
+            let reader = reader
+                .lock()
+                .unwrap()
+                .take()
+                .expect("fetcher called more than once");
+            Ok((Box::new(reader) as Box<dyn Read + Send>, None))
+        });
+        // The worker thread owns the fetcher until it exits.
+        let worker_alive = Arc::downgrade(&fetch);
+
+        let download = Download::spawn(&SAMEBOY, data_dir.clone(), fetch);
+        entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+
+        // Release the reader well after the drop should have returned, so a drop that waits for the
+        // worker shows up as slow instead of hanging the test.
+        let releaser = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(500));
+            release_tx.send(()).unwrap();
+        });
+        let started = Instant::now();
+        drop(download);
+        let elapsed = started.elapsed();
+        assert!(elapsed < Duration::from_millis(100), "drop took {elapsed:?}");
+
+        // A retry while the old worker is still blocked installs fine, and the old worker's
+        // cleanup doesn't touch it.
+        let mut retry = Download::spawn(&SAMEBOY, data_dir.clone(), fixed_reader_fetcher(core_zip()));
+        wait_for_done(&mut retry);
+
+        releaser.join().unwrap();
+        wait_for(|| worker_alive.upgrade().is_none().then_some(()));
+        assert_eq!(leftovers(&data_dir), Vec::<PathBuf>::new());
+        assert_eq!(
+            fs::read(installed_path(&data_dir, &SAMEBOY)).unwrap(),
+            core_content()
+        );
+    }
+
+    #[test]
+    fn two_concurrent_downloads_of_the_same_core_both_install_it_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().to_owned();
+        let zip = core_zip();
+        // Both workers are past the fetch before either reads a byte, so their files overlap.
+        let barrier = Arc::new(Barrier::new(2));
+        let fetch: Fetcher = Arc::new(move |_url: &str| {
+            barrier.wait();
+            Ok((Box::new(Cursor::new(zip.clone())) as Box<dyn Read + Send>, None))
+        });
+
+        let mut first = Download::spawn(&SAMEBOY, data_dir.clone(), Arc::clone(&fetch));
+        let mut second = Download::spawn(&SAMEBOY, data_dir.clone(), fetch);
+        let first_path = wait_for_done(&mut first);
+        let second_path = wait_for_done(&mut second);
+
+        assert_eq!(first_path, second_path);
+        assert_eq!(fs::read(&first_path).unwrap(), core_content());
+        assert_eq!(leftovers(&data_dir), Vec::<PathBuf>::new());
+    }
+
+    /// The only real network access in this suite. Run once with `cargo test -- --ignored cores`.
     #[test]
     #[ignore]
     fn real_download_of_sameboy() {
@@ -623,14 +908,11 @@ mod tests {
         let data_dir = dir.path().to_owned();
         let mut download = Download::start(&SAMEBOY, data_dir.clone());
 
-        let path = wait_for(|| match download.poll() {
-            DownloadState::Done(path) => Some(path),
-            DownloadState::Failed(e) => panic!("download failed: {e}"),
-            DownloadState::Running { .. } => None,
-        });
+        let path = wait_for_done(&mut download);
 
         assert!(is_installed(&data_dir, &SAMEBOY));
         let bytes = fs::read(&path).unwrap();
         assert!(bytes.starts_with(ELF_MAGIC));
+        assert_eq!(leftovers(&data_dir), Vec::<PathBuf>::new());
     }
 }
