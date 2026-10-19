@@ -12,6 +12,10 @@ Rust + SDL3 emulator front end for Linux. Specs: `docs/requirements.md`, `docs/u
 
 All three must pass before a commit.
 
+Visual regression check: `scripts/smoke-screens.sh` renders one headless screenshot per screen and flow
+into `target/smoke/` (needs `.testdata/`). Look at them before starting a new milestone, and add a shot
+for every new screen.
+
 ## Conventions
 
 - Use the glossary in `CONTEXT.md` in code, comments and UI text: System, Game, Games Root, Display
