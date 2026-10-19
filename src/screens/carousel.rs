@@ -62,6 +62,12 @@ const DIM: f32 = 0.55;
 const SLIDE_TAU_SECS: f32 = 0.038;
 
 /// The System `steps` away from `index` in System Order, wrapping around both ends (FR-CAR-7).
+/// A font size for text that scales with a sliding card, snapped to `step` pixels so a slide
+/// reuses a handful of font faces and cached textures instead of making new ones every frame.
+fn text_size(px: f32, step: f32) -> u16 {
+    ((px / step).round() * step).max(step) as u16
+}
+
 fn wrap(index: usize, steps: i32) -> usize {
     (index as i32 + steps).rem_euclid(SYSTEMS.len() as i32) as usize
 }
@@ -247,7 +253,7 @@ impl Carousel {
         gfx.fill_circle(ox, oy, size * 0.14, white.alpha(0.08 * opacity));
 
         let fs = size * if system.name.len() < 10 { 0.13 } else { 0.095 };
-        let name = TextStyle::new(fs.round() as u16, Weight::ExtraBold, TEXT.alpha(opacity));
+        let name = TextStyle::new(text_size(fs, 4.0), Weight::ExtraBold, TEXT.alpha(opacity));
         let lines = wrap_name(system.name, 12);
         let last = lines.len() as f32 - 1.0;
         for (i, line) in lines.iter().enumerate() {
@@ -255,7 +261,7 @@ impl Carousel {
             gfx.text(cx, y, line, name, Align::Centre);
         }
         let caption = TextStyle::new(
-            (size * 0.045).round() as u16,
+            text_size(size * 0.045, 2.0),
             Weight::Medium,
             TEXT.alpha(0.75 * opacity),
         );
@@ -336,6 +342,16 @@ impl Screen for Carousel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sliding_text_sizes_snap_to_steps() {
+        assert_eq!(text_size(65.0, 4.0), 64);
+        assert_eq!(text_size(63.1, 4.0), 64);
+        assert_eq!(text_size(1.0, 2.0), 2);
+        let sizes: std::collections::BTreeSet<_> =
+            (150..=500).map(|s| text_size(s as f32 * 0.13, 4.0)).collect();
+        assert!(sizes.len() <= 13, "{sizes:?}");
+    }
     use crate::library::FoundGame;
 
     fn at(id: &str) -> usize {
