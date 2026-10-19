@@ -1,0 +1,17 @@
+[package]
+name = "game37"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+dirs = "7"
+notify = "8"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+sdl3 = { version = "0.20", features = ["ttf"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"
