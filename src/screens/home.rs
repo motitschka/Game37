@@ -5,6 +5,7 @@ use std::path::Path;
 
 use super::game_grid::GameGrid;
 use crate::ctx::Ctx;
+use crate::launch;
 use crate::library::db::{GameRow, SHELF_SIZE, Shelf};
 use crate::systems;
 use crate::ui::chrome;
@@ -139,6 +140,8 @@ pub struct Home {
     hscroll: [f32; SHELVES],
     vscroll: f32,
     hits: Vec<(Rect, Target)>,
+    /// Whether the focused item is a Game Confirm launches, as of the last draw, for the hints.
+    focus_playable: bool,
 }
 
 impl Default for Home {
@@ -164,6 +167,7 @@ impl Home {
             hscroll: [0.0; SHELVES],
             vscroll: 0.0,
             hits: Vec::new(),
+            focus_playable: false,
         }
     }
 
@@ -234,9 +238,11 @@ impl Home {
         self.vscroll = scroll::clamp(s, self.content_h(), VIEW_H);
     }
 
-    fn confirm(&self) -> Transition {
+    fn confirm(&self, ctx: &mut Ctx) -> Transition {
         let row = &self.shelves[self.focus.shelf];
         match item_at(row.games.len(), self.focus.col()) {
+            // Launches directly until the Details Page exists.
+            Item::Game(i) => launch::confirm_game(&row.games[i], ctx),
             Item::SeeAll => {
                 let shelf = row.shelf;
                 Transition::Push(Box::new(GameGrid::new(
@@ -244,8 +250,7 @@ impl Home {
                     Box::new(move |library| library.shelf(shelf, None)),
                 )))
             }
-            // Launching (M2) and the Details Page (M5) come later.
-            Item::Game(_) | Item::Hint => Transition::None,
+            Item::Hint => Transition::None,
         }
     }
 
@@ -400,7 +405,7 @@ impl Screen for Home {
     fn handle(&mut self, input: Input, ctx: &mut Ctx) -> Transition {
         self.reload_if_changed(ctx);
         match input {
-            Input::Action(Action::Confirm) => return self.confirm(),
+            Input::Action(Action::Confirm) => return self.confirm(ctx),
             Input::Action(dir) if dir.is_direction() => {
                 if self.focus.step(dir, self.counts()) {
                     self.reveal(self.focus.shelf);
@@ -417,7 +422,7 @@ impl Screen for Home {
                 Some(Target::Item(s, c)) => {
                     self.focus.shelf = s;
                     self.focus.cols[s] = c.min(self.counts()[s].saturating_sub(1));
-                    return self.confirm();
+                    return self.confirm(ctx);
                 }
                 Some(Target::Page(s, dir)) => {
                     let s_off = self.hscroll[s] + dir * (VIEW_W - PITCH);
@@ -461,13 +466,20 @@ impl Screen for Home {
         }
         gfx.clip(None);
         self.hits = clip_hits(&self.hits, Rect::new(0.0, VIEW_TOP, W, VIEW_H));
+        let row = &self.shelves[self.focus.shelf];
+        self.focus_playable = match item_at(row.games.len(), self.focus.col()) {
+            Item::Game(i) => launch::playable(&row.games[i], ctx),
+            _ => false,
+        };
     }
 
     fn hints(&self) -> Vec<Hint> {
         let row = &self.shelves[self.focus.shelf];
         let mut hints = Vec::new();
-        if item_at(row.games.len(), self.focus.col()) == Item::SeeAll {
-            hints.push(Hint::new(&[Action::Confirm], "See all"));
+        match item_at(row.games.len(), self.focus.col()) {
+            Item::SeeAll => hints.push(Hint::new(&[Action::Confirm], "See all")),
+            Item::Game(_) if self.focus_playable => hints.push(Hint::new(&[Action::Confirm], "Play")),
+            _ => {}
         }
         hints.push(Hint::new(&[Action::PrevTab, Action::NextTab], "Switch view"));
         hints

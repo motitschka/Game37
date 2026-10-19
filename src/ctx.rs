@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use crate::emulators::Emulators;
-use crate::library::db::{DbError, Library};
+use crate::library::db::{DbError, GameRow, Library};
 use crate::library::scan;
 use crate::systems::SYSTEMS;
 use crate::ui::input::{ButtonStyle, InputKind};
@@ -20,6 +20,8 @@ pub struct Ctx {
     pub button_style: ButtonStyle,
     /// Which Standalone Emulators are installed, as last checked.
     pub emulators: Emulators,
+    /// A Game a screen asked to play; `app.rs` takes it and starts its Standalone Emulator.
+    pub launch: Option<GameRow>,
 }
 
 impl Ctx {
@@ -32,6 +34,7 @@ impl Ctx {
             input_kind: InputKind::Controller,
             button_style: ButtonStyle::default(),
             emulators: Emulators::all_installed(),
+            launch: None,
         }
     }
 

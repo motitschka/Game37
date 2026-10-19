@@ -2,6 +2,7 @@
 //! Page (FR-CAR-3), after `screen_console_page` in `design/generate_mockups.py`.
 
 use crate::ctx::Ctx;
+use crate::launch;
 use crate::library::db::{DbError, GameRow, Library, SortOrder};
 use crate::ui::chrome;
 use crate::ui::cover::{self, COVER_GAP, COVER_H, COVER_W, RING_REACH};
@@ -87,6 +88,8 @@ pub struct GameGrid {
     /// The global sort order, cached from `reload()` so `draw()` never queries the database
     /// (NFR-3). Meaningless when `extra` is `None`.
     sort_order: SortOrder,
+    /// Whether the focused Game is one Confirm launches, as of the last draw, for the hints.
+    focus_playable: bool,
 }
 
 impl GameGrid {
@@ -102,6 +105,15 @@ impl GameGrid {
             extra: None,
             sort_hit: None,
             sort_order: SortOrder::default(),
+            focus_playable: false,
+        }
+    }
+
+    /// Confirm on the focused Game launches it until the Details Page exists.
+    fn confirm(&self, ctx: &mut Ctx) -> Transition {
+        match self.games.get(self.focus) {
+            Some(game) => launch::confirm_game(game, ctx),
+            None => Transition::None,
         }
     }
 
@@ -229,10 +241,16 @@ impl Screen for GameGrid {
             Input::Pointer(Pointer::Click { x, y }) if self.sort_hit.is_some_and(|r| r.contains(x, y)) => {
                 self.cycle_sort(ctx);
             }
-            Input::Pointer(Pointer::Move { x, y }) | Input::Pointer(Pointer::Click { x, y }) => {
-                // Confirm on a Game does nothing until launching exists, so a click only focuses.
+            Input::Action(Action::Confirm) => return self.confirm(ctx),
+            Input::Pointer(Pointer::Move { x, y }) => {
                 if let Some(i) = hit(&self.hits, x, y) {
                     self.focus = i.min(self.games.len().saturating_sub(1));
+                }
+            }
+            Input::Pointer(Pointer::Click { x, y }) => {
+                if let Some(i) = hit(&self.hits, x, y) {
+                    self.focus = i.min(self.games.len().saturating_sub(1));
+                    return self.confirm(ctx);
                 }
             }
             Input::Pointer(Pointer::Wheel { dy }) => {
@@ -245,6 +263,10 @@ impl Screen for GameGrid {
 
     fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
         self.reload_if_changed(ctx);
+        self.focus_playable = self
+            .games
+            .get(self.focus)
+            .is_some_and(|g| launch::playable(g, ctx));
         let mut title_x = M;
         if let Some(extra) = &self.extra {
             chrome::background_tinted(gfx, extra.tint, 0.35);
@@ -332,6 +354,9 @@ impl Screen for GameGrid {
 
     fn hints(&self) -> Vec<Hint> {
         let mut hints = Vec::new();
+        if self.focus_playable {
+            hints.push(Hint::new(&[Action::Confirm], "Play"));
+        }
         if self.extra.is_some() && !self.games.is_empty() {
             hints.push(Hint::new(&[Action::Sort], "Sort"));
         }

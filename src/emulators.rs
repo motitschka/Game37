@@ -11,35 +11,69 @@ use crate::systems::{Kind, System};
 pub struct Emulator {
     pub name: &'static str,
     pub flatpak_id: &'static str,
+    /// Arguments after `flatpak run … <id>` that start a Game fullscreen (FR-EXT-1), with
+    /// [`PATH`] standing for the Game's file. Facts in `docs/research/external-emulators.md`.
+    pub args: &'static [&'static str],
+    /// For folder Games: the file inside the folder to pass, as path components matched
+    /// case-insensitively, the first alternative that exists winning. A `*.ext` component is the
+    /// first file in name order with that extension. Empty when the System has no folder Games.
+    pub folder_file: &'static [&'static [&'static str]],
+    /// Whether the emulator stays open in its game list after a Game stops, so the player must
+    /// close its window for Game37 to come back.
+    pub stays_open: bool,
 }
+
+/// Stands for the Game's file in [`Emulator::args`].
+pub const PATH: &str = "{path}";
 
 pub static DOLPHIN: Emulator = Emulator {
     name: "Dolphin",
     flatpak_id: "org.DolphinEmu.dolphin-emu",
+    args: &["-b", "-C", "Dolphin.Display.Fullscreen=True", "-e", PATH],
+    folder_file: &[],
+    stays_open: false,
 };
 pub static CEMU: Emulator = Emulator {
     name: "Cemu",
     flatpak_id: "info.cemu.Cemu",
+    args: &["-f", "-g", PATH],
+    folder_file: &[&["code", "*.rpx"]],
+    stays_open: false,
 };
 pub static AZAHAR: Emulator = Emulator {
     name: "Azahar",
     flatpak_id: "org.azahar_emu.Azahar",
+    args: &["-f", PATH],
+    folder_file: &[],
+    stays_open: true,
 };
 pub static RYUBING: Emulator = Emulator {
     name: "Ryubing",
     flatpak_id: "io.github.ryubing.Ryujinx",
+    args: &[PATH, "--fullscreen"],
+    folder_file: &[],
+    stays_open: true,
 };
 pub static PCSX2: Emulator = Emulator {
     name: "PCSX2",
     flatpak_id: "net.pcsx2.PCSX2",
+    args: &["-batch", "-fullscreen", PATH],
+    folder_file: &[],
+    stays_open: false,
 };
 pub static RPCS3: Emulator = Emulator {
     name: "RPCS3",
     flatpak_id: "net.rpcs3.RPCS3",
+    args: &["--no-gui", "--fullscreen", PATH],
+    folder_file: &[&["PS3_GAME", "USRDIR", "EBOOT.BIN"], &["USRDIR", "EBOOT.BIN"]],
+    stays_open: false,
 };
 pub static SHADPS4: Emulator = Emulator {
     name: "shadPS4",
     flatpak_id: "net.shadps4.shadPS4",
+    args: &["-g", PATH, "--fullscreen", "true"],
+    folder_file: &[&["eboot.bin"]],
+    stays_open: true,
 };
 
 /// The Standalone Emulator for an External System; `None` for Embedded Systems.
