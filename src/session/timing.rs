@@ -1,0 +1,141 @@
+//! Frame scheduling, audio rate control and where the game picture goes (NFR-4, FR-EMB-11).
+
+use crate::ui::{H, Rect, W};
+
+/// How close the display's refresh rate must be to the Core's fps to run one Core frame per
+/// displayed frame.
+const LOCKSTEP_TOLERANCE: f64 = 0.01;
+/// The most Core frames one displayed frame runs; the backlog beyond is dropped (no fast-forward).
+pub const MAX_FRAMES_PER_DISPLAY: u32 = 3;
+
+/// Decides how many Core frames each displayed frame runs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Scheduler {
+    fps: f64,
+    /// The display's refresh rate when it is close enough to the Core's fps to run in lockstep.
+    lockstep: Option<f64>,
+    due: f64,
+}
+
+impl Scheduler {
+    /// `refresh` is the display's refresh rate, `None` when unknown or not synced to (no vsync).
+    pub fn new(fps: f64, refresh: Option<f64>) -> Scheduler {
+        let lockstep = refresh.filter(|r| *r > 0.0 && ((r - fps) / fps).abs() <= LOCKSTEP_TOLERANCE);
+        Scheduler {
+            fps,
+            lockstep,
+            due: 0.0,
+        }
+    }
+
+    /// Core frames to run for a displayed frame that came `dt` seconds after the last one.
+    pub fn frames(&mut self, dt: f64) -> u32 {
+        if self.lockstep.is_some() {
+            return 1;
+        }
+        self.due += dt.max(0.0) * self.fps;
+        let whole = self.due.floor();
+        self.due -= whole;
+        (whole as u32).min(MAX_FRAMES_PER_DISPLAY)
+    }
+
+    /// Forgets time owed, e.g. after the window was hidden.
+    pub fn reset(&mut self) {
+        self.due = 0.0;
+    }
+
+    /// The audio speed that matches the Core's output to real time: in lockstep the Core runs at
+    /// the display's rate, not its own, so its audio comes that much faster or slower.
+    pub fn base_ratio(&self) -> f64 {
+        self.lockstep.map_or(1.0, |r| r / self.fps)
+    }
+}
+
+/// How much audio the stream aims to hold, in seconds.
+pub const AUDIO_TARGET: f64 = 0.050;
+/// More than this queued (after a stall) is cleared rather than played late.
+pub const AUDIO_MAX: f64 = 0.200;
+/// The most dynamic rate control speeds audio up or slows it down.
+const MAX_DEVIATION: f64 = 0.005;
+
+/// The audio stream's frequency ratio for `queued` seconds of audio: `base` (see
+/// [`Scheduler::base_ratio`]) nudged by at most ±0.5 %, faster when the queue is above target so
+/// it drains, slower when below so it fills.
+pub fn audio_ratio(base: f64, queued: f64) -> f64 {
+    let error = ((queued - AUDIO_TARGET) / AUDIO_TARGET).clamp(-1.0, 1.0);
+    base * (1.0 + MAX_DEVIATION * error)
+}
+
+/// The largest rect of `aspect` (width / height) centred in the logical screen; the rest is
+/// black bars.
+pub fn fit(aspect: f32) -> Rect {
+    let aspect = if aspect > 0.0 { aspect } else { W / H };
+    if aspect > W / H {
+        let h = W / aspect;
+        Rect::new(0.0, (H - h) / 2.0, W, h)
+    } else {
+        let w = H * aspect;
+        Rect::new((W - w) / 2.0, 0.0, w, H)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NES: f64 = 60.0988;
+
+    fn run(s: &mut Scheduler, refresh: f64, displayed: usize) -> Vec<u32> {
+        (0..displayed).map(|_| s.frames(1.0 / refresh)).collect()
+    }
+
+    #[test]
+    fn at_60_hz_each_displayed_frame_runs_one_core_frame() {
+        let mut s = Scheduler::new(NES, Some(60.0));
+        assert!(run(&mut s, 60.0, 600).iter().all(|&n| n == 1));
+        assert!((s.base_ratio() - 60.0 / NES).abs() < 1e-12);
+    }
+
+    #[test]
+    fn at_59_7_hz_it_is_still_lockstep_and_audio_is_slowed_to_match() {
+        let mut s = Scheduler::new(NES, Some(59.7));
+        assert!(run(&mut s, 59.7, 600).iter().all(|&n| n == 1));
+        assert!(s.base_ratio() < 0.995, "beyond the ±0.5 % rate control alone");
+    }
+
+    #[test]
+    fn at_144_hz_core_frames_follow_the_clock() {
+        let mut s = Scheduler::new(NES, Some(144.0));
+        let frames = run(&mut s, 144.0, 1440);
+        assert!(frames.iter().all(|&n| n <= 1));
+        let total: u32 = frames.iter().sum();
+        assert!((600..=601).contains(&total), "{total} Core frames in 10 s");
+        assert_eq!(s.base_ratio(), 1.0);
+    }
+
+    #[test]
+    fn a_stall_runs_at_most_three_frames_and_drops_the_rest() {
+        let mut s = Scheduler::new(NES, None);
+        assert_eq!(s.frames(1.0), 3);
+        assert_eq!(s.frames(0.0), 0, "the backlog is gone");
+        assert_eq!(s.frames(1.0 / NES), 1);
+    }
+
+    #[test]
+    fn the_audio_ratio_drains_a_full_queue_and_fills_an_empty_one_within_half_a_percent() {
+        assert_eq!(audio_ratio(1.0, AUDIO_TARGET), 1.0);
+        assert!(audio_ratio(1.0, 0.075) > 1.0);
+        assert!(audio_ratio(1.0, 0.025) < 1.0);
+        assert!((audio_ratio(1.0, 0.150) - 1.005).abs() < 1e-12, "clamped");
+        assert!((audio_ratio(1.0, 0.0) - 0.995).abs() < 1e-12, "clamped");
+        assert!((audio_ratio(0.99, 0.150) - 0.99 * 1.005).abs() < 1e-12);
+    }
+
+    #[test]
+    fn the_picture_fits_at_its_aspect_with_bars() {
+        assert_eq!(fit(4.0 / 3.0), Rect::new(240.0, 0.0, 1440.0, 1080.0));
+        assert_eq!(fit(10.0 / 9.0), Rect::new(360.0, 0.0, 1200.0, 1080.0));
+        assert_eq!(fit(16.0 / 9.0), Rect::new(0.0, 0.0, 1920.0, 1080.0));
+        assert_eq!(fit(3.2), Rect::new(0.0, 240.0, 1920.0, 600.0));
+    }
+}
