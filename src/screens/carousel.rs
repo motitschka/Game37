@@ -2,6 +2,7 @@
 //! the focused one large in the centre, after `screen_carousel` and `console_card` in
 //! `design/generate_mockups.py`.
 
+use std::path::Path;
 use std::time::Instant;
 
 use crate::ctx::Ctx;
@@ -14,7 +15,8 @@ use crate::ui::text::Weight;
 use crate::ui::theme::{BG, Colour, MUTED, TEXT};
 use crate::ui::{H, Rect, W};
 
-use super::Stub;
+use super::game_grid::GameGrid;
+use super::home::tilde;
 
 /// Vertical centre of the cards.
 const CARD_Y: f32 = 450.0;
@@ -154,6 +156,22 @@ fn wrap_name(name: &str, width: usize) -> Vec<String> {
     lines
 }
 
+/// The empty-state hint for a System with no Games, naming its folder under the Games Root
+/// (FR-CAR-4, US-11).
+fn empty_hint(system: &System, games_root: &Path, home: Option<&Path>) -> String {
+    let path = tilde(&games_root.join(system.id), home);
+    format!("Put {} games in {path}", system.name)
+}
+
+/// A System's Console Page: its Games in the global sort order (FR-CAR-3, FR-CAR-5).
+fn console_page(system: &'static System, ctx: &Ctx) -> Box<dyn Screen> {
+    let id = system.id;
+    let source =
+        Box::new(move |library: &Library| library.system_games(id, library.sort_order().unwrap_or_default()));
+    let hint = empty_hint(system, &ctx.games_root, dirs::home_dir().as_deref());
+    Box::new(GameGrid::new(system.name, source).sortable(Colour::hex(system.colour), hint))
+}
+
 pub struct Carousel {
     /// Where the row is heading, as an index that keeps counting past either end, so a wrap slides
     /// the short way. The focused System is this modulo the number of Systems.
@@ -200,8 +218,8 @@ impl Carousel {
         }
     }
 
-    fn open(&self) -> Transition {
-        Transition::Push(Box::new(Stub::new(self.system().name)))
+    fn open(&self, ctx: &Ctx) -> Transition {
+        Transition::Push(console_page(self.system(), ctx))
     }
 
     /// Re-reads the Game counts when the library changed.
@@ -278,11 +296,11 @@ impl Screen for Carousel {
         match input {
             Input::Action(Action::Left) => self.step(-1, ctx),
             Input::Action(Action::Right) => self.step(1, ctx),
-            Input::Action(Action::Confirm) => return self.open(),
+            Input::Action(Action::Confirm) => return self.open(ctx),
             Input::Pointer(Pointer::Wheel { dy }) if dy > 0.0 => self.step(-1, ctx),
             Input::Pointer(Pointer::Wheel { dy }) if dy < 0.0 => self.step(1, ctx),
             Input::Pointer(Pointer::Click { x, y }) => match card_at(x, y) {
-                Some(0) => return self.open(),
+                Some(0) => return self.open(ctx),
                 Some(offset) => self.step(offset, ctx),
                 None => {}
             },
@@ -353,6 +371,20 @@ mod tests {
         assert!(sizes.len() <= 13, "{sizes:?}");
     }
     use crate::library::FoundGame;
+
+    #[test]
+    fn empty_hint_names_the_system_and_its_folder_with_a_tilde() {
+        let nes = &SYSTEMS[systems::index_of("nes").unwrap()];
+        let home = Path::new("/home/ann");
+        assert_eq!(
+            empty_hint(nes, Path::new("/home/ann/Games"), Some(home)),
+            "Put NES games in ~/Games/nes"
+        );
+        assert_eq!(
+            empty_hint(nes, Path::new("/mnt/games"), Some(home)),
+            "Put NES games in /mnt/games/nes"
+        );
+    }
 
     fn at(id: &str) -> usize {
         systems::index_of(id).unwrap()
