@@ -1,5 +1,6 @@
 //! The library: Games found under the Games Root, and what Game37 records about them.
 
+pub mod db;
 pub mod scan;
 pub mod title;
 
