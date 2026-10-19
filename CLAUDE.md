@@ -20,5 +20,8 @@ All three must pass before a commit.
 - Tests never touch the real `~/Games`, `~/.config/game37` or `~/.local/share/game37`: use temp dirs.
 - Tests never run `flatpak run` or a real emulator; launching goes through an injectable spawner. A test
   that starts a child process kills it by pid when done (e.g. a drop guard), never by name pattern.
+- Tests that need real Cores or test ROMs read them from `/home/matei/Game37/.testdata/` (gitignored, local
+  only), are `#[ignore = "needs /home/matei/Game37/.testdata"]`, and run with `cargo test -- --ignored`.
+  Only one Core may be loaded per process, so every such test holds `crate::libretro::tests::serial()`.
 - Never commit game files, BIOS, keys or secrets (NFR-6). Test fixtures are empty or tiny dummy files
   created by the tests themselves.

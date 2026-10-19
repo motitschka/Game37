@@ -62,7 +62,7 @@ const CASES: [Case; 5] = [
 ];
 
 /// One Core per process at a time: tests that load one take turns.
-fn serial() -> MutexGuard<'static, ()> {
+pub(crate) fn serial() -> MutexGuard<'static, ()> {
     static SERIAL: Mutex<()> = Mutex::new(());
     SERIAL.lock().unwrap_or_else(|e| e.into_inner())
 }

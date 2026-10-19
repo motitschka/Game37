@@ -8,7 +8,7 @@
 mod callbacks;
 mod ffi;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::ffi::{CString, c_int};
 use std::fmt;
