@@ -1,11 +1,20 @@
-use game37::{config, systems};
+use std::process::ExitCode;
 
-fn main() {
-    let path = config::config_path();
-    match config::load(&path) {
-        Ok(Some(config)) => println!("Games Root: {}", config.games_root.display()),
-        Ok(None) => println!("No Config at {}: First-run Setup is due", path.display()),
-        Err(e) => eprintln!("{e}"),
+use game37::{app, cli};
+
+fn main() -> ExitCode {
+    let options = match cli::parse(std::env::args().skip(1)) {
+        Ok(options) => options,
+        Err(e) => {
+            eprintln!("game37: {e}\n{}", cli::USAGE);
+            return ExitCode::from(2);
+        }
+    };
+    match app::run(options) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("game37: {e}");
+            ExitCode::FAILURE
+        }
     }
-    println!("{} Systems", systems::SYSTEMS.len());
 }
