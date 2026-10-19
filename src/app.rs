@@ -21,6 +21,7 @@ use crate::launch::{Launcher, NeverExits, Processes};
 use crate::library::db::Library;
 use crate::library::watch::LibraryWatcher;
 use crate::screens;
+use crate::session::input::{self, Ports};
 use crate::session::sdl;
 use crate::ui::chrome::{self, TopBar};
 use crate::ui::controls::{ControlEvent, Controls, StickAxis};
@@ -184,7 +185,10 @@ fn interactive(
             continue;
         }
         let keys = events.keyboard_state();
-        sdl::tick(&mut nav, &mut ctx, &mut gfx, dt, |k| keys.is_scancode_pressed(k));
+        let pads = input.pad_states();
+        sdl::tick(&mut nav, &mut ctx, &mut gfx, dt, &pads, |k| {
+            keys.is_scancode_pressed(k)
+        });
         ctx.input_kind = input.controls.kind;
         ctx.button_style = input.controls.style;
         hits = draw(&mut gfx, &mut nav, &ctx, &input.view(), &clock());
@@ -251,7 +255,7 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
                 sdl::start(&game, &mut nav, &ctx, audio.as_ref(), Some(SHOT_REFRESH));
             }
         }
-        sdl::tick(&mut nav, &mut ctx, &mut gfx, 1.0 / SHOT_REFRESH, |k| {
+        sdl::tick(&mut nav, &mut ctx, &mut gfx, 1.0 / SHOT_REFRESH, &[], |k| {
             esc && k == Scancode::Escape
         });
         ctx.input_kind = view.kind;
@@ -259,7 +263,7 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
         gfx.present();
     }
     for frame in 1..=shot.frames {
-        sdl::tick(&mut nav, &mut ctx, &mut gfx, 1.0 / SHOT_REFRESH, |_| false);
+        sdl::tick(&mut nav, &mut ctx, &mut gfx, 1.0 / SHOT_REFRESH, &[], |_| false);
         draw(&mut gfx, &mut nav, &ctx, &view, &clock);
         if frame < shot.frames {
             gfx.present();
@@ -345,6 +349,9 @@ fn clock() -> String {
 struct InputState {
     subsystem: GamepadSubsystem,
     pads: HashMap<JoystickId, Gamepad>,
+    /// Which pad plays on which port, kept for the app's whole life (FR-EMB-8): player order
+    /// follows connection order, and persists across Games.
+    ports: Ports<JoystickId>,
     controls: Controls,
     pointer: Option<(f32, f32)>,
 }
@@ -360,9 +367,19 @@ impl InputState {
         InputState {
             subsystem,
             pads: HashMap::new(),
+            ports: Ports::default(),
             controls: Controls::new(kind),
             pointer: None,
         }
+    }
+
+    /// This frame's pad state per occupied port, for a running Game (see
+    /// [`crate::session::sdl::pad_state`]).
+    fn pad_states(&self) -> Vec<(usize, input::PadState)> {
+        self.ports
+            .assigned()
+            .filter_map(|(port, id)| self.pads.get(&id).map(|g| (port, sdl::pad_state(g))))
+            .collect()
     }
 
     fn view(&self) -> View {
@@ -401,11 +418,13 @@ impl InputState {
             Event::GamepadAdded { which, .. } => {
                 if let Ok(pad) = self.subsystem.open(which) {
                     self.pads.insert(which, pad);
+                    self.ports.connect(which);
                 }
                 return Flow::Continue;
             }
             Event::GamepadRemoved { which, .. } => {
                 self.pads.remove(&which);
+                self.ports.disconnect(which);
                 ControlEvent::PadRemoved { pad: which }
             }
             Event::GamepadButtonDown { which, button, .. } => {
@@ -455,5 +474,29 @@ impl InputState {
         };
         self.controls.handle(sdl3::timer::ticks(), control, out);
         Flow::Continue
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `InputState` feeds `GamepadAdded`/`GamepadRemoved` ids straight into its `Ports` (FR-EMB-8):
+    /// player order follows connection order, the other pads keep their ports when one leaves, and
+    /// a reconnecting id can land on a different port than before.
+    #[test]
+    fn ports_persist_across_added_and_removed_events_even_when_ids_reconnect_reordered() {
+        let mut ports: Ports<JoystickId> = Ports::default();
+        let (a, b, c) = (JoystickId::new(1), JoystickId::new(2), JoystickId::new(3));
+        assert_eq!(ports.connect(a), Some(0), "player 1 by connection order");
+        assert_eq!(ports.connect(b), Some(1), "player 2");
+        ports.disconnect(a);
+        assert_eq!(ports.connect(c), Some(0), "fills the port a left");
+        assert_eq!(
+            ports.connect(a),
+            Some(2),
+            "a reconnects after b and c, on a different port than before"
+        );
+        assert_eq!(ports.port_of(b), Some(1), "b kept its port throughout");
     }
 }

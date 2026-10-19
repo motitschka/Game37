@@ -10,9 +10,10 @@ use std::time::{Duration, Instant};
 
 use sdl3::AudioSubsystem;
 use sdl3::audio::{AudioFormat, AudioSpec, AudioStreamOwner};
+use sdl3::gamepad::{Axis, Gamepad};
 use sdl3::keyboard::Scancode;
 
-use super::input::{self, PauseTrigger};
+use super::input::{self, PadState, PauseTrigger};
 use super::saves::{self, Tracker};
 use super::timing::{self, AUDIO_MAX, Scheduler};
 use crate::cores;
@@ -77,6 +78,22 @@ impl Audio {
         // SAFETY: the stream is alive.
         unsafe { sdl3::sys::audio::SDL_SetAudioStreamFrequencyRatio(self.stream.raw(), ratio) };
     }
+}
+
+/// Reads this frame's [`PadState`] from an open SDL gamepad. The thin SDL adapter: `PadState`
+/// itself is pure and tested in `session::input`.
+pub fn pad_state(gamepad: &Gamepad) -> PadState {
+    let mut state = PadState::default();
+    for button in input::ALL_BUTTONS {
+        if gamepad.button(button) {
+            state.press(button);
+        }
+    }
+    state.left_x = gamepad.axis(Axis::LeftX);
+    state.left_y = gamepad.axis(Axis::LeftY);
+    state.left_trigger = gamepad.axis(Axis::TriggerLeft);
+    state.right_trigger = gamepad.axis(Axis::TriggerRight);
+    state
 }
 
 impl Session {
@@ -147,12 +164,19 @@ impl Session {
         self.scheduler.reset();
     }
 
-    /// Runs the Core frames due `dt` seconds after the last tick, with the keys `down` reports
-    /// held, uploading new frames to `gfx` and queueing their sound. Returns whether the pause
-    /// trigger (Esc) fired, in which case no frame runs.
-    pub fn tick(&mut self, gfx: &mut Gfx<'_>, dt: f64, down: impl Fn(Scancode) -> bool) -> bool {
+    /// Runs the Core frames due `dt` seconds after the last tick, with `pads` holding each
+    /// occupied port's state and the keys `down` reports held, uploading new frames to `gfx` and
+    /// queueing their sound. Returns whether the pause trigger (Esc, Guide or Select+Start)
+    /// fired, in which case no frame runs.
+    pub fn tick(
+        &mut self,
+        gfx: &mut Gfx<'_>,
+        dt: f64,
+        pads: &[(usize, PadState)],
+        down: impl Fn(Scancode) -> bool,
+    ) -> bool {
         let keyboard = input::keyboard_buttons(&down);
-        let (input, paused) = input::frame_input(&[], keyboard, down(Scancode::Escape), &mut self.pause);
+        let (input, paused) = input::frame_input(pads, keyboard, down(Scancode::Escape), &mut self.pause);
         if paused {
             return true;
         }
@@ -241,9 +265,16 @@ pub fn running(nav: &mut Nav) -> Option<&mut Session> {
 }
 
 /// Ticks the running session, if any (see [`Session::tick`]), and handles its pause trigger.
-pub fn tick(nav: &mut Nav, ctx: &mut Ctx, gfx: &mut Gfx<'_>, dt: f64, down: impl Fn(Scancode) -> bool) {
+pub fn tick(
+    nav: &mut Nav,
+    ctx: &mut Ctx,
+    gfx: &mut Gfx<'_>,
+    dt: f64,
+    pads: &[(usize, PadState)],
+    down: impl Fn(Scancode) -> bool,
+) {
     if let Some(session) = running(nav)
-        && session.tick(gfx, dt, down)
+        && session.tick(gfx, dt, pads, down)
     {
         on_pause(nav, ctx);
     }
@@ -260,5 +291,54 @@ pub fn end(nav: &mut Nav, ctx: &mut Ctx) {
     if let Some(session) = running(nav) {
         session.end(ctx, ctx::now());
         nav.pop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::libretro::tests::serial;
+
+    const TESTDATA: &str = "/home/matei/Game37/.testdata";
+
+    /// In-game Saves are always written (FR-EMB-7): a real Core's save RAM round-trips through
+    /// the same save path a session uses, and lands in a `saves/<system>/` temp dir. Of mGBA,
+    /// SameBoy, Mesen and bsnes running their 240p/144p/160p Test Suite Game, only mGBA's gba
+    /// Game has save RAM.
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn in_game_save_round_trips_through_a_real_core() {
+        let _serial = serial();
+        let data = Path::new(TESTDATA);
+        let core_path = data.join("data/cores/mgba_libretro.so");
+        let game_path = data.join("games/gba/160p Test Suite (World).gba");
+        let root = TempDir::new().unwrap();
+        let dirs = CoreDirs {
+            system: root.path().join("bios"),
+            save: saves::save_dir(root.path(), "gba"),
+        };
+        fs::create_dir_all(&dirs.system).unwrap();
+        fs::create_dir_all(&dirs.save).unwrap();
+
+        let mut core = Core::load(&core_path, &game_path, dirs.clone()).unwrap_or_else(|e| panic!("{e}"));
+        let ram = core.save_ram().expect("mGBA's Test Suite Game has save RAM");
+        let known: Vec<u8> = (0..ram.len()).map(|i| i as u8).collect();
+        ram.copy_from_slice(&known);
+
+        let srm = saves::srm_path(root.path(), "gba", Path::new("160p Test Suite (World).gba"));
+        let mut tracker = Tracker::new(core.save_ram().unwrap());
+        write_save(&srm, &mut tracker, core.save_ram().unwrap());
+        assert!(srm.exists(), "the .srm exists in saves/gba/");
+        assert_eq!(srm.parent().unwrap(), saves::save_dir(root.path(), "gba"));
+        drop(core);
+
+        let mut core = Core::load(&core_path, &game_path, dirs).unwrap_or_else(|e| panic!("{e}"));
+        let ram = core.save_ram().expect("mGBA's Test Suite Game has save RAM");
+        assert!(saves::load(&srm, ram).unwrap());
+        assert_eq!(ram, known.as_slice());
     }
 }
