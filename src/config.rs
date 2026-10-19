@@ -58,6 +58,13 @@ pub fn load(path: &Path) -> Result<Option<Config>, ConfigError> {
     };
     let raw: RawConfig = toml::from_str(&text).map_err(|e| ConfigError::Parse(path.to_owned(), e))?;
     let games_root = expand_home(raw.games_root.as_deref().unwrap_or("~/Games"));
+    // `notify` reports absolute paths, so a relative root (relative to the current directory,
+    // not canonicalised: the folder may not exist yet) would never match its events.
+    let games_root = if games_root.is_absolute() {
+        games_root
+    } else {
+        std::path::absolute(&games_root).unwrap_or(games_root)
+    };
     Ok(Some(Config { games_root }))
 }
 
@@ -115,6 +122,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let err = load(&write(&dir, "games_root = \n")).unwrap_err();
         assert!(matches!(err, ConfigError::Parse(..)), "{err}");
+    }
+
+    #[test]
+    fn relative_games_root_is_made_absolute() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = load(&write(&dir, "games_root = \"games\"\n")).unwrap().unwrap();
+        assert!(config.games_root.is_absolute());
+        assert_eq!(config.games_root.file_name().unwrap(), "games");
     }
 
     #[test]

@@ -7,12 +7,22 @@
 /// `Legend of Zelda, The - A Link to the Past (USA) [!]` becomes
 /// `The Legend of Zelda - A Link to the Past`.
 pub fn display_title(name: &str) -> String {
-    let stripped = strip_groups(name).replace('_', " ");
+    let (stripped, discs) = strip_groups(name);
+    let stripped = stripped.replace('_', " ");
     let mut title = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
     if let Some(rest) = title.strip_suffix(" -") {
         title = rest.trim_end().to_string();
     }
-    let title = move_article(&title);
+    // The article is moved on the title with any `(Disc N)` tags taken out, so a kept disc tag
+    // doesn't block `move_article` from seeing the trailing article; the tags go back on after.
+    let mut title = move_article(&title);
+    for disc in discs {
+        if title.is_empty() {
+            title.push_str(disc.trim_start());
+        } else {
+            title.push_str(&disc);
+        }
+    }
     if title.is_empty() {
         name.trim().to_string()
     } else {
@@ -20,31 +30,47 @@ pub fn display_title(name: &str) -> String {
     }
 }
 
-/// Removes every `(...)` and `[...]` group except `(Disc N)` / `(Disk N)`, which becomes `(Disc N)`.
-/// An unclosed bracket and everything after it is kept as it is.
-fn strip_groups(name: &str) -> String {
+/// Removes every `(...)` and `[...]` group except `(Disc N)` / `(Disk N)`, whose normalised
+/// `(Disc N)` form is returned separately so callers can move an article before reattaching it.
+/// An unclosed bracket and everything after it is kept as it is. Bracket depth (counting both
+/// `()` and `[]` nesting) is tracked so a nested group doesn't end the outer one early.
+fn strip_groups(name: &str) -> (String, Vec<String>) {
     let mut out = String::with_capacity(name.len());
+    let mut discs = Vec::new();
     let mut rest = name;
     while let Some(start) = rest.find(['(', '[']) {
-        let close = if rest[start..].starts_with('(') { ')' } else { ']' };
-        let Some(len) = rest[start..].find(close) else {
+        let mut depth = 1;
+        let mut close = None;
+        for (offset, c) in rest[start + 1..].char_indices() {
+            match c {
+                '(' | '[' => depth += 1,
+                ')' | ']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some((start + 1 + offset, c));
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some((close_idx, close_char)) = close else {
             break;
         };
         out.push_str(&rest[..start]);
-        let inner = &rest[start + 1..start + len];
+        let inner = &rest[start + 1..close_idx];
         match disc_number(inner) {
-            Some(n) if close == ')' => {
-                out.push_str(" (Disc ");
-                out.push_str(n);
-                out.push_str(") ");
+            Some(n) if close_char == ')' => {
+                discs.push(format!(" (Disc {n})"));
+                out.push(' ');
             }
             // A space keeps the words on either side apart, as in `Game(USA)Extra`.
             _ => out.push(' '),
         }
-        rest = &rest[start + len + 1..];
+        rest = &rest[close_idx + 1..];
     }
     out.push_str(rest);
-    out
+    (out, discs)
 }
 
 /// The number in a `Disc N` or `Disk N` group.
@@ -167,5 +193,27 @@ mod tests {
     #[test]
     fn unclosed_bracket_is_kept() {
         assert_eq!(display_title("Game (USA"), "Game (USA");
+    }
+
+    #[test]
+    fn moves_article_on_a_kept_disc_title() {
+        assert_eq!(
+            display_title("Legend of Dragoon, The (USA) (Disc 1)"),
+            "The Legend of Dragoon (Disc 1)"
+        );
+        assert_eq!(
+            display_title("Legend of Zelda, The - Oracle of Ages (Disc 1)"),
+            "The Legend of Zelda - Oracle of Ages (Disc 1)"
+        );
+        assert_eq!(
+            display_title("Final Fantasy VII (Europe) (Disc 1)"),
+            "Final Fantasy VII (Disc 1)"
+        );
+    }
+
+    #[test]
+    fn nested_groups_are_fully_removed() {
+        assert_eq!(display_title("Game (Beta (1)) (USA)"), "Game");
+        assert_eq!(display_title("[Hack [v2]] Game"), "Game");
     }
 }
