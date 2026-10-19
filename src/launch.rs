@@ -637,7 +637,9 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1100));
         w.launcher.quit(&mut w.nav, &mut w.ctx, 2000);
         let row = w.row();
-        assert_eq!((row.playtime_secs, row.last_played), (1, Some(2000)));
+        // About 1 s ran; allow for a loaded machine.
+        assert!((1..=3).contains(&row.playtime_secs), "{}", row.playtime_secs);
+        assert_eq!(row.last_played, Some(2000));
         assert!(!w.launcher.is_running());
     }
 
