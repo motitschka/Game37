@@ -389,9 +389,65 @@ def screen_console_page():
     sv.save()
 
 
-def screen_details():
-    sv = Svg("05-details", "Details Page")
-    g = GAMECUBE[0]
+WIIU = [game(t, "wiiu") for t in [
+    "Xenoblade Chronicles X", "Breath of the Wild", "Mario Kart 8", "Splatoon", "Pikmin 3", "Bayonetta 2",
+    "Super Mario 3D World", "Wind Waker HD", "Tropical Freeze", "Twilight Princess HD"]]
+
+
+def screen_console_missing_emulator():
+    sv = Svg("09-console-page-emulator-missing", "Console Page (emulator missing)")
+    color = SYS["wiiu"][3]
+    background(sv, glow=color, glow_opacity=0.35)
+    topbar(sv, active="consoles")
+    sv.add(rect(M, 152, 8, 76, color, rx=4),
+           text(M + 30, 202, "Wii U", 52, 800),
+           text(M + 32, 236, f"{len(WIIU)} games  ·  Plays in Cemu", 20, 500, fill=C["muted"]))
+    chip_w = 330
+    cx = W - M - chip_w
+    sv.add(rect(cx, 168, chip_w, 52, C["surface"], rx=26, stroke=C["line"], sw=1))
+    glyph(sv, cx + 14, 194, "X")
+    sv.add(text(cx + 60, 201, "Sort:", 19, 500, fill=C["muted"]), text(cx + 112, 201, "Most played", 19, 700),
+           text(cx + chip_w - 22, 201, "▾", 18, 700, fill=C["muted"], anchor="end"))
+    # missing-emulator notice
+    by, bh = 268, 176
+    sv.add(rect(M, by, W - 2 * M, bh, WARN, rx=18, opacity=0.1),
+           rect(M, by, W - 2 * M, bh, "none", rx=18, stroke=WARN, sw=2, opacity=0.55),
+           circle(M + 52, by + 52, 24, WARN), text(M + 52, by + 62, "!", 28, 800, fill=C["bg"], anchor="middle"),
+           text(M + 100, by + 50, "Cemu isn't installed", 26, 700),
+           text(M + 100, by + 82, "Wii U games need Cemu to play. You can still browse, favorite, rename and pick "
+                                  "artwork. Play stays off until Cemu is installed.", 18, 400, fill=C["muted"]))
+    cy = by + 106
+    cmd = "flatpak install flathub info.cemu.Cemu"
+    sv.add(rect(M + 100, cy, 640, 48, "#000000", rx=10, opacity=0.4),
+           text(M + 120, cy + 31, "$", 18, 600, fill=C["dim"], font=MONO),
+           text(M + 142, cy + 31, cmd, 18, 500, font=MONO))
+    bx = M + 760
+    sv.add(rect(bx - 5, cy - 5, 216, 58, "none", rx=15, stroke="#FFFFFF", sw=3),
+           rect(bx, cy, 206, 48, C["surface2"], rx=10),
+           rect(bx + 22, cy + 13, 14, 17, "none", rx=3, stroke=C["text"], sw=2),
+           rect(bx + 27, cy + 18, 14, 17, C["surface2"], rx=3, stroke=C["text"], sw=2),
+           text(bx + 54, cy + 31, "Copy command", 18, 600))
+    bx2 = bx + 226
+    sv.add(rect(bx2, cy, 168, 48, "none", rx=10, stroke=C["line"], sw=2),
+           f'<path d="M{bx2 + 34},{cy + 16} a9,9 0 1,0 3,7" fill="none" stroke="{C["text"]}" stroke-width="2.4"'
+           f' stroke-linecap="round"/>',
+           f'<path d="M{bx2 + 30},{cy + 11} l5,5 l-6,3" fill="none" stroke="{C["text"]}" stroke-width="2.4"'
+           f' stroke-linecap="round" stroke-linejoin="round"/>',
+           text(bx2 + 52, cy + 31, "Check again", 18, 600))
+    # games stay browsable
+    cols, top, pitch = 8, by + bh + 40, CH + 72
+    for i, g in enumerate(WIIU):
+        r, c = divmod(i, cols)
+        x, y = M + c * (CW + GAP), top + r * pitch
+        cover(sv, x, y, CW, CH, g, show_sys=False)
+        sv.add(text(x, y + CH + 32, "Never played", 17, 500, fill=C["muted"]))
+    sv.add(rect(0, 900, W, 110, sv.lin([(0, C["bg"], 0), (1, C["bg"], 1)])))
+    hintbar(sv, [(["A"], "Copy command"), (["B"], "Back")])
+    sv.save()
+
+
+def details_page(name, title, g, sysid, emulator, stats, path, favorite=False, missing=False):
+    sv = Svg(name, title)
     c1, c2 = PALETTE[g["pal"]]
     sv.add(rect(0, 0, W, H, sv.lin([(0, c1), (1, c2)], 0, 0, 1, 1)))
     sv.add(circle(1500, 330, 420, "#FFFFFF", 0.08), circle(1500, 330, 230, "#FFFFFF", 0.08),
@@ -399,28 +455,56 @@ def screen_details():
     sv.add(rect(0, 0, W, H, sv.lin([(0, C["bg"], 0.97), (0.55, C["bg"], 0.82), (1, C["bg"], 0.35)], 0, 0, 1, 0)))
     sv.add(rect(0, 640, W, 440, sv.lin([(0, C["bg"], 0), (1, C["bg"], 1)])))
     logo(sv)
-    sv.add(text(M + 150, 70, "GameCube   ›   Metroid Prime", 20, 500, fill=C["muted"]),
+    sv.add(text(M + 150, 70, f"{SYS[sysid][1]}   ›   {g['title']}", 20, 500, fill=C["muted"]),
            text(W - M, 76, "21:42", 24, 600, anchor="end"))
     cover(sv, M, 176, 380, 570, g, show_sys=False)
     x = 560
-    sv.add(rect(x, 196, 132, 32, SYS["gc"][3], rx=16), text(x + 66, 218, "GAMECUBE", 14, 700, anchor="middle", ls=1.5),
-           text(x + 152, 220, "★  Favorite", 18, 600, fill=C["star"]))
-    sv.add(text(x - 4, 322, g["title"], 84, 800), text(x, 368, "Opens in Dolphin", 22, 500, fill=C["muted"]))
-    stats = [("PLAYTIME", "31h 05m"), ("LAST PLAYED", "Yesterday"), ("ADDED", "3 Oct 2026"), ("SIZE", "1.36 GB")]
+    label = SHORT[sysid]
+    pill_w = len(label) * 10.5 + 48
+    sv.add(rect(x, 196, pill_w, 32, SYS[sysid][3], rx=16),
+           text(x + pill_w / 2, 218, label, 14, 700, anchor="middle", ls=1.5))
+    if favorite:
+        sv.add(text(x + pill_w + 20, 220, "★  Favorite", 18, 600, fill=C["star"]))
+    sv.add(text(x - 4, 322, g["title"], 84, 800), text(x, 368, f"Opens in {emulator}", 22, 500, fill=C["muted"]))
     for i, (k, v) in enumerate(stats):
         sx = x + i * 270
         sv.add(rect(sx, 410, 250, 104, C["surface"], rx=14, opacity=0.75),
                text(sx + 22, 448, k, 14, 700, fill=C["muted"], ls=1.5), text(sx + 22, 490, v, 30, 700))
-    sv.add(text(x, 560, "~/Games/gc/Metroid Prime (USA).rvz", 18, 400, fill=C["muted"], font=MONO))
+    sv.add(text(x, 560, path, 18, 400, fill=C["muted"], font=MONO))
     # actions
-    sv.add(rect(x, 604, 270, 76, "#FFFFFF", rx=38))
-    sv.add(circle(x + 52, 642, 17, C["bg"]), text(x + 52, 648, "A", 17, 800, fill="#FFFFFF", anchor="middle"),
-           text(x + 86, 652, "Play", 28, 800, fill=C["bg"]))
+    if missing:
+        sv.add(rect(x, 604, 270, 76, C["surface2"], rx=38, stroke=C["line"], sw=2, opacity=0.6),
+               circle(x + 52, 642, 17, "none", stroke=C["dim"], sw=2),
+               text(x + 52, 648, "A", 17, 800, fill=C["dim"], anchor="middle"),
+               text(x + 86, 652, "Play", 28, 800, fill=C["dim"]))
+        sv.add(rect(x + 285, 599, 246, 86, "none", rx=43, stroke="#FFFFFF", sw=3))
+    else:
+        sv.add(rect(x, 604, 270, 76, "#FFFFFF", rx=38))
+        sv.add(circle(x + 52, 642, 17, C["bg"]), text(x + 52, 648, "A", 17, 800, fill="#FFFFFF", anchor="middle"),
+               text(x + 86, 652, "Play", 28, 800, fill=C["bg"]))
     sv.add(rect(x + 290, 604, 236, 76, C["surface"], rx=38, stroke=C["line"], sw=2, opacity=0.85))
     glyph(sv, x + 322, 642, "Y")
     sv.add(text(x + 368, 651, "Options", 24, 700))
-    hintbar(sv, [(["A"], "Play"), (["B"], "Back"), (["Y"], "Options")])
+    if missing:
+        sv.add(circle(x + 14, 731, 14, WARN), text(x + 14, 738, "!", 18, 800, fill=C["bg"], anchor="middle"),
+               text(x + 40, 738, f"{emulator} isn't installed, so Play is off. The install command is on the "
+                                 f"{SYS[sysid][1]} page.", 19, 500, fill=WARN))
+        hintbar(sv, [(["B"], "Back"), (["Y"], "Options")])
+    else:
+        hintbar(sv, [(["A"], "Play"), (["B"], "Back"), (["Y"], "Options")])
     sv.save()
+
+
+def screen_details():
+    details_page("05-details", "Details Page", GAMECUBE[0], "gc", "Dolphin",
+                 [("PLAYTIME", "31h 05m"), ("LAST PLAYED", "Yesterday"), ("ADDED", "3 Oct 2026"), ("SIZE", "1.36 GB")],
+                 "~/Games/gc/Metroid Prime (USA).rvz", favorite=True)
+
+
+def screen_details_missing_emulator():
+    details_page("10-details-emulator-missing", "Details Page (emulator missing)", WIIU[0], "wiiu", "Cemu",
+                 [("PLAYTIME", "—"), ("LAST PLAYED", "Never"), ("ADDED", "17 Oct 2026"), ("SIZE", "22.4 GB")],
+                 "~/Games/wiiu/Xenoblade Chronicles X/", missing=True)
 
 
 def screen_options():
@@ -515,6 +599,7 @@ def screen_ds():
 
 if __name__ == "__main__":
     for fn in [screen_home, screen_home_empty, screen_carousel, screen_console_page, screen_details,
-               screen_options, screen_pause, screen_ds]:
+               screen_options, screen_pause, screen_ds, screen_console_missing_emulator,
+               screen_details_missing_emulator]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))

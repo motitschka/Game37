@@ -87,6 +87,7 @@ Two people use Game37:
 - Its Console Page shows a notice naming the emulator, the `flatpak install` command with a copy button, and a Check again button.
 - After installing, Check again clears the notice without restarting Game37.
 - Until then I can browse, favorite, rename and pick art, but Play is disabled.
+- A game's Details Page greys out Play and tells me which emulator is missing and where to find the install command.
 - Embedded Systems never show this notice. If their Core can't be downloaded, Play shows a clear error.
 - *Covers FR-CAR-9, FR-CAR-10*
 

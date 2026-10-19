@@ -63,6 +63,7 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
   - Its Carousel card is dimmed and shows a warning badge.
   - Its Console Page shows a notice at the top naming the missing emulator, with the `flatpak install` command, a copy button, and a **Check again** button that clears the notice without a restart once the emulator is found.
   - Browsing, Artwork and the Options Menu still work. Play is disabled until the emulator is installed.
+  - On the Details Page, Play is greyed out, focus starts on Options, and a line says which emulator is missing and that the install command is on the System's Console Page.
   - If the System also has no Games, the notice appears above the empty-library message.
 - **FR-CAR-10** Embedded Systems never show the missing-emulator notice, because their Core downloads on first Play. If that download fails (e.g. offline), pressing Play shows a clear error.
 
