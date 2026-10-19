@@ -16,6 +16,7 @@ use crate::cli::{Options, Screenshot};
 use crate::config;
 use crate::ctx::{self, Ctx};
 use crate::library::db::Library;
+use crate::library::watch::LibraryWatcher;
 use crate::screens;
 use crate::ui::chrome::{self, TopBar};
 use crate::ui::gfx::Gfx;
@@ -28,20 +29,27 @@ use crate::ui::text::Fonts;
 pub fn run(options: Options) -> Result<(), String> {
     let path = options.config.unwrap_or_else(config::config_path);
     let loaded = config::load(&path);
-    let ctx = match &loaded {
+    let (mut ctx, has_library) = match &loaded {
         Ok(Some(config)) => {
             let data_dir = options.data_dir.unwrap_or_else(config::data_dir);
             let library = Library::open(&data_dir.join("library.db")).map_err(|e| e.to_string())?;
-            let mut ctx = Ctx::new(library, config.games_root.clone());
-            ctx.scan_all(ctx::now()).map_err(|e| e.to_string())?;
-            ctx
+            (Ctx::new(library, config.games_root.clone()), true)
         }
-        _ => Ctx::empty(),
+        _ => (Ctx::empty(), false),
     };
     let nav = screens::start(loaded, &path);
     match options.screenshot {
-        Some(shot) => screenshot(nav, ctx, shot),
-        None => interactive(nav, ctx),
+        Some(shot) => {
+            // Scan in the foreground, so the screenshot shows every Game.
+            if has_library {
+                ctx.scan_all(ctx::now()).map_err(|e| e.to_string())?;
+            }
+            screenshot(nav, ctx, shot)
+        }
+        None => {
+            let watcher = has_library.then(|| LibraryWatcher::start(ctx.games_root.clone()));
+            interactive(nav, ctx, watcher)
+        }
     }
 }
 
@@ -61,7 +69,7 @@ fn canvas(video: &VideoSubsystem, w: u32, h: u32, driver: &CStr) -> Result<Windo
     Ok(canvas)
 }
 
-fn interactive(mut nav: Nav, mut ctx: Ctx) -> Result<(), String> {
+fn interactive(mut nav: Nav, mut ctx: Ctx, mut watcher: Option<LibraryWatcher>) -> Result<(), String> {
     let sdl = sdl3::init().map_err(|e| e.to_string())?;
     let video = sdl.video().map_err(|e| e.to_string())?;
     let gamepads = sdl.gamepad().map_err(|e| e.to_string())?;
@@ -81,6 +89,13 @@ fn interactive(mut nav: Nav, mut ctx: Ctx) -> Result<(), String> {
         for event in events.poll_iter() {
             if input.event(event, &mut gfx, &mut inputs) == Flow::Quit {
                 return Ok(());
+            }
+        }
+        if let Some(watcher) = &mut watcher {
+            match watcher.poll(&mut ctx.library, ctx::now()) {
+                Ok(true) => ctx.revision += 1,
+                Ok(false) => {}
+                Err(e) => eprintln!("game37: {e}"),
             }
         }
         if let Some(dir) = input.repeat.poll(sdl3::timer::ticks()) {
