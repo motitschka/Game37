@@ -167,12 +167,13 @@ impl Home {
         }
     }
 
-    /// Reloads if `ctx.revision` changed since the last load; tells the caller so it can ignore a
-    /// pointer event that was hit-tested against the previous frame's rects.
-    fn reload_if_changed(&mut self, ctx: &Ctx) -> bool {
+    /// Reloads if `ctx.revision` changed since the last load. The previous frame's hit rects may
+    /// point at Games that moved or went, so they are dropped until the next draw.
+    fn reload_if_changed(&mut self, ctx: &Ctx) {
         if self.revision == Some(ctx.revision) {
-            return false;
+            return;
         }
+        self.hits.clear();
         for (i, row) in self.shelves.iter_mut().enumerate() {
             let loaded = ctx
                 .library
@@ -191,7 +192,6 @@ impl Home {
             self.reveal(i);
         }
         self.reveal_shelf();
-        true
     }
 
     fn counts(&self) -> [usize; SHELVES] {
@@ -398,7 +398,7 @@ impl Screen for Home {
     }
 
     fn handle(&mut self, input: Input, ctx: &mut Ctx) -> Transition {
-        let reloaded = self.reload_if_changed(ctx);
+        self.reload_if_changed(ctx);
         match input {
             Input::Action(Action::Confirm) => return self.confirm(),
             Input::Action(dir) if dir.is_direction() => {
@@ -407,9 +407,6 @@ impl Screen for Home {
                     self.reveal_shelf();
                 }
             }
-            // The hit rects below are from the previous frame; a reload just now may have moved or
-            // removed what they pointed at, so skip this pointer event rather than act on stale rects.
-            Input::Pointer(_) if reloaded => {}
             Input::Pointer(Pointer::Move { x, y }) => {
                 if let Some(Target::Item(s, c)) = hit(&self.hits, x, y) {
                     self.focus.shelf = s;
@@ -619,11 +616,17 @@ mod tests {
             Target::Item(recently_added, 10),
         )];
 
-        // The Shelf shrinks to 3 Games, and a click lands where Game 10 used to be.
+        // The Shelf shrinks to 3 Games, and the pointer moves and clicks where Game 10 used to be,
+        // before the next draw. Acting on the stale rect would open See all.
         let shrunk: Vec<_> = (0..3).map(found).collect();
         ctx.library.sync_system("snes", &shrunk, 0).unwrap();
         ctx.revision += 1;
-        home.handle(Input::Pointer(Pointer::Click { x: 510.0, y: 410.0 }), &mut ctx);
+        home.handle(Input::Pointer(Pointer::Move { x: 510.0, y: 410.0 }), &mut ctx);
+        let clicked = home.handle(Input::Pointer(Pointer::Click { x: 510.0, y: 410.0 }), &mut ctx);
+        assert!(
+            matches!(clicked, Transition::None),
+            "a stale click must not open See all"
+        );
 
         assert_eq!(
             home.shelves[recently_added].games.len(),

@@ -120,6 +120,10 @@ impl GameGrid {
         self.focus = refocus(&self.games, self.focus, &games);
         self.games = games;
         self.revision = Some(ctx.revision);
+        // The previous frame's hit rects may point at Games that moved or went: drop them until the
+        // next draw.
+        self.hits.clear();
+        self.sort_hit = None;
         if self.extra.is_some() {
             self.sort_order = ctx.library.sort_order().unwrap_or_default();
         }
@@ -127,14 +131,9 @@ impl GameGrid {
         self.reveal_focus();
     }
 
-    /// Reloads if `ctx.revision` changed since the last load; tells the caller so it can ignore a
-    /// pointer event that was hit-tested against the previous frame's rects.
-    fn reload_if_changed(&mut self, ctx: &Ctx) -> bool {
+    fn reload_if_changed(&mut self, ctx: &Ctx) {
         if self.revision != Some(ctx.revision) {
             self.reload(ctx);
-            true
-        } else {
-            false
         }
     }
 
@@ -219,7 +218,7 @@ impl Screen for GameGrid {
     }
 
     fn handle(&mut self, input: Input, ctx: &mut Ctx) -> Transition {
-        let reloaded = self.reload_if_changed(ctx);
+        self.reload_if_changed(ctx);
         match input {
             Input::Action(Action::Back) => return Transition::Pop,
             Input::Action(Action::Sort) if self.extra.is_some() => self.cycle_sort(ctx),
@@ -227,9 +226,6 @@ impl Screen for GameGrid {
                 self.focus = step(self.focus, self.games.len(), COLS, dir);
                 self.reveal_focus();
             }
-            // The hit rects below are from the previous frame; a reload just now may have moved or
-            // removed what they pointed at, so skip this pointer event rather than act on stale rects.
-            Input::Pointer(_) if reloaded => {}
             Input::Pointer(Pointer::Click { x, y }) if self.sort_hit.is_some_and(|r| r.contains(x, y)) => {
                 self.cycle_sort(ctx);
             }
@@ -503,6 +499,7 @@ mod tests {
         let shrunk: Vec<_> = (0..3).map(found).collect();
         ctx.library.sync_system("snes", &shrunk, 0).unwrap();
         ctx.revision += 1;
+        grid.handle(Input::Pointer(Pointer::Move { x: 10.0, y: 10.0 }), &mut ctx);
         grid.handle(Input::Pointer(Pointer::Click { x: 10.0, y: 10.0 }), &mut ctx);
 
         assert_eq!(grid.games.len(), 3, "the grid did reload");
