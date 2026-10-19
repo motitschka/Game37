@@ -1,6 +1,7 @@
 pub mod app;
 pub mod cli;
 pub mod config;
+pub mod cores;
 pub mod ctx;
 pub mod emulators;
 pub mod launch;
