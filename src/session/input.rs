@@ -8,16 +8,20 @@ use sdl3::keyboard::Scancode;
 use crate::libretro::{Button, InputState, MAX_PORTS};
 
 /// Which pad plays on which port. A pad takes the lowest free port when it connects and gives it
-/// up when it disconnects; the other pads keep theirs.
+/// up when it disconnects; the other pads keep theirs. A pad that connects while every port is
+/// taken waits, and the longest-waiting one takes the next port freed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ports<Id> {
     slots: [Option<Id>; MAX_PORTS],
+    /// Connected pads without a port, longest-connected first.
+    waiting: Vec<Id>,
 }
 
 impl<Id: Copy + PartialEq> Default for Ports<Id> {
     fn default() -> Self {
         Ports {
             slots: [None; MAX_PORTS],
+            waiting: Vec::new(),
         }
     }
 }
@@ -28,15 +32,25 @@ impl<Id: Copy + PartialEq> Ports<Id> {
         if let Some(port) = self.port_of(pad) {
             return Some(port);
         }
-        let port = self.slots.iter().position(Option::is_none)?;
+        let Some(port) = self.slots.iter().position(Option::is_none) else {
+            if !self.waiting.contains(&pad) {
+                self.waiting.push(pad);
+            }
+            return None;
+        };
         self.slots[port] = Some(pad);
         Some(port)
     }
 
+    /// Frees `pad`'s port, which the longest-waiting pad takes.
     pub fn disconnect(&mut self, pad: Id) {
+        self.waiting.retain(|w| *w != pad);
         for slot in &mut self.slots {
             if *slot == Some(pad) {
                 *slot = None;
+                if !self.waiting.is_empty() {
+                    *slot = Some(self.waiting.remove(0));
+                }
             }
         }
     }
@@ -212,6 +226,33 @@ pub fn frame_input(
     (input, pause.update(held))
 }
 
+/// Core buttons already held when play starts or resumes: the Enter that launched the Game or
+/// chose Resume, the A that loaded a slot. The first frame after records what is held on each
+/// port, and each of those stays masked from the Core until it is released, so a menu button
+/// never reaches the Game.
+#[derive(Debug, Default)]
+pub struct HeldOver {
+    /// Per port; `None` until the first frame records it.
+    held: Option<[u16; MAX_PORTS]>,
+}
+
+impl HeldOver {
+    /// Clears from `input` the buttons still held over, first forgetting those let go.
+    pub fn mask(&mut self, input: &mut InputState) {
+        let held = self
+            .held
+            .get_or_insert_with(|| std::array::from_fn(|port| input.mask(port)));
+        for (port, held) in held.iter_mut().enumerate() {
+            *held &= input.mask(port);
+            for (b, button) in BUTTONS.iter().enumerate() {
+                if *held & 1 << b != 0 {
+                    input.set(port, *button, false);
+                }
+            }
+        }
+    }
+}
+
 /// ORs port 0 of `from` into `port` of `into`.
 fn merge(into: &mut InputState, port: usize, from: &InputState) {
     for b in 0..16u8 {
@@ -262,6 +303,77 @@ mod tests {
         assert_eq!(ports.connect(10), Some(0), "connecting twice changes nothing");
         let assigned: Vec<_> = ports.assigned().collect();
         assert_eq!(assigned, [(0, 10), (1, 13), (2, 12), (3, 11)]);
+    }
+
+    #[test]
+    fn a_fifth_pad_waits_and_takes_the_next_freed_port() {
+        let mut ports = Ports::default();
+        for pad in 10..14 {
+            ports.connect(pad);
+        }
+        assert_eq!(ports.connect(14), None, "four ports at most");
+        assert_eq!(ports.connect(15), None);
+        assert_eq!(ports.connect(14), None, "connecting twice changes nothing");
+        ports.disconnect(12);
+        assert_eq!(
+            ports.port_of(14),
+            Some(2),
+            "the longest-waiting pad takes the freed port"
+        );
+        ports.disconnect(15);
+        ports.disconnect(11);
+        assert_eq!(ports.port_of(11), None);
+        assert_eq!(
+            ports.port_of(15),
+            None,
+            "a pad that left while waiting is forgotten"
+        );
+        assert_eq!(
+            ports.connect(16),
+            Some(1),
+            "so the freed port stays free for the next"
+        );
+        let assigned: Vec<_> = ports.assigned().collect();
+        assert_eq!(assigned, [(0, 10), (1, 16), (2, 14), (3, 13)]);
+    }
+
+    #[test]
+    fn buttons_held_when_play_starts_reach_the_core_only_after_release() {
+        let only = |port, b: Button| {
+            let mut s = InputState::default();
+            s.set(port, b, true);
+            s
+        };
+        let mut held = HeldOver::default();
+        let mut input = only(0, Button::Start);
+        input.set(1, Button::A, true);
+        held.mask(&mut input);
+        assert_eq!(
+            input,
+            InputState::default(),
+            "Enter on Resume and A on a slot are held back"
+        );
+
+        let mut input = only(0, Button::Start);
+        input.set(0, Button::X, true);
+        input.set(1, Button::A, true);
+        held.mask(&mut input);
+        assert_eq!(
+            input,
+            only(0, Button::X),
+            "a new press goes through, the held ones don't"
+        );
+
+        let mut input = only(1, Button::A);
+        held.mask(&mut input);
+        assert_eq!(input, InputState::default(), "Start let go, A still held");
+        let mut none = InputState::default();
+        held.mask(&mut none);
+        let mut input = only(0, Button::Start);
+        input.set(1, Button::A, true);
+        let want = input;
+        held.mask(&mut input);
+        assert_eq!(input, want, "pressed again after release, they reach the Core");
     }
 
     fn pad(buttons: &[Pad]) -> PadState {

@@ -62,11 +62,16 @@ pub fn write(path: &Path, data: &[u8]) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
+    let tmp = tmp_path(path);
     fs::write(&tmp, data)?;
     fs::rename(&tmp, path)
+}
+
+/// The temporary file `path` is written through: `path` with `.tmp` added.
+pub fn tmp_path(path: &Path) -> PathBuf {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    PathBuf::from(tmp)
 }
 
 fn hash(data: &[u8]) -> u64 {
