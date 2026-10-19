@@ -372,6 +372,12 @@ impl Screen for Carousel {
         }
     }
 
+    /// A slide still in progress when the Carousel's tab is left, or Game37 quits, would otherwise
+    /// never settle, and the last System would be lost.
+    fn leave(&mut self, ctx: &Ctx) {
+        self.save(ctx);
+    }
+
     fn hints(&self) -> Vec<Hint> {
         vec![
             Hint::new(&[Action::Confirm], "Open"),
@@ -590,6 +596,20 @@ mod tests {
         carousel.advance(false);
         carousel.settle(&ctx);
         assert_eq!(ctx.library.last_system().unwrap(), carousel.system().id);
+    }
+
+    #[test]
+    fn leaving_mid_slide_saves_the_focused_system() {
+        let mut ctx = Ctx::empty();
+        ctx.animate = true;
+        let mut carousel = Carousel::new(&ctx.library);
+        act(&mut carousel, &mut ctx, Input::Action(Action::Right));
+        carousel.advance(ctx.animate);
+        carousel.settle(&ctx);
+        assert_eq!(ctx.library.last_system().unwrap(), "nes", "still sliding");
+        // The tab is switched, or Game37 quits, before the slide settles.
+        carousel.leave(&ctx);
+        assert_eq!(ctx.library.last_system().unwrap(), "gb");
     }
 
     #[test]

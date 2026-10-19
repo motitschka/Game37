@@ -14,6 +14,9 @@ pub trait Screen {
     /// Draws the content between the top bar and the hint bar.
     fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx);
     fn hints(&self) -> Vec<Hint>;
+    /// Called when the screen stops being shown without being popped: its tab is switched away
+    /// from, or Game37 quits. A place to save state that is otherwise saved lazily.
+    fn leave(&mut self, _ctx: &Ctx) {}
 }
 
 pub enum Transition {
@@ -113,11 +116,13 @@ impl Nav {
     pub fn handle(&mut self, input: Input, hits: &Hits, ctx: &mut Ctx) -> Flow {
         let tabs = self.tabs.len();
         match input {
-            Input::Action(Action::PrevTab) if tabs > 1 => self.active = (self.active + tabs - 1) % tabs,
-            Input::Action(Action::NextTab) if tabs > 1 => self.active = (self.active + 1) % tabs,
+            Input::Action(Action::PrevTab) if tabs > 1 => {
+                self.switch_to((self.active + tabs - 1) % tabs, ctx)
+            }
+            Input::Action(Action::NextTab) if tabs > 1 => self.switch_to((self.active + 1) % tabs, ctx),
             Input::Pointer(Pointer::Back) if self.depth() > 1 => self.pop(),
             Input::Pointer(Pointer::Click { x, y }) if hit(&hits.tabs, x, y).is_some() => {
-                self.active = hit(&hits.tabs, x, y).unwrap().min(tabs - 1);
+                self.switch_to(hit(&hits.tabs, x, y).unwrap().min(tabs - 1), ctx);
             }
             Input::Pointer(Pointer::Click { x, y }) if hits.back.is_some_and(|r| r.contains(x, y)) => {
                 self.pop()
@@ -134,6 +139,20 @@ impl Nav {
             },
         }
         Flow::Continue
+    }
+
+    fn switch_to(&mut self, tab: usize, ctx: &Ctx) {
+        if tab != self.active {
+            self.top().leave(ctx);
+            self.active = tab;
+        }
+    }
+
+    /// Tells every screen Game37 is quitting.
+    pub fn leave_all(&mut self, ctx: &Ctx) {
+        for screen in self.tabs.iter_mut().flat_map(|t| t.stack.iter_mut()) {
+            screen.leave(ctx);
+        }
     }
 
     /// Pops the active tab's top screen; a root screen stays.
@@ -177,6 +196,45 @@ mod tests {
     }
 
     type Log = Rc<RefCell<Vec<(&'static str, Input)>>>;
+
+    /// A screen that records when it is left.
+    struct Leaver(&'static str, Rc<RefCell<Vec<&'static str>>>);
+
+    impl Screen for Leaver {
+        fn title(&self) -> &str {
+            self.0
+        }
+        fn handle(&mut self, _: Input, _: &mut Ctx) -> Transition {
+            Transition::None
+        }
+        fn draw(&mut self, _: &mut Gfx<'_>, _: &Ctx) {}
+        fn hints(&self) -> Vec<Hint> {
+            Vec::new()
+        }
+        fn leave(&mut self, _: &Ctx) {
+            self.1.borrow_mut().push(self.0);
+        }
+    }
+
+    #[test]
+    fn switching_tabs_and_quitting_leave_the_screens() {
+        let left = Rc::new(RefCell::new(Vec::new()));
+        let mut nav = Nav::with_tabs(vec![
+            ("Home", Box::new(Leaver("Home", left.clone()))),
+            ("Consoles", Box::new(Leaver("Consoles", left.clone()))),
+        ]);
+        let ctx = &mut Ctx::empty();
+        nav.handle(Input::Action(Action::NextTab), &Hits::default(), ctx);
+        assert_eq!(*left.borrow(), ["Home"]);
+        let hits = Hits {
+            tabs: vec![(Rect::new(0.0, 0.0, 10.0, 10.0), 1)],
+            ..Hits::default()
+        };
+        nav.handle(Input::Pointer(Pointer::Click { x: 5.0, y: 5.0 }), &hits, ctx);
+        assert_eq!(*left.borrow(), ["Home"], "clicking the active tab leaves nothing");
+        nav.leave_all(ctx);
+        assert_eq!(*left.borrow(), ["Home", "Home", "Consoles"]);
+    }
 
     fn probe(title: &'static str, log: &Log, on_confirm: fn() -> Transition) -> Box<dyn Screen> {
         Box::new(Probe {

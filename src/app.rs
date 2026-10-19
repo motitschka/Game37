@@ -96,7 +96,7 @@ fn interactive(mut nav: Nav, mut ctx: Ctx, mut watcher: Option<LibraryWatcher>) 
     let mut hits = Hits::default();
     let mut inputs = Vec::new();
     let mut sync_failing = false;
-    loop {
+    'frames: loop {
         let frame_start = Instant::now();
         // Nothing is drawn while the window can't be seen: sleep until an event, or long enough
         // for the watcher to keep up.
@@ -108,7 +108,7 @@ fn interactive(mut nav: Nav, mut ctx: Ctx, mut watcher: Option<LibraryWatcher>) 
         };
         for event in woken_by.into_iter().chain(events.poll_iter()) {
             if input.event(event, &mut gfx, &mut inputs) == Flow::Quit {
-                return Ok(());
+                break 'frames;
             }
         }
         if let Some(watcher) = &mut watcher {
@@ -132,7 +132,7 @@ fn interactive(mut nav: Nav, mut ctx: Ctx, mut watcher: Option<LibraryWatcher>) 
         inputs.extend(input.controls.poll(sdl3::timer::ticks()));
         for i in inputs.drain(..) {
             if nav.handle(i, &hits, &mut ctx) == Flow::Quit {
-                return Ok(());
+                break 'frames;
             }
         }
         if !shown {
@@ -146,6 +146,8 @@ fn interactive(mut nav: Nav, mut ctx: Ctx, mut watcher: Option<LibraryWatcher>) 
             std::thread::sleep(left);
         }
     }
+    nav.leave_all(&ctx);
+    Ok(())
 }
 
 fn screenshot(mut nav: Nav, mut ctx: Ctx, shot: Screenshot) -> Result<(), String> {
