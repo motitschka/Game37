@@ -87,6 +87,7 @@ fn interactive(mut nav: Nav, mut ctx: Ctx, mut watcher: Option<LibraryWatcher>) 
     let mut input = InputState::new(gamepads);
     let mut hits = Hits::default();
     let mut inputs = Vec::new();
+    let mut sync_failing = false;
     loop {
         for event in events.poll_iter() {
             if input.event(event, &mut gfx, &mut inputs) == Flow::Quit {
@@ -95,9 +96,20 @@ fn interactive(mut nav: Nav, mut ctx: Ctx, mut watcher: Option<LibraryWatcher>) 
         }
         if let Some(watcher) = &mut watcher {
             match watcher.poll(&mut ctx.library, ctx::now()) {
-                Ok(true) => ctx.revision += 1,
-                Ok(false) => {}
-                Err(e) => eprintln!("game37: {e}"),
+                Ok(changed) => {
+                    sync_failing = false;
+                    if changed {
+                        ctx.revision += 1;
+                    }
+                }
+                // The watcher retries the failed sync every frame: log it and reload the views
+                // (some Systems may have synced before the failure) once, not every frame.
+                Err(e) if !sync_failing => {
+                    sync_failing = true;
+                    ctx.revision += 1;
+                    eprintln!("game37: {e}");
+                }
+                Err(_) => {}
             }
         }
         if let Some(dir) = input.repeat.poll(sdl3::timer::ticks()) {
