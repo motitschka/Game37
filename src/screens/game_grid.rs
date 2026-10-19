@@ -1,17 +1,26 @@
-//! A titled grid of tall covers for a list of Games: "See all" on Home, and Console Pages later.
+//! A titled grid of tall covers for a list of Games: "See all" on Home, and a System's Console
+//! Page (FR-CAR-3), after `screen_console_page` in `design/generate_mockups.py`.
 
 use crate::ctx::Ctx;
-use crate::library::db::{DbError, GameRow, Library};
+use crate::library::db::{DbError, GameRow, Library, SortOrder};
+use crate::ui::chrome;
 use crate::ui::cover::{self, COVER_GAP, COVER_H, COVER_W, RING_REACH};
 use crate::ui::gfx::{Align, Gfx, TextStyle};
-use crate::ui::input::{Action, Input, Pointer};
+use crate::ui::input::{Action, Input, Pointer, glyph_label};
 use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
-use crate::ui::theme::{BG, MUTED, TEXT};
+use crate::ui::theme::{BG, Colour, LINE, MUTED, SURFACE, TEXT};
 use crate::ui::{M, Rect, W, hit, scroll};
 
 /// Where a grid's Games come from; called again whenever the library changes.
 pub type Source = Box<dyn Fn(&Library) -> Result<Vec<GameRow>, DbError>>;
+
+/// A Console Page's extras, absent on Home's "See all": the colour tint, the sort chip, and the
+/// empty-state hint pointing at the System's folder (FR-CAR-4).
+struct Extra {
+    tint: Colour,
+    empty_hint: String,
+}
 
 const COLS: usize = 8;
 const TOP: f32 = 288.0;
@@ -20,6 +29,11 @@ const PITCH_X: f32 = COVER_W + COVER_GAP;
 const PITCH_Y: f32 = COVER_H + 72.0;
 /// Pixels scrolled per wheel notch.
 const WHEEL_STEP: f32 = PITCH_Y / 2.0;
+/// The sort chip, after `screen_console_page` in `design/generate_mockups.py`.
+const CHIP_Y: f32 = 168.0;
+const CHIP_H: f32 = 52.0;
+const CHIP_PAD: f32 = 20.0;
+const ARROW_W: f32 = 10.0;
 
 /// The focus after moving one step in `dir` in a grid of `len` items, `cols` per row. Left and
 /// Right follow reading order and stop at the ends; Down onto a shorter last row lands on its last
@@ -45,6 +59,19 @@ pub fn refocus(old: &[GameRow], focus: usize, new: &[GameRow]) -> usize {
         .unwrap_or(focus.min(new.len().saturating_sub(1)))
 }
 
+/// The header line under the title: "<n> games", singular when one, with the sort order appended
+/// for a Console Page (FR-CAR-5).
+fn header(count: usize, order: Option<SortOrder>) -> String {
+    let games = match count {
+        1 => "1 game".to_owned(),
+        n => format!("{n} games"),
+    };
+    match order {
+        Some(order) => format!("{games} · Sorted by {}", order.label()),
+        None => games,
+    }
+}
+
 pub struct GameGrid {
     title: String,
     source: Source,
@@ -54,6 +81,9 @@ pub struct GameGrid {
     focus: usize,
     scroll: f32,
     hits: Vec<(Rect, usize)>,
+    extra: Option<Extra>,
+    /// Where the sort chip was last drawn, for the mouse.
+    sort_hit: Option<Rect>,
 }
 
 impl GameGrid {
@@ -66,13 +96,19 @@ impl GameGrid {
             focus: 0,
             scroll: 0.0,
             hits: Vec::new(),
+            extra: None,
+            sort_hit: None,
         }
     }
 
-    fn reload_if_changed(&mut self, ctx: &Ctx) {
-        if self.revision == Some(ctx.revision) {
-            return;
-        }
+    /// Turns this into a Console Page: a `tint` from the System's colour, a sort chip, and
+    /// `empty_hint` shown in place of the grid when the System has no Games (FR-CAR-4, FR-CAR-5).
+    pub fn sortable(mut self, tint: Colour, empty_hint: String) -> GameGrid {
+        self.extra = Some(Extra { tint, empty_hint });
+        self
+    }
+
+    fn reload(&mut self, ctx: &Ctx) {
         let games = (self.source)(&ctx.library).unwrap_or_else(|e| {
             eprintln!("game37: {e}");
             Vec::new()
@@ -81,6 +117,25 @@ impl GameGrid {
         self.games = games;
         self.revision = Some(ctx.revision);
         self.scroll = scroll::clamp(self.scroll, self.content_h(), BOTTOM - TOP);
+    }
+
+    fn reload_if_changed(&mut self, ctx: &Ctx) {
+        if self.revision != Some(ctx.revision) {
+            self.reload(ctx);
+        }
+    }
+
+    /// Cycles the global sort order and reloads (FR-CAR-5).
+    fn cycle_sort(&mut self, ctx: &mut Ctx) {
+        if self.extra.is_none() {
+            return;
+        }
+        let next = ctx.library.sort_order().unwrap_or_default().next();
+        if let Err(e) = ctx.library.set_sort_order(next) {
+            eprintln!("game37: can't save the sort order: {e}");
+        }
+        self.reload(ctx);
+        self.reveal_focus();
     }
 
     fn content_h(&self) -> f32 {
@@ -97,6 +152,51 @@ impl GameGrid {
         );
         self.scroll = scroll::clamp(s, self.content_h(), BOTTOM - TOP);
     }
+
+    /// The sort chip, right-aligned next to the title; returns where it was drawn.
+    fn draw_sort_chip(&self, gfx: &mut Gfx<'_>, order: SortOrder, ctx: &Ctx) -> Rect {
+        let glyph_label = glyph_label(Action::Sort, ctx.input_kind, ctx.button_style);
+        let bold = TextStyle::new(19, Weight::Bold, TEXT);
+        let muted = TextStyle::new(19, Weight::Medium, MUTED);
+        let label = order.label();
+        let glyph_w = chrome::glyph_width(gfx, glyph_label);
+        let sort_w = gfx.measure("Sort:", muted);
+        let label_w = gfx.measure(label, bold);
+        let chip_w = CHIP_PAD + glyph_w + 10.0 + sort_w + 8.0 + label_w + 14.0 + ARROW_W + CHIP_PAD;
+        let r = Rect::new(W - M - chip_w, CHIP_Y, chip_w, CHIP_H);
+        gfx.fill_round_rect(r, CHIP_H / 2.0, SURFACE);
+        gfx.stroke_round_rect(r, CHIP_H / 2.0, 1.0, LINE);
+        let cy = r.y + r.h / 2.0;
+        let mut x = r.x + CHIP_PAD;
+        x += chrome::glyph(gfx, x, cy, glyph_label) + 10.0;
+        gfx.text(x, cy + 6.0, "Sort:", muted, Align::Left);
+        x += sort_w + 8.0;
+        gfx.text(x, cy + 6.0, label, bold, Align::Left);
+        // A small chevron, drawn rather than a text glyph (not every font covers "▾").
+        let ax = r.x + r.w - CHIP_PAD - ARROW_W / 2.0;
+        gfx.line(ax - 5.0, cy - 3.0, ax, cy + 3.0, 2.0, MUTED);
+        gfx.line(ax, cy + 3.0, ax + 5.0, cy - 3.0, 2.0, MUTED);
+        r
+    }
+
+    /// The empty-state message in place of the grid (FR-CAR-4, US-11).
+    fn draw_empty(&self, gfx: &mut Gfx<'_>) {
+        let Some(extra) = &self.extra else { return };
+        gfx.text(
+            W / 2.0,
+            TOP + 140.0,
+            "No games yet",
+            TextStyle::new(28, Weight::Bold, TEXT),
+            Align::Centre,
+        );
+        gfx.text(
+            W / 2.0,
+            TOP + 180.0,
+            &extra.empty_hint,
+            TextStyle::new(20, Weight::Medium, MUTED),
+            Align::Centre,
+        );
+    }
 }
 
 impl Screen for GameGrid {
@@ -108,9 +208,13 @@ impl Screen for GameGrid {
         self.reload_if_changed(ctx);
         match input {
             Input::Action(Action::Back) => return Transition::Pop,
+            Input::Action(Action::Sort) if self.extra.is_some() => self.cycle_sort(ctx),
             Input::Action(dir) if dir.is_direction() => {
                 self.focus = step(self.focus, self.games.len(), COLS, dir);
                 self.reveal_focus();
+            }
+            Input::Pointer(Pointer::Click { x, y }) if self.sort_hit.is_some_and(|r| r.contains(x, y)) => {
+                self.cycle_sort(ctx);
             }
             Input::Pointer(Pointer::Move { x, y }) | Input::Pointer(Pointer::Click { x, y }) => {
                 // Confirm on a Game does nothing until launching exists, so a click only focuses.
@@ -128,26 +232,40 @@ impl Screen for GameGrid {
 
     fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
         self.reload_if_changed(ctx);
+        let mut title_x = M;
+        let order = match &self.extra {
+            Some(extra) => {
+                chrome::background_tinted(gfx, extra.tint, 0.35);
+                gfx.fill_round_rect(Rect::new(M, 152.0, 8.0, 76.0), 4.0, extra.tint);
+                title_x += 30.0;
+                Some(ctx.library.sort_order().unwrap_or_default())
+            }
+            None => None,
+        };
         gfx.text(
-            M,
+            title_x,
             202.0,
             &self.title,
             TextStyle::new(52, Weight::ExtraBold, TEXT),
             Align::Left,
         );
-        let count = match self.games.len() {
-            1 => "1 game".to_owned(),
-            n => format!("{n} games"),
-        };
         gfx.text(
-            M + 2.0,
+            title_x + 2.0,
             236.0,
-            &count,
+            &header(self.games.len(), order),
             TextStyle::new(20, Weight::Medium, MUTED),
             Align::Left,
         );
+        self.sort_hit = None;
+        if let Some(order) = order {
+            self.sort_hit = Some(self.draw_sort_chip(gfx, order, ctx));
+        }
 
         self.hits.clear();
+        if self.extra.is_some() && self.games.is_empty() {
+            self.draw_empty(gfx);
+            return;
+        }
         let clip_top = TOP - RING_REACH - 4.0;
         gfx.clip(Some(Rect::new(0.0, clip_top, W, BOTTOM - clip_top)));
         let first_row = ((self.scroll - RING_REACH) / PITCH_Y).floor().max(0.0) as usize;
@@ -198,7 +316,12 @@ impl Screen for GameGrid {
     }
 
     fn hints(&self) -> Vec<Hint> {
-        vec![Hint::new(&[Action::Back], "Back")]
+        let mut hints = Vec::new();
+        if self.extra.is_some() && !self.games.is_empty() {
+            hints.push(Hint::new(&[Action::Sort], "Sort"));
+        }
+        hints.push(Hint::new(&[Action::Back], "Back"));
+        hints
     }
 }
 
@@ -217,6 +340,18 @@ mod tests {
             playtime_secs: 0,
             favorite: false,
         }
+    }
+
+    #[test]
+    fn header_is_singular_for_one_game_and_appends_the_sort_order() {
+        assert_eq!(header(0, None), "0 games");
+        assert_eq!(header(1, None), "1 game");
+        assert_eq!(header(6, None), "6 games");
+        assert_eq!(header(6, Some(SortOrder::AZ)), "6 games · Sorted by A–Z");
+        assert_eq!(
+            header(1, Some(SortOrder::MostPlayed)),
+            "1 game · Sorted by Most played"
+        );
     }
 
     #[test]

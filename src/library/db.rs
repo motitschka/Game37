@@ -141,6 +141,26 @@ impl SortOrder {
         .find(|o| o.as_str() == s)
     }
 
+    /// The next order in the Sort action's cycle (FR-CAR-5), wrapping back to A–Z.
+    pub fn next(self) -> SortOrder {
+        match self {
+            SortOrder::AZ => SortOrder::LastPlayed,
+            SortOrder::LastPlayed => SortOrder::MostPlayed,
+            SortOrder::MostPlayed => SortOrder::RecentlyAdded,
+            SortOrder::RecentlyAdded => SortOrder::AZ,
+        }
+    }
+
+    /// The label shown in a Console Page's header and sort chip.
+    pub fn label(self) -> &'static str {
+        match self {
+            SortOrder::AZ => "A–Z",
+            SortOrder::LastPlayed => "Last played",
+            SortOrder::MostPlayed => "Most played",
+            SortOrder::RecentlyAdded => "Recently added",
+        }
+    }
+
     /// Primary sort key, ascending; ties fall back to Display Title and id. `Reverse` puts the largest
     /// value first and `None` (never played) last.
     fn key(self, game: &Fetched) -> Reverse<Option<i64>> {
@@ -737,6 +757,18 @@ mod tests {
         assert_eq!(
             titles(&lib.system_games("snes", SortOrder::AZ).unwrap()),
             ["Hidden", "Shown"]
+        );
+    }
+
+    #[test]
+    fn sort_order_cycles_and_wraps() {
+        assert_eq!(SortOrder::AZ.next(), SortOrder::LastPlayed);
+        assert_eq!(SortOrder::LastPlayed.next(), SortOrder::MostPlayed);
+        assert_eq!(SortOrder::MostPlayed.next(), SortOrder::RecentlyAdded);
+        assert_eq!(
+            SortOrder::RecentlyAdded.next(),
+            SortOrder::AZ,
+            "wraps back to A–Z"
         );
     }
 

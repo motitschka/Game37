@@ -5,12 +5,18 @@ use super::gfx::{Align, Gfx, TextStyle};
 use super::input::{Action, ButtonStyle, InputKind, glyph_label};
 use super::nav::Hint;
 use super::text::Weight;
-use super::theme::{ACCENT, BG, LINE, MUTED, SURFACE2, TEXT};
+use super::theme::{ACCENT, BG, Colour, LINE, MUTED, SURFACE2, TEXT};
 use super::{H, M, Rect, W};
 
 pub fn background(gfx: &mut Gfx<'_>) {
+    background_tinted(gfx, ACCENT, 0.18);
+}
+
+/// The background glow in a chosen colour and opacity, e.g. a System's colour on its Console
+/// Page (FR-CAR-3), subtler than the Carousel's tint.
+pub fn background_tinted(gfx: &mut Gfx<'_>, colour: Colour, opacity: f32) {
     gfx.clear(BG);
-    gfx.radial_glow(W / 2.0, 0.0, 0.9 * W, 0.9 * 520.0, ACCENT, 0.18);
+    gfx.radial_glow(W / 2.0, 0.0, 0.9 * W, 0.9 * 520.0, colour, opacity);
 }
 
 const GLYPH_LABEL: TextStyle = TextStyle::new(14, Weight::Bold, TEXT);
