@@ -1,6 +1,6 @@
 //! In-game Saves: the Core's battery-backed save memory, kept in
-//! `<Games Root>/saves/<system>/<game file stem>.srm` (FR-LIB-9) and always written to disk
-//! (FR-EMB-7).
+//! `<Games Root>/saves/<system>/<subfolder>/<game file stem>.srm` (FR-LIB-9) and always written to
+//! disk (FR-EMB-7).
 
 use std::fs;
 use std::hash::{DefaultHasher, Hasher};
@@ -16,12 +16,22 @@ pub fn save_dir(games_root: &Path, system: &str) -> PathBuf {
     games_root.join("saves").join(system)
 }
 
+/// The folder in `system_dir` (`saves/<system>/` or `states/<system>/`) for the Game at
+/// `rel_path`: the Game's own subfolder inside its System's folder, mirrored, so Games with the
+/// same file stem in different subfolders keep separate files. Files are named by stem alone, so
+/// a RetroArch `.srm` placed by hand still matches; two Games in one folder whose names differ
+/// only in extension (`Super Mario World.sfc` and `.smc`) share them.
+pub fn game_dir(system_dir: &Path, system: &str, rel_path: &Path) -> PathBuf {
+    let folder = rel_path.parent().unwrap_or(Path::new(""));
+    system_dir.join(folder.strip_prefix(system).unwrap_or(folder))
+}
+
 /// The In-game Save file of the Game at `rel_path`.
 pub fn srm_path(games_root: &Path, system: &str, rel_path: &Path) -> PathBuf {
     let stem = rel_path.file_stem().unwrap_or(rel_path.as_os_str());
     let mut name = stem.to_owned();
     name.push(".srm");
-    save_dir(games_root, system).join(name)
+    game_dir(&save_dir(games_root, system), system, rel_path).join(name)
 }
 
 /// Copies the save file at `path`, if there is one, into the Core's save memory. On a size
@@ -114,6 +124,31 @@ mod tests {
             Path::new("snes/Super Metroid (Europe).sfc"),
         );
         assert_eq!(p, Path::new("/g/saves/snes/Super Metroid (Europe).srm"));
+    }
+
+    #[test]
+    fn games_with_the_same_stem_in_different_subfolders_keep_separate_saves() {
+        let top = srm_path(Path::new("/g"), "snes", Path::new("snes/Super Mario World.sfc"));
+        let hack = srm_path(
+            Path::new("/g"),
+            "snes",
+            Path::new("snes/hacks/Super Mario World.sfc"),
+        );
+        assert_eq!(top, Path::new("/g/saves/snes/Super Mario World.srm"));
+        assert_eq!(hack, Path::new("/g/saves/snes/hacks/Super Mario World.srm"));
+        let deep = srm_path(Path::new("/g"), "gb", Path::new("gb/a/b/Tetris.gb"));
+        assert_eq!(deep, Path::new("/g/saves/gb/a/b/Tetris.srm"));
+    }
+
+    #[test]
+    fn writing_a_save_creates_its_subfolders() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = srm_path(dir.path(), "snes", Path::new("snes/hacks/Super Mario World.sfc"));
+        write(&path, &[1]).unwrap();
+        assert_eq!(
+            fs::read(dir.path().join("saves/snes/hacks/Super Mario World.srm")).unwrap(),
+            [1]
+        );
     }
 
     #[test]

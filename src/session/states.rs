@@ -1,5 +1,6 @@
 //! Save States and Resume States: the Core's serialized machine state, kept in
-//! `<Games Root>/states/<system>/` (FR-LIB-9) as `<game file stem>.slot<N>.state` with a
+//! `<Games Root>/states/<system>/`, in the Game's subfolder there (FR-LIB-9; see
+//! [`saves::game_dir`]), as `<game file stem>.slot<N>.state` with a
 //! `.slot<N>.png` screenshot for the three manual slots (FR-EMB-5), and as
 //! `<game file stem>.resume.state` for the Resume State written on quitting (FR-EMB-6).
 
@@ -7,6 +8,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use super::saves;
 use crate::libretro::{Frame, PixelFormat};
 
 /// How many manual Save State slots each Game has.
@@ -24,7 +26,7 @@ impl StatePaths {
     pub fn new(games_root: &Path, system: &str, rel_path: &Path) -> StatePaths {
         let stem = rel_path.file_stem().unwrap_or(rel_path.as_os_str());
         StatePaths {
-            dir: games_root.join("states").join(system),
+            dir: saves::game_dir(&games_root.join("states").join(system), system, rel_path),
             stem: stem.to_string_lossy().into_owned(),
         }
     }
@@ -176,6 +178,32 @@ mod tests {
         assert_eq!(
             p.resume(),
             Path::new("/g/states/snes/Super Metroid (Europe).resume.state")
+        );
+    }
+
+    #[test]
+    fn games_with_the_same_stem_in_different_subfolders_keep_separate_states() {
+        let top = StatePaths::new(Path::new("/g"), "snes", Path::new("snes/Super Mario World.sfc"));
+        let hack = StatePaths::new(
+            Path::new("/g"),
+            "snes",
+            Path::new("snes/hacks/Super Mario World.sfc"),
+        );
+        assert_eq!(
+            top.resume(),
+            Path::new("/g/states/snes/Super Mario World.resume.state")
+        );
+        assert_eq!(
+            hack.slot(1),
+            Path::new("/g/states/snes/hacks/Super Mario World.slot1.state")
+        );
+        assert_eq!(
+            hack.thumb(1),
+            Path::new("/g/states/snes/hacks/Super Mario World.slot1.png")
+        );
+        assert_eq!(
+            hack.resume(),
+            Path::new("/g/states/snes/hacks/Super Mario World.resume.state")
         );
     }
 
