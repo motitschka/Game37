@@ -11,6 +11,8 @@ pub struct Ctx {
     pub games_root: PathBuf,
     /// Bumped whenever the library's Games changed on disk, so screens know to reload them.
     pub revision: u64,
+    /// Whether screens animate. Off in screenshot mode and tests, so they draw the settled state.
+    pub animate: bool,
 }
 
 impl Ctx {
@@ -19,6 +21,7 @@ impl Ctx {
             library,
             games_root,
             revision: 0,
+            animate: false,
         }
     }
 

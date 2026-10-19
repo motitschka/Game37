@@ -38,10 +38,10 @@ pub fn run(options: Options) -> Result<(), String> {
         }
         _ => Ctx::empty(),
     };
-    let nav = screens::start(loaded, &path);
+    let nav = screens::start(loaded, &path, &ctx);
     match options.screenshot {
         Some(shot) => screenshot(nav, ctx, shot),
-        None => interactive(nav, ctx),
+        None => interactive(nav, Ctx { animate: true, ..ctx }),
     }
 }
 

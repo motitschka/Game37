@@ -26,6 +26,18 @@ impl Colour {
             ..self
         }
     }
+
+    /// The colour `t` of the way from `self` to `other`, with `t` clamped to 0 to 1.
+    pub fn mix(self, other: Colour, t: f32) -> Colour {
+        let t = t.clamp(0.0, 1.0);
+        let lerp = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
+        Colour {
+            r: lerp(self.r, other.r),
+            g: lerp(self.g, other.g),
+            b: lerp(self.b, other.b),
+            a: lerp(self.a, other.a),
+        }
+    }
 }
 
 pub const BG: Colour = Colour::hex(0x0B0D12);
@@ -37,3 +49,17 @@ pub const MUTED: Colour = Colour::hex(0x8A93A6);
 pub const DIM: Colour = Colour::hex(0x5B6477);
 pub const ACCENT: Colour = Colour::hex(0x8B7BFF);
 pub const STAR: Colour = Colour::hex(0xFFC84A);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mix_goes_from_one_colour_to_the_other_and_clamps() {
+        let (a, b) = (Colour::hex(0x000000), Colour::hex(0xFF8040));
+        assert_eq!(a.mix(b, 0.0), a);
+        assert_eq!(a.mix(b, 1.0), b);
+        assert_eq!(a.mix(b, 0.5), Colour::hex(0x804020));
+        assert_eq!(a.mix(b, 2.0), b);
+    }
+}
