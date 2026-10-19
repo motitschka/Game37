@@ -5,6 +5,7 @@ use super::gfx::Gfx;
 use super::input::{Action, Input, Pointer};
 use super::{Rect, hit};
 use crate::ctx::Ctx;
+use crate::screens::pause::PauseMenu;
 use crate::session::sdl::Session;
 
 /// A full-screen view. The app draws the background, top bar and hint bar around it.
@@ -30,6 +31,10 @@ pub trait Screen {
     }
     /// The embedded game session it runs, if it is a running Game.
     fn session(&mut self) -> Option<&mut Session> {
+        None
+    }
+    /// The Pause Menu, if it is one.
+    fn pause_menu(&mut self) -> Option<&mut PauseMenu> {
         None
     }
 }

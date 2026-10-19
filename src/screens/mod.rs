@@ -5,6 +5,7 @@ pub mod game_grid;
 pub mod home;
 pub mod message;
 mod no_config;
+pub mod pause;
 pub mod playing;
 mod stub;
 
