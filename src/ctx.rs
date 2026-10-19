@@ -2,7 +2,8 @@
 
 use std::path::PathBuf;
 
-use crate::library::db::{DbError, Library};
+use crate::emulators::Emulators;
+use crate::library::db::{DbError, GameRow, Library};
 use crate::library::scan;
 use crate::systems::SYSTEMS;
 use crate::ui::input::{ButtonStyle, InputKind};
@@ -17,6 +18,16 @@ pub struct Ctx {
     /// What the player last used, so screens can show matching glyphs in their own text.
     pub input_kind: InputKind,
     pub button_style: ButtonStyle,
+    /// Which Standalone Emulators are installed, as last checked.
+    pub emulators: Emulators,
+    /// How Check again re-detects installed emulators (FR-CAR-9): `Emulators::detect` in
+    /// production; screenshot mode and tests swap it so they never run `flatpak`.
+    pub detect_emulators: Box<dyn Fn() -> Emulators>,
+    /// Text a screen wants put on the system clipboard (FR-CAR-9): the screen layer has no SDL
+    /// handle, so it leaves the request here for the app's event loop to carry out.
+    pub clipboard_request: Option<String>,
+    /// A Game a screen asked to play; `app.rs` takes it and starts its Standalone Emulator.
+    pub launch: Option<GameRow>,
 }
 
 impl Ctx {
@@ -28,6 +39,10 @@ impl Ctx {
             animate: false,
             input_kind: InputKind::Controller,
             button_style: ButtonStyle::default(),
+            emulators: Emulators::all_installed(),
+            detect_emulators: Box::new(Emulators::detect),
+            clipboard_request: None,
+            launch: None,
         }
     }
 
@@ -35,6 +50,13 @@ impl Ctx {
     pub fn empty() -> Ctx {
         let library = Library::open_in_memory().expect("an in-memory database always opens");
         Ctx::new(library, PathBuf::new())
+    }
+
+    /// Fixes which emulators count as installed, for screenshot mode's `--missing-emulators`:
+    /// Check again re-detects the same state rather than running `flatpak list`.
+    pub fn simulate_emulators(&mut self, emulators: Emulators) {
+        self.emulators = emulators.clone();
+        self.detect_emulators = Box::new(move || emulators.clone());
     }
 
     /// Scans every System folder and brings the library up to date (FR-LIB-1).

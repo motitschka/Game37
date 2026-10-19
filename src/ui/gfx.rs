@@ -518,6 +518,19 @@ impl<'tc> Gfx<'tc> {
         !flags.intersects(WindowFlags::MINIMIZED | WindowFlags::HIDDEN)
     }
 
+    /// Gets out of the way while a Standalone Emulator runs.
+    pub fn minimize(&mut self) {
+        self.canvas.window_mut().minimize();
+    }
+
+    /// Comes back in front. GNOME on Wayland refuses a bare raise, but lets a window restore
+    /// itself from minimised.
+    pub fn restore(&mut self) {
+        let window = self.canvas.window_mut();
+        window.restore();
+        window.raise();
+    }
+
     pub fn toggle_fullscreen(&mut self) {
         let window = self.canvas.window_mut();
         let fullscreen = window.fullscreen_state() != sdl3::video::FullscreenType::Off;

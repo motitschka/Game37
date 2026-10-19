@@ -18,5 +18,7 @@ All three must pass before a commit.
   Title, Shelf, Carousel, Console Page, Config. Avoid the listed alternatives (ROM, platform, console).
 - Systems come only from `systems::SYSTEMS`, which is in System Order. Never list Systems anywhere else.
 - Tests never touch the real `~/Games`, `~/.config/game37` or `~/.local/share/game37`: use temp dirs.
+- Tests never run `flatpak run` or a real emulator; launching goes through an injectable spawner. A test
+  that starts a child process kills it by pid when done (e.g. a drop guard), never by name pattern.
 - Never commit game files, BIOS, keys or secrets (NFR-6). Test fixtures are empty or tiny dummy files
   created by the tests themselves.

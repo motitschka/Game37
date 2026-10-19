@@ -3,7 +3,9 @@
 mod carousel;
 pub mod game_grid;
 pub mod home;
+pub mod message;
 mod no_config;
+pub mod playing;
 mod stub;
 
 use std::path::Path;
