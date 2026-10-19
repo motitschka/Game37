@@ -5,6 +5,7 @@ pub mod ctx;
 pub mod emulators;
 pub mod launch;
 pub mod library;
+pub mod libretro;
 pub mod screens;
 pub mod systems;
 pub mod ui;
