@@ -19,6 +19,7 @@ use crate::cores;
 use crate::ctx::Ctx;
 use crate::emulators::{self, Emulator, PATH};
 use crate::library::db::GameRow;
+use crate::screens::download_core::DownloadCore;
 use crate::screens::home::tilde;
 use crate::screens::message::Message;
 use crate::screens::playing::Playing;
@@ -31,8 +32,19 @@ pub const FAILED_TITLE: &str = "Couldn't start the game";
 const NOT_PLAYABLE_TITLE: &str = "Not playable yet";
 
 /// What Confirm on a Game does (until the Details Page exists): asks to play it when its System's
-/// Core or Standalone Emulator is installed, else explains why it can't be played.
+/// Core or Standalone Emulator is installed, downloads an Embedded System's Core first when it
+/// isn't (FR-EMB-2, US-23), else explains why it can't be played.
 pub fn confirm_game(game: &GameRow, ctx: &mut Ctx) -> Transition {
+    let Some(system) = systems::by_id(&game.system) else {
+        return Transition::None;
+    };
+    if system.kind == Kind::Embedded
+        && let Some(core) = cores::for_system(system)
+        && !cores::is_installed(&ctx.data_dir, core)
+    {
+        let download = (ctx.start_download)(core, ctx.data_dir.clone());
+        return Transition::Push(Box::new(DownloadCore::new(game.clone(), core, download)));
+    }
     match why_not_playable(game, ctx) {
         Some(message) => Transition::Push(Box::new(Message::new(NOT_PLAYABLE_TITLE, message))),
         None => Transition::None,
@@ -40,15 +52,12 @@ pub fn confirm_game(game: &GameRow, ctx: &mut Ctx) -> Transition {
 }
 
 /// Asks to play `game` (`Ctx::play` or `Ctx::launch`) and returns `None`, or returns why it can't
-/// be played.
+/// be played. Called once an Embedded Game's Core, if it has one, is already installed.
 fn why_not_playable(game: &GameRow, ctx: &mut Ctx) -> Option<String> {
     let system = systems::by_id(&game.system)?;
     let message = match system.kind {
         Kind::Embedded => match cores::for_system(system) {
             None => later_update(system),
-            Some(core) if !cores::is_installed(&ctx.data_dir, core) => {
-                format!("The {} Core isn't downloaded yet.", core.name)
-            }
             Some(_) => {
                 ctx.play = Some(game.clone());
                 return None;
@@ -731,16 +740,14 @@ mod tests {
     }
 
     #[test]
-    fn an_embedded_game_whose_core_is_missing_says_so() {
+    fn confirm_on_an_embedded_game_whose_core_is_missing_downloads_it() {
         let mut w = world("exit 0");
         w.ctx.data_dir = w._dir.path().join("data");
         touch(&w.ctx.data_dir.join("cores/bsnes_libretro.so"));
+        // Never touches the network: this only checks that Confirm starts a download.
+        w.ctx.start_download = Box::new(cores::testing::spawn_failing);
         let gba = game_of(&w, "gba");
         assert!(!playable(&gba, &w.ctx));
-        assert_eq!(
-            why_not_playable(&gba, &mut w.ctx).as_deref(),
-            Some("The mGBA Core isn't downloaded yet.")
-        );
         assert!(matches!(confirm_game(&gba, &mut w.ctx), Transition::Push(_)));
         assert!(w.ctx.play.is_none() && w.ctx.launch.is_none());
     }

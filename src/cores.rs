@@ -286,6 +286,44 @@ impl fmt::Debug for Download {
     }
 }
 
+/// Offline [`Download`]s for other modules' tests (the download screen's, in particular): never
+/// touches the network.
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::*;
+    use std::io::Cursor;
+
+    /// A `Download` that completes with `bytes` as the fetched zip's body.
+    pub fn spawn(core: &'static CoreInfo, data_dir: PathBuf, bytes: Vec<u8>, total: Option<u64>) -> Download {
+        let fetch: Fetcher = Arc::new(move |_url: &str| {
+            Ok((
+                Box::new(Cursor::new(bytes.clone())) as Box<dyn Read + Send>,
+                total,
+            ))
+        });
+        Download::spawn(core, data_dir, fetch)
+    }
+
+    /// A `Download` that fails to connect as soon as it is polled.
+    pub fn spawn_failing(core: &'static CoreInfo, data_dir: PathBuf) -> Download {
+        Download::spawn(core, data_dir, Arc::new(|_url: &str| Err(FetchError::Connect)))
+    }
+
+    /// A valid zip for `core`: its file, holding a tiny fake ELF library.
+    pub fn core_zip(core: &CoreInfo) -> Vec<u8> {
+        let mut content = ELF_MAGIC.to_vec();
+        content.extend_from_slice(b"fake core");
+        let mut buf = Vec::new();
+        let mut writer = zip::ZipWriter::new(Cursor::new(&mut buf));
+        let options =
+            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        writer.start_file(core.file, options).unwrap();
+        writer.write_all(&content).unwrap();
+        writer.finish().unwrap();
+        buf
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

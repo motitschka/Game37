@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use crate::cores::{CoreInfo, Download};
 use crate::emulators::Emulators;
 use crate::library::db::{DbError, GameRow, Library};
 use crate::library::scan;
@@ -34,6 +35,9 @@ pub struct Ctx {
     /// A Game of an Embedded System a screen asked to play; `app.rs` takes it and starts it on
     /// its Core.
     pub play: Option<GameRow>,
+    /// Starts downloading a Core (FR-EMB-2): `Download::start` in production; tests and
+    /// screenshot mode's offline cases swap it so they never hit the network.
+    pub start_download: Box<dyn Fn(&'static CoreInfo, PathBuf) -> Download>,
 }
 
 impl Ctx {
@@ -51,6 +55,7 @@ impl Ctx {
             clipboard_request: None,
             launch: None,
             play: None,
+            start_download: Box::new(Download::start),
         }
     }
 
