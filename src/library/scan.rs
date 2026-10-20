@@ -66,12 +66,15 @@ pub fn scan_system(root: &Path, system: &'static System) -> Vec<FoundGame> {
             continue;
         };
         // A PSP Game's `EBOOT.PBP` carries no title of its own: its parent folder's name is
-        // the Display Title instead (e.g. `CMFileManager/EBOOT.PBP` -> "CMFileManager").
+        // the Display Title instead (e.g. `CMFileManager/EBOOT.PBP` -> "CMFileManager"), unless
+        // that parent is the System folder itself (`psp/EBOOT.PBP`), which falls back to the file
+        // stem like any other Game.
         let title = if system.id == "psp"
             && entry
                 .file_name()
                 .to_string_lossy()
                 .eq_ignore_ascii_case("eboot.pbp")
+            && entry.path().parent() != Some(root.join(system.id).as_path())
         {
             let folder = entry
                 .path()
@@ -446,6 +449,21 @@ mod tests {
                     title: "Standalone".into(),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn a_psp_eboot_at_the_system_folder_root_takes_its_title_from_its_file_stem() {
+        let tmp = TempDir::new().unwrap();
+        touch(tmp.path(), "psp/EBOOT.PBP");
+        let games = scan(tmp.path(), "psp");
+        assert_eq!(
+            games,
+            [FoundGame {
+                system: "psp",
+                rel_path: "psp/EBOOT.PBP".into(),
+                title: "EBOOT".into(),
+            }]
         );
     }
 

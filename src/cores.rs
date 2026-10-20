@@ -185,18 +185,21 @@ pub fn is_installed(data_dir: &Path, core: &CoreInfo) -> bool {
 }
 
 /// Whether any of `core`'s `required_bios` names is in `<games_root>/bios/`, matched
-/// case-insensitively. True when the Core needs none.
+/// case-insensitively, and is a non-empty regular file (so a directory, a dangling symlink or a
+/// zero-byte file never counts). True when the Core needs none.
 pub fn has_required_bios(games_root: &Path, core: &CoreInfo) -> bool {
     if core.required_bios.is_empty() {
         return true;
     }
-    let Ok(entries) = fs::read_dir(games_root.join("bios")) else {
+    let bios_dir = games_root.join("bios");
+    let Ok(entries) = fs::read_dir(&bios_dir) else {
         return false;
     };
-    let names: HashSet<String> = entries
-        .filter_map(|e| Some(e.ok()?.file_name().to_string_lossy().to_lowercase()))
-        .collect();
-    core.required_bios.iter().any(|name| names.contains(*name))
+    let names: HashSet<String> = core.required_bios.iter().map(|n| n.to_string()).collect();
+    entries.filter_map(|e| e.ok()).any(|entry| {
+        names.contains(&entry.file_name().to_string_lossy().to_lowercase())
+            && fs::metadata(entry.path()).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
+    })
 }
 
 /// The libretro build server's URL for a Core's nightly zip.
@@ -565,6 +568,7 @@ fn run_assets(
         .tempdir_in(&system_dir)
         .map_err(|e| assets_save_failed(&e))?;
     let mut extracted: u64 = 0;
+    let mut files_written: u64 = 0;
     for i in 0..archive.len() {
         check_cancel(cancel)?;
         let mut entry = archive.by_index(i).map_err(|_| assets_invalid())?;
@@ -600,10 +604,14 @@ fn run_assets(
         if written > assets_cap {
             return Err(assets_invalid());
         }
+        files_written += 1;
     }
     drop(archive);
     drop(zip_file);
     check_cancel(cancel)?;
+    if files_written == 0 {
+        return Err(assets_invalid());
+    }
 
     let final_dir = assets_dir(data_dir);
     if final_dir.exists() {
@@ -1007,7 +1015,7 @@ mod tests {
         assert!(!has_required_bios(root, &BEETLE_PSX_HW), "nothing there yet");
 
         fs::create_dir_all(root.join("bios")).unwrap();
-        fs::write(root.join("bios/SCPH5502.BIN"), b"").unwrap();
+        fs::write(root.join("bios/SCPH5502.BIN"), b"not really a bios").unwrap();
         assert!(
             has_required_bios(root, &BEETLE_PSX_HW),
             "any one, any case, is enough"
@@ -1015,6 +1023,21 @@ mod tests {
 
         fs::write(root.join("bios/unrelated.bin"), b"").unwrap();
         assert!(has_required_bios(root, &BEETLE_PSX_HW));
+    }
+
+    #[test]
+    fn has_required_bios_ignores_a_directory_or_an_empty_file_with_the_right_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("bios/scph5502.bin")).unwrap();
+        assert!(!has_required_bios(root, &BEETLE_PSX_HW), "a directory");
+
+        fs::remove_dir(root.join("bios/scph5502.bin")).unwrap();
+        fs::write(root.join("bios/scph5502.bin"), b"").unwrap();
+        assert!(!has_required_bios(root, &BEETLE_PSX_HW), "a zero-byte file");
+
+        fs::write(root.join("bios/scph5502.bin"), b"x").unwrap();
+        assert!(has_required_bios(root, &BEETLE_PSX_HW), "a non-empty file");
     }
 
     #[test]
@@ -1096,6 +1119,23 @@ mod tests {
         assert_eq!(fs::read(path.join("good.txt")).unwrap(), b"fine");
         assert!(!dir.path().join("evil.txt").exists());
         assert!(!data_dir.join("evil.txt").exists());
+    }
+
+    #[test]
+    fn assets_install_refuses_a_zip_with_no_ppsspp_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().to_owned();
+        let zip = testing::assets_zip(&[("not-ppsspp/other.txt", b"should be ignored")]);
+        let mut download = testing::spawn_assets(data_dir.clone(), zip, None);
+
+        let message = wait_for_assets(|| match download.poll() {
+            DownloadState::Failed(m) => Some(m),
+            DownloadState::Done(_) => panic!("expected a failure"),
+            DownloadState::Running { .. } => None,
+        });
+
+        assert_eq!(message, "The downloaded PPSSPP assets aren't valid.");
+        assert!(!assets_dir(&data_dir).exists());
     }
 
     #[test]
