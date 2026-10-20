@@ -2,7 +2,7 @@
 //! window, next to the SDL renderer's. It shares nothing with the renderer's: the Core's frames
 //! are read back and drawn like any other.
 
-use std::ffi::{CStr, c_int};
+use std::ffi::c_int;
 
 use sdl3::sys::video::{
     SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_MAJOR_VERSION, SDL_GL_CONTEXT_MINOR_VERSION,
@@ -12,7 +12,7 @@ use sdl3::sys::video::{
 };
 use sdl3::video::Window;
 
-use crate::libretro::{GlHost, GlRequest};
+use crate::libretro::{GlHost, GlRequest, HwGetProcAddressFn};
 
 /// A Core's OpenGL context next to the SDL renderer's, on the same window.
 pub struct SdlGl {
@@ -113,9 +113,10 @@ impl GlHost for SdlGl {
         self.make_current(self.frontend);
     }
 
-    fn proc_address(&self, name: &CStr) -> crate::libretro::ProcAddress {
-        // SAFETY: `name` is NUL-terminated; SDL's GL library is loaded, as a GL window exists.
-        unsafe { SDL_GL_GetProcAddress(name.as_ptr()) }
+    /// SDL's lookup, safe on any thread; SDL's GL library stays loaded while the window, held by
+    /// the host, exists.
+    fn loader(&self) -> HwGetProcAddressFn {
+        SDL_GL_GetProcAddress
     }
 
     fn destroy_context(&mut self) {

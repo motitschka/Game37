@@ -22,8 +22,8 @@ use libloading::Library;
 use libloading::os::unix;
 
 use callbacks::State;
-pub use ffi::ProcAddress;
 use ffi::{Api, RetroGameGeometry, RetroGameInfo, RetroSystemAvInfo, RetroSystemInfo};
+pub use ffi::{HwGetProcAddressFn, ProcAddress};
 use hw::Hw;
 pub use hw::{GlHost, GlRequest};
 
@@ -291,6 +291,8 @@ impl Drop for Claim {
 /// callbacks find their state.
 pub struct Core {
     api: Api,
+    /// `retro_init` ran and `retro_deinit` hasn't.
+    initialised: bool,
     game_loaded: bool,
     video: Frame,
     /// The Core's OpenGL rendering, when it asked for it.
@@ -360,6 +362,7 @@ impl Core {
         // From here on, `Drop` shuts the Core down on any error.
         let mut core = Core {
             api,
+            initialised: true,
             game_loaded: false,
             video: Frame::default(),
             hw: None,
@@ -413,12 +416,10 @@ impl Core {
         })
         .flatten();
         if let Some(request) = request {
-            let (w, h) = if info.max_width > 0 && info.max_height > 0 {
-                (info.max_width, info.max_height)
-            } else {
-                (info.base_width, info.base_height)
-            };
-            core.hw = Some(Hw::start(request, w, h).map_err(CoreError::Gl)?);
+            let (w, h) = hw::fbo_size(&info);
+            // Should its FBO fail, the Core shuts down with its own context current.
+            let hw = Hw::start(request, w, h, || core.shut_down()).map_err(CoreError::Gl)?;
+            core.hw = Some(hw);
         }
         Ok(core)
     }
@@ -436,7 +437,7 @@ impl Core {
         // SAFETY: the Core is loaded with a Game and its callbacks' state is installed; a Core
         // rendering with OpenGL runs with its context current, and its frame is read back.
         let run = || unsafe { (self.api.run)() };
-        match &self.hw {
+        match &mut self.hw {
             Some(hw) => hw.run(run),
             None => run(),
         }
@@ -521,21 +522,31 @@ impl Core {
     }
 }
 
-impl Drop for Core {
-    fn drop(&mut self) {
-        let hw = self.hw.take();
-        // SAFETY: `retro_init` ran in `load`, and `retro_load_game` succeeded when `game_loaded`
-        // is set; libretro.h orders unload, then deinit. The library is still loaded.
-        let shut_down = || unsafe {
+impl Core {
+    /// Unloads the Game and deinitialises the Core, once.
+    fn shut_down(&mut self) {
+        if !self.initialised {
+            return;
+        }
+        // SAFETY: `retro_init` ran in `load` and `retro_deinit` hasn't, and `retro_load_game`
+        // succeeded when `game_loaded` is set; libretro.h orders unload, then deinit. The library
+        // is still loaded.
+        unsafe {
             if self.game_loaded {
                 (self.api.unload_game)();
             }
             (self.api.deinit)();
-        };
+        }
+        (self.game_loaded, self.initialised) = (false, false);
+    }
+}
+
+impl Drop for Core {
+    fn drop(&mut self) {
         // An OpenGL Core gets `context_destroy` first, and shuts down with its context current.
-        match hw {
-            Some(hw) => hw.stop(shut_down),
-            None => shut_down(),
+        match self.hw.take() {
+            Some(hw) => hw.stop(|| self.shut_down()),
+            None => self.shut_down(),
         }
         // The directory strings the Core was given stay alive until it has shut down.
         callbacks::remove();

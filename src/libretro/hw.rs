@@ -11,8 +11,8 @@ use std::ffi::{CStr, c_void};
 use std::fmt;
 
 use super::callbacks;
-use super::ffi::{HwContextResetFn, ProcAddress};
-use super::{Frame, PixelFormat};
+use super::ffi::{HwContextResetFn, HwGetProcAddressFn, ProcAddress};
+use super::{AvInfo, Frame, PixelFormat};
 
 /// The OpenGL context a Core asked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,8 +44,14 @@ pub trait GlHost {
     fn make_core_current(&mut self);
     /// Makes the frontend's own context current again.
     fn make_frontend_current(&mut self);
+    /// The platform's OpenGL loader (`SDL_GL_GetProcAddress`, `glXGetProcAddressARB`): callable
+    /// from any thread, for as long as the host lives.
+    fn loader(&self) -> HwGetProcAddressFn;
     /// The address of the OpenGL function `name`, `None` if there is none.
-    fn proc_address(&self, name: &CStr) -> ProcAddress;
+    fn proc_address(&self, name: &CStr) -> ProcAddress {
+        // SAFETY: `name` is NUL-terminated, all the loader asks.
+        unsafe { self.loader()(name.as_ptr()) }
+    }
     /// Destroys the Core's context, leaving the frontend's current.
     fn destroy_context(&mut self);
 }
@@ -90,6 +96,8 @@ const GL_COLOR_BUFFER_BIT: u32 = 0x4000;
 const GL_PIXEL_PACK_BUFFER: GLenum = 0x88EB;
 const GL_PIXEL_PACK_BUFFER_BINDING: GLenum = 0x88ED;
 const GL_PACK_ROW_LENGTH: GLenum = 0x0D02;
+const GL_PACK_SKIP_ROWS: GLenum = 0x0D03;
+const GL_PACK_SKIP_PIXELS: GLenum = 0x0D04;
 const GL_PACK_ALIGNMENT: GLenum = 0x0D05;
 
 macro_rules! gl_functions {
@@ -154,34 +162,68 @@ fn host<R>(f: impl FnOnce(&mut (dyn GlHost + 'static)) -> R) -> Option<R> {
 pub(super) struct Hw {
     gl: Gl,
     request: HwRequest,
-    fbo: GLuint,
-    texture: GLuint,
-    /// The depth (and stencil) renderbuffer, 0 when the Core asked for neither.
-    depth: GLuint,
-    width: u32,
-    height: u32,
+    fbo: Fbo,
+    /// The size the FBO was last made, or tried, at.
+    asked: (u32, u32),
+}
+
+/// The size of FBO a Core with geometry `av` draws into: its maximum size, else its base size.
+pub(super) fn fbo_size(av: &AvInfo) -> (u32, u32) {
+    let (w, h) = if av.max_width > 0 && av.max_height > 0 {
+        (av.max_width, av.max_height)
+    } else {
+        (av.base_width, av.base_height)
+    };
+    (w.max(1), h.max(1))
+}
+
+/// The size an FBO made at `made` grows to once the Core's geometry is `av`, as RetroArch remakes
+/// it when `SET_SYSTEM_AV_INFO` raises the maximum size; `None` while the picture fits. A
+/// `SET_GEOMETRY` larger than the maximum size is clamped instead, unless the Core gave none.
+fn grown(made: (u32, u32), av: &AvInfo) -> Option<(u32, u32)> {
+    let (w, h) = fbo_size(av);
+    (w > made.0 || h > made.1).then(|| (w.max(made.0), h.max(made.1)))
 }
 
 impl Hw {
     /// Creates the Core's context and a `width × height` FBO, and hands both to the Core
-    /// (`context_reset`). Leaves the frontend's context current.
-    pub fn start(request: HwRequest, width: u32, height: u32) -> Result<Hw, String> {
-        host(|h| h.create_context(request.gl)).ok_or("no OpenGL host")??;
+    /// (`context_reset`). Leaves the frontend's context current. Should the FBO fail once the
+    /// context is made, the Core shuts down (`shut_down`) with its context current first.
+    pub fn start(
+        request: HwRequest,
+        width: u32,
+        height: u32,
+        shut_down: impl FnOnce(),
+    ) -> Result<Hw, String> {
+        let loader =
+            host(|h| h.create_context(request.gl).map(|()| h.loader())).ok_or("no OpenGL host")??;
+        callbacks::set_loader(Some(loader));
         host(|h| h.make_core_current());
-        // SAFETY: the host looks functions up with the platform's GL loader.
-        let made = unsafe { Gl::load(|name| host(|h| h.proc_address(name)).flatten()) }
-            .and_then(|gl| Hw::with_fbo(gl, request, width.max(1), height.max(1)));
+        let size = (width.max(1), height.max(1));
+        // SAFETY: the platform's loader returns OpenGL's own function for each name, or `None`,
+        // and asks only for a NUL-terminated name.
+        let made = unsafe { Gl::load(|name| loader(name.as_ptr())) }.and_then(|gl| {
+            let fbo = Fbo::new(&gl, &request, size)?;
+            Ok(Hw {
+                gl,
+                request,
+                fbo,
+                asked: size,
+            })
+        });
         let hw = match made {
             Ok(hw) => hw,
             Err(e) => {
+                shut_down();
+                callbacks::set_loader(None);
                 host(|h| h.destroy_context());
                 return Err(e);
             }
         };
-        callbacks::set_fbo(hw.fbo);
+        callbacks::set_fbo(hw.fbo.fbo);
         eprintln!(
-            "game37: the Core draws with {} into a {width}×{height} framebuffer",
-            request.gl
+            "game37: the Core draws with {} into a {}×{} framebuffer",
+            request.gl, size.0, size.1
         );
         if let Some(reset) = request.context_reset {
             // SAFETY: the Core's context is current with its FBO bound, as libretro.h promises
@@ -192,24 +234,147 @@ impl Hw {
         Ok(hw)
     }
 
-    /// Makes the FBO with the Core's context current, leaving it bound.
-    fn with_fbo(gl: Gl, request: HwRequest, width: u32, height: u32) -> Result<Hw, String> {
+    /// Runs `f` (a `retro_run`) with the Core's context current, then reads the frame it drew into
+    /// the FBO, if it drew one, into the callbacks' frame. First the FBO grows if the Core's
+    /// maximum size did.
+    pub fn run(&mut self, f: impl FnOnce()) {
+        host(|h| h.make_core_current());
+        if let Some(size) = callbacks::with(|s| grown(self.asked, &s.av_info)).flatten() {
+            self.resize(size);
+        }
+        f();
+        callbacks::with(|s| {
+            if let Some((width, height)) = s.hw_size.take() {
+                self.read(&mut s.frame, width, height);
+            }
+        });
+        host(|h| h.make_frontend_current());
+    }
+
+    /// Remakes the FBO at `size` with the Core's context current, between `context_destroy` and
+    /// `context_reset` as RetroArch does. Should it fail, the Core keeps drawing into the old one.
+    fn resize(&mut self, size: (u32, u32)) {
+        self.asked = size;
+        if let Some(destroy) = self.request.context_destroy {
+            // SAFETY: the Core's context is current, as libretro.h promises `context_destroy`; the
+            // callbacks' state is not borrowed.
+            unsafe { destroy() };
+        }
+        match Fbo::new(&self.gl, &self.request, size) {
+            Ok(fbo) => {
+                std::mem::replace(&mut self.fbo, fbo).delete(&self.gl);
+                eprintln!("game37: the Core's framebuffer grew to {}×{}", size.0, size.1);
+            }
+            Err(e) => eprintln!(
+                "game37: can't grow the Core's framebuffer to {}×{}: {e}",
+                size.0, size.1
+            ),
+        }
+        // SAFETY: the Core's context is current and the FBO is its own, live.
+        unsafe { (self.gl.bind_framebuffer)(GL_FRAMEBUFFER, self.fbo.fbo) };
+        callbacks::set_fbo(self.fbo.fbo);
+        if let Some(reset) = self.request.context_reset {
+            // SAFETY: as in `start`: the Core's context is current with its FBO bound.
+            unsafe { reset() };
+        }
+    }
+
+    /// Runs `f` (the Core's shutdown: unload and deinit) with the Core's context current, after
+    /// `context_destroy`, then frees the FBO and the context.
+    pub fn stop(mut self, f: impl FnOnce()) {
+        host(|h| h.make_core_current());
+        if let Some(destroy) = self.request.context_destroy {
+            // SAFETY: the Core's context is current, as libretro.h promises `context_destroy`.
+            unsafe { destroy() };
+        }
+        f();
+        self.fbo.delete(&self.gl);
+        callbacks::set_fbo(0);
+        callbacks::set_loader(None);
+        host(|h| h.destroy_context());
+    }
+
+    /// Reads the `width × height` picture (at most the FBO's size) into `frame`, top row first,
+    /// with the Core's context current.
+    fn read(&self, frame: &mut Frame, width: u32, height: u32) {
+        let (w, h) = (width.min(self.fbo.width), height.min(self.fbo.height));
+        let pitch = w as usize * 4;
+        frame.data.resize(pitch * h as usize, 0);
+        let gl = &self.gl;
+        // SAFETY: the Core's context is current. `frame.data` holds `w × h` RGBA pixels, which is
+        // what `glReadPixels` writes with no pack buffer bound and the pack state set here: rows
+        // packed (no row length), 4-byte aligned, none skipped. The Core's bindings and pack state
+        // are put back as they were.
+        unsafe {
+            let (mut read_fbo, mut pack_buffer) = (0, 0);
+            (gl.get_integer_v)(GL_READ_FRAMEBUFFER_BINDING, &mut read_fbo);
+            (gl.get_integer_v)(GL_PIXEL_PACK_BUFFER_BINDING, &mut pack_buffer);
+            // Each pack parameter with the value it reads with; swapped for the Core's below.
+            let mut pack = [
+                (GL_PACK_ROW_LENGTH, 0),
+                (GL_PACK_SKIP_ROWS, 0),
+                (GL_PACK_SKIP_PIXELS, 0),
+                (GL_PACK_ALIGNMENT, 4),
+            ];
+            for (name, value) in &mut pack {
+                let ours = *value;
+                (gl.get_integer_v)(*name, value);
+                (gl.pixel_store_i)(*name, ours);
+            }
+            (gl.bind_framebuffer)(GL_READ_FRAMEBUFFER, self.fbo.fbo);
+            (gl.bind_buffer)(GL_PIXEL_PACK_BUFFER, 0);
+            (gl.read_pixels)(
+                0,
+                0,
+                w as GLsizei,
+                h as GLsizei,
+                GL_RGBA,
+                GL_UNSIGNED_BYTE,
+                frame.data.as_mut_ptr().cast(),
+            );
+            for (name, core) in pack {
+                (gl.pixel_store_i)(name, core);
+            }
+            (gl.bind_buffer)(GL_PIXEL_PACK_BUFFER, pack_buffer as GLuint);
+            (gl.bind_framebuffer)(GL_READ_FRAMEBUFFER, read_fbo as GLuint);
+        }
+        if self.request.bottom_left_origin {
+            flip_rows(&mut frame.data, pitch);
+        }
+        frame.width = w;
+        frame.height = h;
+        frame.pitch = pitch;
+        frame.format = PixelFormat::Rgba32;
+    }
+}
+
+/// The FBO a Core draws into, with its attachments.
+struct Fbo {
+    fbo: GLuint,
+    texture: GLuint,
+    /// The depth (and stencil) renderbuffer, 0 when the Core asked for neither.
+    depth: GLuint,
+    width: u32,
+    height: u32,
+}
+
+impl Fbo {
+    /// Makes a `width × height` FBO as `request` asks, with the Core's context current, leaving it
+    /// bound.
+    fn new(gl: &Gl, request: &HwRequest, (width, height): (u32, u32)) -> Result<Fbo, String> {
         let (w, h) = (width as GLsizei, height as GLsizei);
-        let mut hw = Hw {
-            gl,
-            request,
+        let mut fbo = Fbo {
             fbo: 0,
             texture: 0,
             depth: 0,
             width,
             height,
         };
-        let gl = &hw.gl;
         // SAFETY: the Core's context is current and these are its OpenGL functions; every pointer
         // passed points at a live local or field, or is null where OpenGL allows it.
         unsafe {
-            (gl.gen_textures)(1, &mut hw.texture);
-            (gl.bind_texture)(GL_TEXTURE_2D, hw.texture);
+            (gl.gen_textures)(1, &mut fbo.texture);
+            (gl.bind_texture)(GL_TEXTURE_2D, fbo.texture);
             (gl.tex_image_2d)(
                 GL_TEXTURE_2D,
                 0,
@@ -230,35 +395,40 @@ impl Hw {
                 (gl.tex_parameter_i)(GL_TEXTURE_2D, param, value);
             }
             (gl.bind_texture)(GL_TEXTURE_2D, 0);
-            (gl.gen_framebuffers)(1, &mut hw.fbo);
-            (gl.bind_framebuffer)(GL_FRAMEBUFFER, hw.fbo);
-            (gl.framebuffer_texture_2d)(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, hw.texture, 0);
+            (gl.gen_framebuffers)(1, &mut fbo.fbo);
+            (gl.bind_framebuffer)(GL_FRAMEBUFFER, fbo.fbo);
+            (gl.framebuffer_texture_2d)(
+                GL_FRAMEBUFFER,
+                GL_COLOR_ATTACHMENT0,
+                GL_TEXTURE_2D,
+                fbo.texture,
+                0,
+            );
             if request.depth || request.stencil {
                 let (format, attachment) = if request.stencil {
                     (GL_DEPTH24_STENCIL8, GL_DEPTH_STENCIL_ATTACHMENT)
                 } else {
                     (GL_DEPTH_COMPONENT24, GL_DEPTH_ATTACHMENT)
                 };
-                (gl.gen_renderbuffers)(1, &mut hw.depth);
-                (gl.bind_renderbuffer)(GL_RENDERBUFFER, hw.depth);
+                (gl.gen_renderbuffers)(1, &mut fbo.depth);
+                (gl.bind_renderbuffer)(GL_RENDERBUFFER, fbo.depth);
                 (gl.renderbuffer_storage)(GL_RENDERBUFFER, format, w, h);
-                (gl.framebuffer_renderbuffer)(GL_FRAMEBUFFER, attachment, GL_RENDERBUFFER, hw.depth);
+                (gl.framebuffer_renderbuffer)(GL_FRAMEBUFFER, attachment, GL_RENDERBUFFER, fbo.depth);
                 (gl.bind_renderbuffer)(GL_RENDERBUFFER, 0);
             }
             let status = (gl.check_framebuffer_status)(GL_FRAMEBUFFER);
             if status != GL_FRAMEBUFFER_COMPLETE {
-                hw.delete();
+                fbo.delete(gl);
                 return Err(format!("the framebuffer is incomplete ({status:#x})"));
             }
             (gl.clear_color)(0.0, 0.0, 0.0, 1.0);
             (gl.clear)(GL_COLOR_BUFFER_BIT);
         }
-        Ok(hw)
+        Ok(fbo)
     }
 
     /// Deletes the FBO and its attachments, with the Core's context current.
-    fn delete(&mut self) {
-        let gl = &self.gl;
+    fn delete(&mut self, gl: &Gl) {
         // SAFETY: the Core's context is current; deleting the name 0 is ignored.
         unsafe {
             (gl.bind_framebuffer)(GL_FRAMEBUFFER, 0);
@@ -267,76 +437,6 @@ impl Hw {
             (gl.delete_textures)(1, &self.texture);
         }
         (self.fbo, self.depth, self.texture) = (0, 0, 0);
-    }
-
-    /// Runs `f` (a `retro_run`) with the Core's context current, then reads the frame it drew into
-    /// the FBO, if it drew one, into the callbacks' frame.
-    pub fn run(&self, f: impl FnOnce()) {
-        host(|h| h.make_core_current());
-        f();
-        callbacks::with(|s| {
-            if let Some((width, height)) = s.hw_size.take() {
-                self.read(&mut s.frame, width, height);
-            }
-        });
-        host(|h| h.make_frontend_current());
-    }
-
-    /// Runs `f` (the Core's shutdown: unload and deinit) with the Core's context current, after
-    /// `context_destroy`, then frees the FBO and the context.
-    pub fn stop(mut self, f: impl FnOnce()) {
-        host(|h| h.make_core_current());
-        if let Some(destroy) = self.request.context_destroy {
-            // SAFETY: the Core's context is current, as libretro.h promises `context_destroy`.
-            unsafe { destroy() };
-        }
-        f();
-        self.delete();
-        callbacks::set_fbo(0);
-        host(|h| h.destroy_context());
-    }
-
-    /// Reads the `width × height` picture (at most the FBO's size) into `frame`, top row first,
-    /// with the Core's context current.
-    fn read(&self, frame: &mut Frame, width: u32, height: u32) {
-        let (w, h) = (width.min(self.width), height.min(self.height));
-        let pitch = w as usize * 4;
-        frame.data.resize(pitch * h as usize, 0);
-        let gl = &self.gl;
-        // SAFETY: the Core's context is current. `frame.data` holds `w × h` RGBA pixels, which is
-        // what `glReadPixels` writes with no pack buffer bound, rows packed and 4-byte aligned. The
-        // Core's bindings and pack state are put back as they were.
-        unsafe {
-            let (mut read_fbo, mut pack_buffer, mut row_length, mut alignment) = (0, 0, 0, 0);
-            (gl.get_integer_v)(GL_READ_FRAMEBUFFER_BINDING, &mut read_fbo);
-            (gl.get_integer_v)(GL_PIXEL_PACK_BUFFER_BINDING, &mut pack_buffer);
-            (gl.get_integer_v)(GL_PACK_ROW_LENGTH, &mut row_length);
-            (gl.get_integer_v)(GL_PACK_ALIGNMENT, &mut alignment);
-            (gl.bind_framebuffer)(GL_READ_FRAMEBUFFER, self.fbo);
-            (gl.bind_buffer)(GL_PIXEL_PACK_BUFFER, 0);
-            (gl.pixel_store_i)(GL_PACK_ROW_LENGTH, 0);
-            (gl.pixel_store_i)(GL_PACK_ALIGNMENT, 4);
-            (gl.read_pixels)(
-                0,
-                0,
-                w as GLsizei,
-                h as GLsizei,
-                GL_RGBA,
-                GL_UNSIGNED_BYTE,
-                frame.data.as_mut_ptr().cast(),
-            );
-            (gl.pixel_store_i)(GL_PACK_ALIGNMENT, alignment);
-            (gl.pixel_store_i)(GL_PACK_ROW_LENGTH, row_length);
-            (gl.bind_buffer)(GL_PIXEL_PACK_BUFFER, pack_buffer as GLuint);
-            (gl.bind_framebuffer)(GL_READ_FRAMEBUFFER, read_fbo as GLuint);
-        }
-        if self.request.bottom_left_origin {
-            flip_rows(&mut frame.data, pitch);
-        }
-        frame.width = w;
-        frame.height = h;
-        frame.pitch = pitch;
-        frame.format = PixelFormat::Rgba32;
     }
 }
 
@@ -355,6 +455,9 @@ fn flip_rows(data: &mut [u8], row: usize) {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
     use super::*;
 
     #[test]
@@ -371,6 +474,98 @@ mod tests {
         let mut empty: Vec<u8> = Vec::new();
         flip_rows(&mut empty, 0);
         assert!(empty.is_empty());
+    }
+
+    fn av(base: (u32, u32), max: (u32, u32)) -> AvInfo {
+        AvInfo {
+            base_width: base.0,
+            base_height: base.1,
+            max_width: max.0,
+            max_height: max.1,
+            ..AvInfo::default()
+        }
+    }
+
+    #[test]
+    fn the_framebuffer_grows_with_the_cores_maximum_size_only() {
+        let made = (480, 272);
+        assert_eq!(grown(made, &av((480, 272), (480, 272))), None);
+        assert_eq!(
+            grown(made, &av((480, 272), (960, 544))),
+            Some((960, 544)),
+            "4× the pixels"
+        );
+        assert_eq!(grown(made, &av((240, 136), (240, 136))), None, "it never shrinks");
+        assert_eq!(
+            grown(made, &av((480, 272), (512, 240))),
+            Some((512, 272)),
+            "one side grows"
+        );
+        assert_eq!(
+            grown(made, &av((960, 544), (480, 272))),
+            None,
+            "a base size past the maximum is clamped"
+        );
+        assert_eq!(
+            grown(made, &av((640, 480), (0, 0))),
+            Some((640, 480)),
+            "without a maximum size, the base size"
+        );
+        assert_eq!(fbo_size(&av((0, 0), (0, 0))), (1, 1));
+    }
+
+    /// A host whose context is made but has no OpenGL functions; it notes each call.
+    struct NoFunctions(Rc<RefCell<Vec<&'static str>>>);
+
+    unsafe extern "C" fn no_functions(_: *const std::ffi::c_char) -> ProcAddress {
+        None
+    }
+
+    impl GlHost for NoFunctions {
+        fn create_context(&mut self, _: GlRequest) -> Result<(), String> {
+            self.0.borrow_mut().push("create");
+            Ok(())
+        }
+        fn make_core_current(&mut self) {
+            self.0.borrow_mut().push("core current");
+        }
+        fn make_frontend_current(&mut self) {
+            self.0.borrow_mut().push("frontend current");
+        }
+        fn loader(&self) -> HwGetProcAddressFn {
+            no_functions
+        }
+        fn destroy_context(&mut self) {
+            self.0.borrow_mut().push("destroy");
+        }
+    }
+
+    #[test]
+    fn a_core_whose_framebuffer_fails_shuts_down_with_its_context_current() {
+        let _serial = crate::libretro::tests::serial();
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let mut state = callbacks::State::new(c"/sys".into(), c"/save".into());
+        state.gl_host = Some(Box::new(NoFunctions(calls.clone())));
+        callbacks::install(state);
+        let request = HwRequest {
+            gl: GlRequest {
+                core_profile: true,
+                major: 3,
+                minor: 3,
+            },
+            depth: false,
+            stencil: false,
+            bottom_left_origin: true,
+            context_reset: None,
+            context_destroy: None,
+        };
+        let started = Hw::start(request, 480, 272, || calls.borrow_mut().push("shut down"));
+        callbacks::remove();
+        assert_eq!(started.err().as_deref(), Some("no glGenTextures"));
+        assert_eq!(
+            *calls.borrow(),
+            ["create", "core current", "shut down", "destroy"]
+        );
     }
 
     #[test]

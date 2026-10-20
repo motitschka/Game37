@@ -13,7 +13,7 @@ use libloading::Library;
 use sdl3::sys::video::{SDL_GL_MakeCurrent, SDL_GLContext};
 use sdl3::video::Window;
 
-use crate::libretro::{GlHost, GlRequest, ProcAddress};
+use crate::libretro::{GlHost, GlRequest, HwGetProcAddressFn};
 
 type Display = c_void;
 type GlxFbConfig = *mut c_void;
@@ -67,7 +67,8 @@ struct Glx {
     make_context_current: unsafe extern "C" fn(*mut Display, GlxDrawable, GlxDrawable, GlxContext) -> c_int,
     destroy_context: unsafe extern "C" fn(*mut Display, GlxContext),
     get_current_context: unsafe extern "C" fn() -> GlxContext,
-    get_proc_address: unsafe extern "C" fn(*const c_uchar) -> ProcAddress,
+    /// `glXGetProcAddressARB`, whose `const GLubyte *` name is a C string's pointer as passed.
+    get_proc_address: HwGetProcAddressFn,
     /// Kept loaded for as long as the functions above may be called.
     _libs: [Library; 2],
 }
@@ -300,9 +301,9 @@ impl GlHost for GlxGl {
         }
     }
 
-    fn proc_address(&self, name: &CStr) -> ProcAddress {
-        // SAFETY: `name` is NUL-terminated.
-        unsafe { (self.glx.get_proc_address)(name.as_ptr().cast()) }
+    /// GLX's lookup, safe on any thread; libGL stays loaded while the host lives.
+    fn loader(&self) -> HwGetProcAddressFn {
+        self.glx.get_proc_address
     }
 
     fn destroy_context(&mut self) {

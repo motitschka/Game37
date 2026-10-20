@@ -206,7 +206,7 @@ fn libretro_only_one_core_at_a_time() {
 }
 
 /// melonDS DS with its hybrid layout (FR-DS-1) reads the pointer: a press at the centre of the
-/// small touch screen reaches it as `RETRO_DEVICE_POINTER` coordinates (FR-DS-3), and R3 swaps
+/// small touch screen is what it reads as `RETRO_DEVICE_POINTER` coordinates (FR-DS-3), and R3 swaps
 /// the screens (FR-DS-2). Run with `cargo test -- --ignored ds`.
 #[test]
 #[ignore = "needs /home/matei/Game37/.testdata"]
@@ -254,29 +254,74 @@ fn ds_touch_reaches_melonds_ds_and_r3_swaps_the_screens() {
     for _ in 0..10 {
         core.run_frame(&input);
     }
+    // The Core asked for the pointer and was answered with the press: these read back the
+    // queries melonDS DS made, so they show it reads RETRO_DEVICE_POINTER, not what it did next.
     let queries = core.input_queries();
     let asked = |id| queries.get(&(0, ffi::RETRO_DEVICE_POINTER, 0, id)).copied();
     let mut devices: Vec<_> = queries.keys().map(|k| k.1).collect();
     devices.sort();
     devices.dedup();
     eprintln!("devices queried: {devices:?}");
-    assert_eq!(asked(ffi::RETRO_DEVICE_ID_POINTER_X), Some(centre.x));
-    assert_eq!(asked(ffi::RETRO_DEVICE_ID_POINTER_Y), Some(centre.y));
-    assert_eq!(asked(ffi::RETRO_DEVICE_ID_POINTER_PRESSED), Some(1));
+    assert_eq!(
+        asked(ffi::RETRO_DEVICE_ID_POINTER_X),
+        Some(centre.x),
+        "the Core asked for x"
+    );
+    assert_eq!(
+        asked(ffi::RETRO_DEVICE_ID_POINTER_Y),
+        Some(centre.y),
+        "the Core asked for y"
+    );
+    assert_eq!(
+        asked(ffi::RETRO_DEVICE_ID_POINTER_PRESSED),
+        Some(1),
+        "the Core asked for the press"
+    );
 
-    // R3 for a few frames, then released: the other hybrid layout.
-    let before = hash(core.frame());
+    // R3 for a few frames, then released: the other hybrid layout, whose large screen shows the
+    // touch screen, which the small one keeps showing. Comparing the screens (rather than frames)
+    // keeps hbmenu's own animation from passing for a swap.
+    let before = core.frame().clone();
     let mut r3 = InputState::default();
     r3.set(0, Button::R3, true);
     for _ in 0..5 {
         core.run_frame(&r3);
     }
-    let (swapped, _) = run(&mut core, 30);
-    eprintln!(
-        "after R3: {}x{}, {:?}",
-        swapped.width,
-        swapped.height,
-        core.av_info()
-    );
-    assert_ne!(hash(&swapped), before, "R3 changed the picture");
+    let (after, _) = run(&mut core, 30);
+    assert_eq!((after.width, after.height), (768, 384), "still hybrid");
+    let (large, small, now_large) = (large_screen(&before), small_screen(&before), large_screen(&after));
+    let (to_small, to_large) = (difference(&now_large, &small), difference(&now_large, &large));
+    eprintln!("the large screen now differs from the small one by {to_small}, from itself by {to_large}");
+    assert!(to_small < to_large, "R3 put the touch screen on the large one");
+}
+
+/// One DS screen's 256×192 RGB bytes, from a 768×384 hybrid frame (in `Xrgb8888`) at `(x, y)`,
+/// every `step`th pixel.
+fn ds_screen(frame: &Frame, x: usize, y: usize, step: usize) -> Vec<u8> {
+    let bpp = frame.format.bytes_per_pixel();
+    let mut screen = Vec::with_capacity(256 * 192 * 3);
+    for row in 0..192 {
+        let line = &frame.data[(y + row * step) * frame.pitch..];
+        for col in 0..256 {
+            let px = &line[(x + col * step) * bpp..][..bpp];
+            screen.extend_from_slice(&px[..3]);
+        }
+    }
+    screen
+}
+
+/// The hybrid layout's large screen, 512×384 at the left, sampled at half size.
+fn large_screen(frame: &Frame) -> Vec<u8> {
+    ds_screen(frame, 0, 0, 2)
+}
+
+/// The hybrid layout's small screen, 256×192 at the bottom right.
+fn small_screen(frame: &Frame) -> Vec<u8> {
+    ds_screen(frame, 512, 192, 1)
+}
+
+/// The mean difference per colour byte of two screens.
+fn difference(a: &[u8], b: &[u8]) -> f64 {
+    let sum: u64 = a.iter().zip(b).map(|(x, y)| u64::from(x.abs_diff(*y))).sum();
+    sum as f64 / a.len() as f64
 }
