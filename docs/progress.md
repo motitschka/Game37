@@ -153,9 +153,9 @@ standing instructions, also in Claude's memory for this repo:
 Test data was only downloaded after the owner approved the exact list (file, source, size). Keep
 asking first for anything new.
 
-Cost so far, from the `agent-cost` skill: M1 10.9M, M3 10.7M input-equivalent tokens. M2 and M4
-weren't measured separately; run `agent-cost --project Game37 --since <milestone start>` (start times
-are in memory).
+Cost from the `agent-cost` skill (input-equivalent tokens): M1 10.9M, M3 10.7M, M4 20.7M (main 7.4M,
+13 subagents 13.3M; the OpenGL work needed several rounds). M2 wasn't measured separately. Measure
+a milestone with `agent-cost --project Game37 --since <its start time>`.
 
 ## Next: M5 (Artwork, Details Page, Options Menu)
 
