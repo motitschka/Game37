@@ -207,6 +207,27 @@ pub fn keyboard_buttons(down: impl Fn(Scancode) -> bool, touch_screen: bool) -> 
     input
 }
 
+/// The left stick the arrow keys drive, for Systems whose Core reads the stick as analog rather
+/// than the d-pad (`!stick_dpad`, see [`pad_buttons_with`]): N64 and PSP. Full deflection
+/// (±0x7fff) while an arrow key is held, centred otherwise; `stick_dpad` always centres it, since
+/// those Systems have no analog stick and [`keyboard_buttons`]'s own d-pad press is enough
+/// (FR-EMB-9). The d-pad press from [`keyboard_buttons`] stays in effect either way, so menus
+/// inside games still work.
+pub fn keyboard_stick(down: impl Fn(Scancode) -> bool, stick_dpad: bool) -> (i16, i16) {
+    if stick_dpad {
+        return (0, 0);
+    }
+    let axis = |negative: bool, positive: bool| match (negative, positive) {
+        (true, false) => -0x7fff,
+        (false, true) => 0x7fff,
+        _ => 0,
+    };
+    (
+        axis(down(Scancode::Left), down(Scancode::Right)),
+        axis(down(Scancode::Up), down(Scancode::Down)),
+    )
+}
+
 /// The mouse this frame: where it is, in logical 1920×1080 coordinates, and whether its left
 /// button is held.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -564,6 +585,27 @@ mod tests {
             keyboard_buttons(|k| k == Scancode::Escape, false),
             InputState::default()
         );
+    }
+
+    #[test]
+    fn arrow_keys_drive_the_left_stick_at_full_deflection_unless_stick_dpad() {
+        assert_eq!(keyboard_stick(|k| k == Scancode::Left, false), (-0x7fff, 0));
+        assert_eq!(keyboard_stick(|k| k == Scancode::Down, false), (0, 0x7fff));
+        assert_eq!(
+            keyboard_stick(|k| k == Scancode::Left || k == Scancode::Right, false),
+            (0, 0),
+            "cancel out"
+        );
+        assert_eq!(keyboard_stick(|_| false, false), (0, 0));
+        assert_eq!(
+            keyboard_stick(|k| k == Scancode::Left, true),
+            (0, 0),
+            "stick_dpad: no analog from the keyboard"
+        );
+
+        // The keyboard's own d-pad press is unaffected, so menus inside games still work.
+        let left = keyboard_buttons(|k| k == Scancode::Left, false);
+        assert!(left.is_pressed(0, Button::Left));
     }
 
     #[test]

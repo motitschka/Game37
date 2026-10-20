@@ -43,8 +43,14 @@ pub fn confirm_game(game: &GameRow, ctx: &mut Ctx) -> Transition {
     if system.kind == Kind::Embedded
         && let Some(core) = cores::for_system(system)
     {
+        if !cores::has_required_bios(&ctx.games_root, core) {
+            return Transition::Push(Box::new(Message::new(
+                BIOS_MISSING_TITLE,
+                missing_bios_message(&ctx.games_root),
+            )));
+        }
         if !cores::is_installed(&ctx.data_dir, core) {
-            let screen = if core.system_in_data_dir {
+            let screen = if core.system_in_data_dir && !cores::assets_dir(&ctx.data_dir).is_dir() {
                 let assets = (ctx.start_assets_download)(ctx.data_dir.clone());
                 DownloadCore::new_with_assets(game.clone(), core, assets)
             } else {
@@ -52,12 +58,6 @@ pub fn confirm_game(game: &GameRow, ctx: &mut Ctx) -> Transition {
                 DownloadCore::new(game.clone(), core, download)
             };
             return Transition::Push(Box::new(screen));
-        }
-        if !cores::has_required_bios(&ctx.games_root, core) {
-            return Transition::Push(Box::new(Message::new(
-                BIOS_MISSING_TITLE,
-                missing_bios_message(&ctx.games_root),
-            )));
         }
     }
     match why_not_playable(game, ctx) {
@@ -115,7 +115,9 @@ fn later_update(system: &System) -> String {
 /// Whether Confirm on `game` plays it (FR-CAR-9), for the "Play" hint.
 pub fn playable(game: &GameRow, ctx: &Ctx) -> bool {
     systems::by_id(&game.system).is_some_and(|s| match s.kind {
-        Kind::Embedded => cores::for_system(s).is_some_and(|c| cores::is_installed(&ctx.data_dir, c)),
+        Kind::Embedded => cores::for_system(s).is_some_and(|c| {
+            cores::is_installed(&ctx.data_dir, c) && cores::has_required_bios(&ctx.games_root, c)
+        }),
         Kind::External => emulators::for_system(s).is_some() && ctx.emulators.missing(s).is_none(),
     })
 }
@@ -796,10 +798,73 @@ mod tests {
         let mut w = world("exit 0");
         w.ctx.data_dir = w._dir.path().join("data");
         touch(&w.ctx.data_dir.join("cores/mednafen_psx_hw_libretro.so"));
-        touch(&w.ctx.games_root.join("bios/SCPH5502.bin"));
+        fs::create_dir_all(w.ctx.games_root.join("bios")).unwrap();
+        fs::write(w.ctx.games_root.join("bios/SCPH5502.bin"), b"bios data").unwrap();
         let ps1 = game_of(&w, "ps1");
         assert!(matches!(confirm_game(&ps1, &mut w.ctx), Transition::None));
         assert_eq!(w.ctx.play.take().map(|g| g.system), Some("ps1".to_owned()));
+    }
+
+    #[test]
+    fn confirm_on_ps1_with_no_core_and_no_bios_shows_the_message_and_starts_no_download() {
+        let mut w = world("exit 0");
+        w.ctx.data_dir = w._dir.path().join("data");
+        w.ctx.start_download = Box::new(|_, _| panic!("must not download a Core without a BIOS"));
+        let ps1 = game_of(&w, "ps1");
+        let Transition::Push(screen) = confirm_game(&ps1, &mut w.ctx) else {
+            panic!("expected the missing-BIOS message to be pushed");
+        };
+        assert_eq!(screen.title(), "PlayStation BIOS missing");
+        assert!(w.ctx.play.is_none());
+    }
+
+    #[test]
+    fn playable_is_false_for_an_embedded_game_with_an_installed_core_but_no_bios() {
+        let mut w = world("exit 0");
+        w.ctx.data_dir = w._dir.path().join("data");
+        touch(&w.ctx.data_dir.join("cores/mednafen_psx_hw_libretro.so"));
+        let ps1 = game_of(&w, "ps1");
+        assert!(!playable(&ps1, &w.ctx), "no BIOS yet");
+
+        fs::create_dir_all(w.ctx.games_root.join("bios")).unwrap();
+        fs::write(w.ctx.games_root.join("bios/SCPH5502.bin"), b"bios data").unwrap();
+        assert!(playable(&ps1, &w.ctx), "BIOS now in place");
+    }
+
+    #[test]
+    fn confirm_on_psp_with_nothing_installed_starts_the_assets_step() {
+        let mut w = world("exit 0");
+        w.ctx.data_dir = w._dir.path().join("data");
+        let psp = game_of(&w, "psp");
+        let Transition::Push(screen) = confirm_game(&psp, &mut w.ctx) else {
+            panic!("expected the download screen to be pushed");
+        };
+        assert_eq!(screen.title(), "Downloading the Core");
+        assert!(w.ctx.play.is_none());
+    }
+
+    #[test]
+    fn confirm_on_psp_with_both_the_core_and_its_assets_installed_plays() {
+        let mut w = world("exit 0");
+        w.ctx.data_dir = w._dir.path().join("data");
+        touch(&w.ctx.data_dir.join("cores/ppsspp_libretro.so"));
+        fs::create_dir_all(cores::assets_dir(&w.ctx.data_dir)).unwrap();
+        let psp = game_of(&w, "psp");
+        assert!(playable(&psp, &w.ctx));
+        assert!(matches!(confirm_game(&psp, &mut w.ctx), Transition::None));
+        assert_eq!(w.ctx.play.take().map(|g| g.system), Some("psp".to_owned()));
+    }
+
+    #[test]
+    fn confirm_on_psp_with_assets_already_present_skips_straight_to_the_core_step() {
+        let mut w = world("exit 0");
+        w.ctx.data_dir = w._dir.path().join("data");
+        fs::create_dir_all(cores::assets_dir(&w.ctx.data_dir)).unwrap();
+        w.ctx.start_assets_download = Box::new(|_| panic!("assets are already installed"));
+        w.ctx.start_download = Box::new(cores::testing::spawn_failing);
+        let psp = game_of(&w, "psp");
+        assert!(matches!(confirm_game(&psp, &mut w.ctx), Transition::Push(_)));
+        assert!(w.ctx.play.is_none());
     }
 
     #[test]
@@ -814,28 +879,13 @@ mod tests {
     }
 
     #[test]
-    fn an_embedded_system_without_a_core_comes_later() {
-        // Every Milestone-4 Embedded System already has a Core (PSP's last of all), so this pins
-        // the message `why_not_playable` shows for a future coreless one via `later_update`
-        // directly, and the loop below still exercises any that do exist.
+    fn later_update_names_the_system() {
+        // Every Milestone-4 Embedded System already has a Core (PSP's last of all), so no System
+        // currently takes this message; it pins the wording `why_not_playable` would show for a
+        // future coreless one.
         assert_eq!(
             later_update(systems::by_id("psp").unwrap()),
             "Playing PSP games inside Game37 comes in a later update."
         );
-        let mut w = world("exit 0");
-        w.ctx.data_dir = w._dir.path().join("data");
-        let coreless = systems::SYSTEMS
-            .iter()
-            .filter(|s| s.kind == Kind::Embedded && cores::for_system(s).is_none());
-        for system in coreless {
-            let game = game_of(&w, system.id);
-            assert!(!playable(&game, &w.ctx), "{}", system.id);
-            assert!(
-                why_not_playable(&game, &mut w.ctx)
-                    .unwrap()
-                    .contains("later update")
-            );
-            assert!(w.ctx.play.is_none());
-        }
     }
 }
