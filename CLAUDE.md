@@ -12,6 +12,10 @@ Rust + SDL3 emulator front end for Linux. Specs: `docs/requirements.md`, `docs/u
 
 All three must pass before a commit.
 
+Visual regression check: `scripts/smoke-screens.sh` renders one headless screenshot per screen and flow
+into `target/smoke/` (needs `.testdata/`). Look at them before starting a new milestone, and add a shot
+for every new screen.
+
 ## Conventions
 
 - Use the glossary in `CONTEXT.md` in code, comments and UI text: System, Game, Games Root, Display
@@ -20,5 +24,11 @@ All three must pass before a commit.
 - Tests never touch the real `~/Games`, `~/.config/game37` or `~/.local/share/game37`: use temp dirs.
 - Tests never run `flatpak run` or a real emulator; launching goes through an injectable spawner. A test
   that starts a child process kills it by pid when done (e.g. a drop guard), never by name pattern.
+- Tests that need real Cores or test ROMs read them from `/home/matei/Game37/.testdata/` (gitignored, local
+  only), are `#[ignore = "needs /home/matei/Game37/.testdata"]`, and run with `cargo test -- --ignored`.
+  Only one Core may be loaded per process, so every such test holds `crate::libretro::tests::serial()`.
+- libretro callbacks that a Core may call from its own threads (e.g. `get_current_framebuffer`) must not
+  depend on the per-thread callback state; keep what they need in process-wide state.
+- Real-Core OpenGL tests check the picture as the renderer shows it, not only the read-back bytes.
 - Never commit game files, BIOS, keys or secrets (NFR-6). Test fixtures are empty or tiny dummy files
   created by the tests themselves.

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use sdl3::event::{Event, WindowEvent};
 use sdl3::gamepad::{Axis, Gamepad};
 use sdl3::joystick::JoystickId;
-use sdl3::keyboard::Keycode;
+use sdl3::keyboard::{Keycode, Scancode};
 use sdl3::mouse::MouseButton;
 use sdl3::render::{WindowCanvas, create_renderer};
 use sdl3::sys::render::SDL_RendererLogicalPresentation;
@@ -21,12 +21,15 @@ use crate::launch::{Launcher, NeverExits, Processes};
 use crate::library::db::Library;
 use crate::library::watch::LibraryWatcher;
 use crate::screens;
+use crate::session::input::{self, Mouse, Ports};
+use crate::session::sdl;
 use crate::ui::chrome::{self, TopBar};
 use crate::ui::controls::{ControlEvent, Controls, StickAxis};
 use crate::ui::gfx::Gfx;
-use crate::ui::input::{ButtonStyle, Input, InputKind, Pointer};
+use crate::ui::input::{Action, ButtonStyle, Input, InputKind, Pointer};
 use crate::ui::nav::{Flow, Hits, Nav};
 use crate::ui::text::Fonts;
+use crate::ui::theme::Colour;
 
 pub fn run(options: Options) -> Result<(), String> {
     let path = options.config.unwrap_or_else(config::config_path);
@@ -40,6 +43,7 @@ pub fn run(options: Options) -> Result<(), String> {
         }
         _ => (Ctx::empty(), false),
     };
+    ctx.data_dir = data_dir;
     match options.screenshot {
         Some(shot) => {
             // Scan in the foreground, so the screenshot shows every Game.
@@ -95,6 +99,7 @@ fn interactive(
     let sdl = sdl3::init().map_err(|e| e.to_string())?;
     let video = sdl.video().map_err(|e| e.to_string())?;
     let gamepads = sdl.gamepad().map_err(|e| e.to_string())?;
+    let audio = sdl.audio().map_err(|e| eprintln!("game37: no sound: {e}")).ok();
     let fonts = Fonts::new()?;
     // OpenGL, because later milestones host libretro OpenGL cores in this renderer.
     let canvas = canvas(&video, 1600, 900, c"opengl")?;
@@ -111,8 +116,11 @@ fn interactive(
     let mut hits = Hits::default();
     let mut inputs = Vec::new();
     let mut sync_failing = false;
+    let mut last_frame = Instant::now();
     'frames: loop {
         let frame_start = Instant::now();
+        let dt = frame_start.duration_since(last_frame).as_secs_f64();
+        last_frame = frame_start;
         // Nothing is drawn while the window can't be seen: sleep until an event, or long enough
         // for the watcher to keep up.
         let shown = gfx.is_shown();
@@ -148,8 +156,20 @@ fn interactive(
         if launcher.poll(&mut nav, &mut ctx, ctx::now()).is_some() {
             gfx.restore();
         }
+        // Lets a Core download (FR-EMB-2) progress every frame, not only on input.
+        if nav.tick(&mut ctx) == Flow::Quit {
+            break 'frames;
+        }
+        if let Some(game) = ctx.play.take() {
+            let refresh = if vsync { gfx.refresh_rate() } else { None };
+            sdl::start(&game, &mut nav, &ctx, gfx.gl_context(), audio.as_ref(), refresh);
+        }
         inputs.extend(input.controls.poll(sdl3::timer::ticks()));
         for i in inputs.drain(..) {
+            // A running Game takes no menu input: it reads the keyboard itself.
+            if sdl::playing(&mut nav) {
+                continue;
+            }
             if nav.handle(i, &hits, &mut ctx) == Flow::Quit {
                 break 'frames;
             }
@@ -159,10 +179,33 @@ fn interactive(
                     gfx.restore();
                 }
             }
+            if let Some(game) = ctx.play.take() {
+                // Frames sync to the display only with vsync.
+                let refresh = if vsync { gfx.refresh_rate() } else { None };
+                sdl::start(&game, &mut nav, &ctx, gfx.gl_context(), audio.as_ref(), refresh);
+            }
         }
         copy_clipboard_request(&mut ctx, &video);
+        if let Some(session) = sdl::running(&mut nav) {
+            session.set_shown(shown);
+        }
         if !shown {
             continue;
+        }
+        let keys = events.keyboard_state();
+        let pads = input.pad_states();
+        let state = events.mouse_state();
+        let mouse = Mouse {
+            at: Some(gfx.to_logical(state.x(), state.y())),
+            left: state.left(),
+        };
+        sdl::tick(&mut nav, &mut ctx, &mut gfx, dt, &pads, mouse, |k| {
+            keys.is_scancode_pressed(k)
+        });
+        // The mouse cursor hides while a Game plays, unless the mouse touches its screen.
+        let cursor = !sdl::playing(&mut nav) || sdl::running(&mut nav).is_some_and(|s| s.touch_screen());
+        if cursor != sdl.mouse().is_cursor_showing() {
+            sdl.mouse().show_cursor(cursor);
         }
         ctx.input_kind = input.controls.kind;
         ctx.button_style = input.controls.style;
@@ -172,16 +215,25 @@ fn interactive(
             std::thread::sleep(left);
         }
     }
-    // Quitting while an emulator runs leaves it running, with Playtime counted up to now.
-    launcher.quit(&mut nav, &mut ctx, ctx::now());
-    nav.leave_all(&ctx);
+    close(&mut nav, &mut ctx, &mut launcher);
     Ok(())
+}
+
+/// What closing the window does once the loop has stopped.
+pub(crate) fn close(nav: &mut Nav, ctx: &mut Ctx, launcher: &mut Launcher) {
+    // A running Game ends first, saving it, paused or not.
+    sdl::end(nav, ctx);
+    // Quitting while an emulator runs leaves it running, with Playtime counted up to now.
+    launcher.quit(nav, ctx, ctx::now());
+    nav.leave_all(ctx);
 }
 
 fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screenshot) -> Result<(), String> {
     sdl3::hint::set("SDL_VIDEO_DRIVER", "offscreen");
+    sdl3::hint::set("SDL_AUDIO_DRIVER", "dummy");
     let sdl = sdl3::init().map_err(|e| e.to_string())?;
     let video = sdl.video().map_err(|e| e.to_string())?;
+    let audio = sdl.audio().map_err(|e| eprintln!("game37: no sound: {e}")).ok();
     let fonts = Fonts::new()?;
     let canvas = canvas(&video, 1920, 1080, c"opengl").or_else(|e| {
         eprintln!("game37: {e}; using the software renderer for the screenshot");
@@ -199,7 +251,13 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
     let mut hits = draw(&mut gfx, &mut nav, &ctx, &view, &clock);
     gfx.present();
     'steps: for step in shot.steps {
+        let mut esc = false;
         for i in step.inputs() {
+            // A running Game takes no menu input; `back` stands for Esc.
+            if sdl::playing(&mut nav) {
+                esc |= i == Input::Action(Action::Back);
+                continue;
+            }
             match i {
                 Input::Action(_) => view.kind = InputKind::Controller,
                 Input::Pointer(p) => {
@@ -216,14 +274,75 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
             if let Some(game) = ctx.launch.take() {
                 launcher.start(&game, &mut nav, &ctx);
             }
+            if let Some(game) = ctx.play.take() {
+                sdl::start(
+                    &game,
+                    &mut nav,
+                    &ctx,
+                    gfx.gl_context(),
+                    audio.as_ref(),
+                    Some(SHOT_REFRESH),
+                );
+            }
         }
-        ctx.input_kind = view.kind;
-        hits = draw(&mut gfx, &mut nav, &ctx, &view, &clock);
-        gfx.present();
+        for _ in 0..step.frames() {
+            sdl::tick(
+                &mut nav,
+                &mut ctx,
+                &mut gfx,
+                1.0 / SHOT_REFRESH,
+                &[],
+                Mouse::default(),
+                |k| esc && k == Scancode::Escape,
+            );
+            // A Core download (FR-EMB-2) runs on its own thread; block until it settles so the
+            // screenshot is deterministic, with a cap in case it never does.
+            let deadline = Instant::now() + Duration::from_secs(60);
+            while nav.top().busy() && Instant::now() < deadline {
+                if nav.tick(&mut ctx) == Flow::Quit {
+                    break 'steps;
+                }
+                if let Some(game) = ctx.play.take() {
+                    sdl::start(
+                        &game,
+                        &mut nav,
+                        &ctx,
+                        gfx.gl_context(),
+                        audio.as_ref(),
+                        Some(SHOT_REFRESH),
+                    );
+                }
+            }
+            ctx.input_kind = view.kind;
+            hits = draw(&mut gfx, &mut nav, &ctx, &view, &clock);
+            gfx.present();
+        }
     }
-    draw(&mut gfx, &mut nav, &ctx, &view, &clock);
-    gfx.save_bmp(&shot.out)
+    for frame in 1..=shot.frames {
+        sdl::tick(
+            &mut nav,
+            &mut ctx,
+            &mut gfx,
+            1.0 / SHOT_REFRESH,
+            &[],
+            Mouse::default(),
+            |_| false,
+        );
+        draw(&mut gfx, &mut nav, &ctx, &view, &clock);
+        if frame < shot.frames {
+            gfx.present();
+        }
+    }
+    let saved = gfx.save_bmp(&shot.out);
+    sdl::end(&mut nav, &mut ctx);
+    saved
 }
+
+/// The display refresh rate screenshot mode pretends to have: each step and frame is 1/60 s.
+const SHOT_REFRESH: f64 = 60.0;
+
+/// Around a screen without chrome, such as a running Game's bars.
+const BLACK: Colour = Colour::hex(0x000000);
 
 /// What the chrome needs to know about input.
 struct View {
@@ -234,6 +353,20 @@ struct View {
 
 /// Draws a frame (without presenting it) and returns where its clickable chrome went.
 fn draw(gfx: &mut Gfx<'_>, nav: &mut Nav, ctx: &Ctx, view: &View, clock: &str) -> Hits {
+    if !nav.base().chrome() {
+        gfx.clear(BLACK);
+        nav.base().draw(gfx, ctx);
+        let Some(modal) = nav.modal() else {
+            return Hits::default();
+        };
+        // The Pause Menu over a running Game.
+        modal.draw(gfx, ctx);
+        let hints = chrome::hintbar(gfx, &modal.hints(), view.kind, view.style, view.pointer);
+        return Hits {
+            hints,
+            ..Hits::default()
+        };
+    }
     chrome::background(gfx);
     nav.base().draw(gfx, ctx);
     let labels = nav.tab_labels();
@@ -286,6 +419,9 @@ fn clock() -> String {
 struct InputState {
     subsystem: GamepadSubsystem,
     pads: HashMap<JoystickId, Gamepad>,
+    /// Which pad plays on which port, kept for the app's whole life (FR-EMB-8): player order
+    /// follows connection order, and persists across Games.
+    ports: Ports<JoystickId>,
     controls: Controls,
     pointer: Option<(f32, f32)>,
 }
@@ -301,9 +437,19 @@ impl InputState {
         InputState {
             subsystem,
             pads: HashMap::new(),
+            ports: Ports::default(),
             controls: Controls::new(kind),
             pointer: None,
         }
+    }
+
+    /// This frame's pad state per occupied port, for a running Game (see
+    /// [`crate::session::sdl::pad_state`]).
+    fn pad_states(&self) -> Vec<(usize, input::PadState)> {
+        self.ports
+            .assigned()
+            .filter_map(|(port, id)| self.pads.get(&id).map(|g| (port, sdl::pad_state(g))))
+            .collect()
     }
 
     fn view(&self) -> View {
@@ -342,11 +488,13 @@ impl InputState {
             Event::GamepadAdded { which, .. } => {
                 if let Ok(pad) = self.subsystem.open(which) {
                     self.pads.insert(which, pad);
+                    self.ports.connect(which);
                 }
                 return Flow::Continue;
             }
             Event::GamepadRemoved { which, .. } => {
                 self.pads.remove(&which);
+                self.ports.disconnect(which);
                 ControlEvent::PadRemoved { pad: which }
             }
             Event::GamepadButtonDown { which, button, .. } => {
@@ -396,5 +544,29 @@ impl InputState {
         };
         self.controls.handle(sdl3::timer::ticks(), control, out);
         Flow::Continue
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `Ports` keyed by the SDL joystick ids `InputState` gets from `GamepadAdded` and
+    /// `GamepadRemoved` (FR-EMB-8): player order follows connection order, the other pads keep
+    /// their ports when one leaves, and a reconnecting id can land on a different port than before.
+    #[test]
+    fn joystick_ids_keep_their_ports_and_a_reconnecting_one_takes_the_lowest_free_port() {
+        let mut ports: Ports<JoystickId> = Ports::default();
+        let (a, b, c) = (JoystickId::new(1), JoystickId::new(2), JoystickId::new(3));
+        assert_eq!(ports.connect(a), Some(0), "player 1 by connection order");
+        assert_eq!(ports.connect(b), Some(1), "player 2");
+        ports.disconnect(a);
+        assert_eq!(ports.connect(c), Some(0), "fills the port a left");
+        assert_eq!(
+            ports.connect(a),
+            Some(2),
+            "a reconnects after b and c, on a different port than before"
+        );
+        assert_eq!(ports.port_of(b), Some(1), "b kept its port throughout");
     }
 }

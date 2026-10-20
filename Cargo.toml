@@ -6,12 +6,17 @@ publish = false
 
 [dependencies]
 dirs = "7"
+libloading = "0.9.0"
 notify = "8"
+png = "0.18.1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 sdl3 = { version = "0.20", features = ["ttf"] }
 serde = { version = "1", features = ["derive"] }
-toml = "0.9"
-walkdir = "2"
-
-[dev-dependencies]
 tempfile = "3"
+toml = "0.9"
+ureq = "3.4.2"
+walkdir = "2"
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
+
+[build-dependencies]
+cc = "1"

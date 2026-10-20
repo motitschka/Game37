@@ -65,8 +65,28 @@ pub fn scan_system(root: &Path, system: &'static System) -> Vec<FoundGame> {
         let Some(rel_path) = rel_path(root, entry.path()) else {
             continue;
         };
-        let stem = entry.path().file_stem().unwrap_or_default().to_string_lossy();
-        let title = display_title(&stem);
+        // A PSP Game's `EBOOT.PBP` carries no title of its own: its parent folder's name is
+        // the Display Title instead (e.g. `CMFileManager/EBOOT.PBP` -> "CMFileManager"), unless
+        // that parent is the System folder itself (`psp/EBOOT.PBP`), which falls back to the file
+        // stem like any other Game.
+        let title = if system.id == "psp"
+            && entry
+                .file_name()
+                .to_string_lossy()
+                .eq_ignore_ascii_case("eboot.pbp")
+            && entry.path().parent() != Some(root.join(system.id).as_path())
+        {
+            let folder = entry
+                .path()
+                .parent()
+                .and_then(Path::file_name)
+                .unwrap_or_default()
+                .to_string_lossy();
+            display_title(&folder)
+        } else {
+            let stem = entry.path().file_stem().unwrap_or_default().to_string_lossy();
+            display_title(&stem)
+        };
         games.push((
             entry.into_path(),
             FoundGame {
@@ -401,6 +421,50 @@ mod tests {
         touch(tmp.path(), "unknown/C.nes");
         let systems: Vec<_> = scan_root(tmp.path()).iter().map(|g| g.system).collect();
         assert_eq!(systems, ["nes", "snes", "ps4"]);
+    }
+
+    #[test]
+    fn a_psp_eboot_takes_its_title_from_its_parent_folder_in_any_case() {
+        let tmp = TempDir::new().unwrap();
+        touch(tmp.path(), "psp/CMFileManager/EBOOT.PBP");
+        touch(tmp.path(), "psp/Crash Team Racing (USA)/eboot.pbp");
+        touch(tmp.path(), "psp/Standalone.iso");
+        let games = scan(tmp.path(), "psp");
+        assert_eq!(
+            games,
+            [
+                FoundGame {
+                    system: "psp",
+                    rel_path: "psp/CMFileManager/EBOOT.PBP".into(),
+                    title: "CMFileManager".into(),
+                },
+                FoundGame {
+                    system: "psp",
+                    rel_path: "psp/Crash Team Racing (USA)/eboot.pbp".into(),
+                    title: "Crash Team Racing".into(),
+                },
+                FoundGame {
+                    system: "psp",
+                    rel_path: "psp/Standalone.iso".into(),
+                    title: "Standalone".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_psp_eboot_at_the_system_folder_root_takes_its_title_from_its_file_stem() {
+        let tmp = TempDir::new().unwrap();
+        touch(tmp.path(), "psp/EBOOT.PBP");
+        let games = scan(tmp.path(), "psp");
+        assert_eq!(
+            games,
+            [FoundGame {
+                system: "psp",
+                rel_path: "psp/EBOOT.PBP".into(),
+                title: "EBOOT".into(),
+            }]
+        );
     }
 
     #[test]

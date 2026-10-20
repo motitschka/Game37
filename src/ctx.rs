@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use crate::cores::{CoreInfo, Download};
 use crate::emulators::Emulators;
 use crate::library::db::{DbError, GameRow, Library};
 use crate::library::scan;
@@ -11,6 +12,9 @@ use crate::ui::input::{ButtonStyle, InputKind};
 pub struct Ctx {
     pub library: Library,
     pub games_root: PathBuf,
+    /// Where the library database and the downloaded Cores live (`config::data_dir()` unless
+    /// `--data-dir` overrides it).
+    pub data_dir: PathBuf,
     /// Bumped whenever the library's Games changed on disk, so screens know to reload them.
     pub revision: u64,
     /// Whether screens animate. Off in screenshot mode and tests, so they draw the settled state.
@@ -28,6 +32,15 @@ pub struct Ctx {
     pub clipboard_request: Option<String>,
     /// A Game a screen asked to play; `app.rs` takes it and starts its Standalone Emulator.
     pub launch: Option<GameRow>,
+    /// A Game of an Embedded System a screen asked to play; `app.rs` takes it and starts it on
+    /// its Core.
+    pub play: Option<GameRow>,
+    /// Starts downloading a Core (FR-EMB-2): `Download::start` in production; tests and
+    /// screenshot mode's offline cases swap it so they never hit the network.
+    pub start_download: Box<dyn Fn(&'static CoreInfo, PathBuf) -> Download>,
+    /// Starts downloading PPSSPP's assets zip: `Download::start_assets` in production; tests and
+    /// screenshot mode's offline cases swap it so they never hit the network.
+    pub start_assets_download: Box<dyn Fn(PathBuf) -> Download>,
 }
 
 impl Ctx {
@@ -35,6 +48,7 @@ impl Ctx {
         Ctx {
             library,
             games_root,
+            data_dir: PathBuf::new(),
             revision: 0,
             animate: false,
             input_kind: InputKind::Controller,
@@ -43,6 +57,9 @@ impl Ctx {
             detect_emulators: Box::new(Emulators::detect),
             clipboard_request: None,
             launch: None,
+            play: None,
+            start_download: Box::new(Download::start),
+            start_assets_download: Box::new(Download::start_assets),
         }
     }
 

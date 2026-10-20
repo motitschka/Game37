@@ -7,7 +7,7 @@ use crate::systems::{self, Kind};
 use crate::ui::input::{Action, Input, Pointer};
 
 pub const USAGE: &str = "usage: game37 [--config <path>] [--data-dir <path>] \
-[--screenshot <out.bmp> [--actions <a,b,...>] [--missing-emulators <system ids>]]";
+[--screenshot <out.bmp> [--actions <a,b,...>] [--missing-emulators <system ids>] [--frames <n>]]";
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Options {
@@ -18,7 +18,8 @@ pub struct Options {
     pub screenshot: Option<Screenshot>,
 }
 
-/// Headless run: apply `steps`, one per frame, then write the frame as a BMP and exit.
+/// Headless run: apply `steps`, one per frame, draw `frames` more frames, then write the last as a
+/// BMP and exit.
 #[derive(Debug, PartialEq)]
 pub struct Screenshot {
     pub out: PathBuf,
@@ -26,6 +27,9 @@ pub struct Screenshot {
     /// Which Systems' Standalone Emulators count as missing; every other emulator counts as
     /// installed (FR-CAR-9). `Emulators::all_installed()` when `--missing-emulators` wasn't given.
     pub missing_emulators: Emulators,
+    /// Frames drawn after the steps, at least 1 (`--frames`): a running Game advances one frame
+    /// per step and per frame here.
+    pub frames: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -33,13 +37,21 @@ pub enum Step {
     Action(Action),
     /// A left click at logical coordinates.
     Click(f32, f32),
+    /// `wait:N`: N frames without input, e.g. to let a running Game get going.
+    Wait(u32),
 }
 
 impl Step {
+    /// How many frames the step takes.
+    pub fn frames(self) -> u32 {
+        if let Step::Wait(n) = self { n } else { 1 }
+    }
+
     /// The inputs the step stands for: a click is preceded by the pointer moving there.
     pub fn inputs(self) -> Vec<Input> {
         match self {
             Step::Action(a) => vec![Input::Action(a)],
+            Step::Wait(_) => Vec::new(),
             Step::Click(x, y) => {
                 vec![
                     Input::Pointer(Pointer::Move { x, y }),
@@ -55,6 +67,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
     let mut out = None;
     let mut actions = None;
     let mut missing_emulators = None;
+    let mut frames = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or_else(|| format!("{arg} needs a value"));
@@ -64,21 +77,34 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
             "--screenshot" => out = Some(PathBuf::from(value()?)),
             "--actions" => actions = Some(value()?),
             "--missing-emulators" => missing_emulators = Some(value()?),
+            "--frames" => frames = Some(value()?),
             _ => return Err(format!("unknown argument {arg:?}")),
         }
     }
-    options.screenshot = match (out, actions, missing_emulators) {
-        (Some(out), actions, missing_emulators) => Some(Screenshot {
-            out,
-            steps: parse_steps(actions.as_deref().unwrap_or(""))?,
-            missing_emulators: parse_missing_emulators(missing_emulators.as_deref())?,
-        }),
-        (None, Some(_), _) => return Err("--actions only works with --screenshot".to_owned()),
-        (None, None, Some(_)) => {
-            return Err("--missing-emulators only works with --screenshot".to_owned());
+    let Some(out) = out else {
+        let given = [
+            ("--actions", actions.is_some()),
+            ("--missing-emulators", missing_emulators.is_some()),
+            ("--frames", frames.is_some()),
+        ];
+        if let Some((flag, _)) = given.iter().find(|(_, given)| *given) {
+            return Err(format!("{flag} only works with --screenshot"));
         }
-        (None, None, None) => None,
+        return Ok(options);
     };
+    options.screenshot = Some(Screenshot {
+        out,
+        steps: parse_steps(actions.as_deref().unwrap_or(""))?,
+        missing_emulators: parse_missing_emulators(missing_emulators.as_deref())?,
+        frames: match frames {
+            None => 1,
+            Some(n) => n
+                .parse()
+                .ok()
+                .filter(|&n| n >= 1)
+                .ok_or_else(|| format!("bad --frames {n:?}: expected a whole number from 1"))?,
+        },
+    });
     Ok(options)
 }
 
@@ -119,6 +145,12 @@ fn parse_steps(list: &str) -> Result<Vec<Step>, String> {
 }
 
 fn parse_step(step: &str) -> Result<Step, String> {
+    if let Some(n) = step.strip_prefix("wait:") {
+        return n
+            .parse()
+            .map(Step::Wait)
+            .map_err(|_| format!("bad wait {step:?}: expected wait:N frames"));
+    }
     if let Some(rest) = step.strip_prefix("click:") {
         let coords = rest
             .split_once(':')
@@ -147,7 +179,7 @@ mod tests {
     #[test]
     fn screenshot_with_actions() {
         let options = parse(args(
-            "--screenshot out.bmp --config c.toml --actions nexttab,click:900:60,back",
+            "--screenshot out.bmp --config c.toml --actions nexttab,click:900:60,wait:30,back",
         ))
         .unwrap();
         assert_eq!(options.config, Some(PathBuf::from("c.toml")));
@@ -158,9 +190,40 @@ mod tests {
             [
                 Step::Action(Action::NextTab),
                 Step::Click(900.0, 60.0),
+                Step::Wait(30),
                 Step::Action(Action::Back)
             ]
         );
+    }
+
+    #[test]
+    fn frames_default_to_one_and_take_a_count() {
+        assert_eq!(
+            parse(args("--screenshot o.bmp"))
+                .unwrap()
+                .screenshot
+                .unwrap()
+                .frames,
+            1
+        );
+        let shot = parse(args("--screenshot o.bmp --actions confirm --frames 180"))
+            .unwrap()
+            .screenshot
+            .unwrap();
+        assert_eq!((shot.frames, shot.steps.len()), (180, 1));
+        for bad in ["0", "-1", "ten", ""] {
+            let err = parse(vec![
+                "--screenshot".into(),
+                "o.bmp".into(),
+                "--frames".into(),
+                bad.into(),
+            ])
+            .unwrap_err();
+            assert!(err.contains("--frames"), "{err}");
+        }
+        let err = parse(args("--frames 2")).unwrap_err();
+        assert!(err.contains("--screenshot"), "{err}");
+        assert!(USAGE.contains("[--frames <n>]"));
     }
 
     #[test]

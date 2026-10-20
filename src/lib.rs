@@ -1,10 +1,13 @@
 pub mod app;
 pub mod cli;
 pub mod config;
+pub mod cores;
 pub mod ctx;
 pub mod emulators;
 pub mod launch;
 pub mod library;
+pub mod libretro;
 pub mod screens;
+pub mod session;
 pub mod systems;
 pub mod ui;

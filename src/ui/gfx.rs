@@ -12,6 +12,7 @@ use sdl3::video::{WindowContext, WindowFlags};
 use super::Rect;
 use super::text::{Fonts, Weight};
 use super::theme::Colour;
+use crate::libretro;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Align {
@@ -102,6 +103,30 @@ pub struct Gfx<'tc> {
     texts: FrameCache<TextKey, Option<CachedText<'tc>>>,
     /// Text widths, measured without rendering.
     widths: FrameCache<TextKey, f32>,
+    /// The running Game's last frame. Kept here rather than in its screen, because a texture
+    /// borrows the texture creator and a `Box<dyn Screen>` can't.
+    game: Option<GameTexture<'tc>>,
+    /// Images screens set by key, such as Save State screenshots.
+    images: HashMap<&'static str, Texture<'tc>>,
+}
+
+struct GameTexture<'tc> {
+    texture: Texture<'tc>,
+    width: u32,
+    height: u32,
+    format: libretro::PixelFormat,
+}
+
+fn sdl_format(format: libretro::PixelFormat) -> sdl3::pixels::PixelFormat {
+    use sdl3::pixels::PixelFormat;
+    match format {
+        libretro::PixelFormat::Xrgb1555 => PixelFormat::XRGB1555,
+        libretro::PixelFormat::Rgb565 => PixelFormat::RGB565,
+        libretro::PixelFormat::Xrgb8888 => PixelFormat::XRGB8888,
+        // The alpha a Core leaves in its framebuffer isn't the picture's (PPSSPP leaves 0): a
+        // Game's picture is opaque.
+        libretro::PixelFormat::Rgba32 => PixelFormat::RGBX32,
+    }
 }
 
 fn fcolour(c: Colour) -> FColor {
@@ -183,6 +208,25 @@ fn render<'tc>(
     })
 }
 
+/// Sharp pixels at any scale: SDL's pixel-art filter (SDL 3.4), else nearest neighbour.
+fn set_pixel_art_scaling(texture: &Texture<'_>) {
+    use sdl3::sys::render::SDL_SetTextureScaleMode;
+    use sdl3::sys::surface::{SDL_SCALEMODE_NEAREST, SDL_SCALEMODE_PIXELART};
+    // SAFETY: the texture is alive.
+    unsafe {
+        if !SDL_SetTextureScaleMode(texture.raw(), SDL_SCALEMODE_PIXELART) {
+            SDL_SetTextureScaleMode(texture.raw(), SDL_SCALEMODE_NEAREST);
+        }
+    }
+}
+
+fn set_linear_scaling(texture: &Texture<'_>) {
+    use sdl3::sys::render::SDL_SetTextureScaleMode;
+    use sdl3::sys::surface::SDL_SCALEMODE_LINEAR;
+    // SAFETY: the texture is alive.
+    unsafe { SDL_SetTextureScaleMode(texture.raw(), SDL_SCALEMODE_LINEAR) };
+}
+
 /// Half the width of the soft edge drawn around shapes, standing in for anti-aliasing.
 const FEATHER: f32 = 0.5;
 
@@ -199,7 +243,127 @@ impl<'tc> Gfx<'tc> {
             fonts,
             texts: FrameCache::new(),
             widths: FrameCache::new(),
+            game: None,
+            images: HashMap::new(),
         }
+    }
+
+    /// Copies a Core's video frame into the game texture, remaking it when the frame's size or
+    /// pixel format changed. Don't pass a duped frame: it's the one already uploaded.
+    pub fn upload_game_frame(&mut self, frame: &libretro::Frame) {
+        if frame.width == 0 || frame.height == 0 {
+            return;
+        }
+        let fits = self
+            .game
+            .as_ref()
+            .is_some_and(|g| (g.width, g.height, g.format) == (frame.width, frame.height, frame.format));
+        if !fits {
+            self.game = None;
+            let texture = match self.creator.create_texture_streaming(
+                sdl_format(frame.format),
+                frame.width,
+                frame.height,
+            ) {
+                Ok(texture) => texture,
+                Err(e) => {
+                    eprintln!("game37: can't make the game texture: {e}");
+                    return;
+                }
+            };
+            if frame.format == libretro::PixelFormat::Rgba32 {
+                // Only frames a Core drew with OpenGL are RGBA. Those are often drawn at several
+                // times the System's resolution: smooth scaling, not pixel art.
+                set_linear_scaling(&texture);
+            } else {
+                set_pixel_art_scaling(&texture);
+            }
+            self.game = Some(GameTexture {
+                texture,
+                width: frame.width,
+                height: frame.height,
+                format: frame.format,
+            });
+        }
+        let game = self.game.as_mut().expect("made above");
+        if let Err(e) = game.texture.update(None, &frame.data, frame.pitch) {
+            eprintln!("game37: can't upload the game frame: {e}");
+        }
+    }
+
+    /// The window and the OpenGL context of an `opengl` renderer, for a Core's context to sit
+    /// next to; `None` on another renderer.
+    pub fn gl_context(&self) -> Option<(sdl3::video::Window, sdl3::sys::video::SDL_GLContext)> {
+        use sdl3::sys::render::{SDL_FlushRenderer, SDL_GetRendererName};
+        use sdl3::sys::video::SDL_GL_GetCurrentContext;
+        let renderer = self.canvas.raw();
+        // SAFETY: the renderer is alive; its name is a static string. Flushing activates the
+        // renderer, which makes its context current.
+        let context = unsafe {
+            let name = SDL_GetRendererName(renderer);
+            if name.is_null() || std::ffi::CStr::from_ptr(name) != c"opengl" {
+                return None;
+            }
+            SDL_FlushRenderer(renderer);
+            SDL_GL_GetCurrentContext()
+        };
+        (!context.is_null()).then(|| (self.canvas.window().clone(), context))
+    }
+
+    /// Draws the game texture stretched over `r`.
+    pub fn draw_game_frame(&mut self, r: Rect) {
+        if let Some(game) = &self.game {
+            let _ = self
+                .canvas
+                .copy(&game.texture, None, FRect::new(r.x, r.y, r.w, r.h));
+        }
+    }
+
+    /// Sets the image drawn for `key` from RGB pixels, or forgets it for `None`.
+    pub fn set_image(&mut self, key: &'static str, image: Option<&crate::session::states::Rgb>) {
+        self.images.remove(key);
+        let Some(image) = image else { return };
+        let made = self
+            .creator
+            .create_texture_static(sdl3::pixels::PixelFormat::RGB24, image.width, image.height)
+            .map_err(|e| e.to_string())
+            .and_then(|mut t| {
+                t.update(None, &image.data, image.width as usize * 3)
+                    .map_err(|e| e.to_string())?;
+                Ok(t)
+            });
+        match made {
+            Ok(texture) => {
+                set_pixel_art_scaling(&texture);
+                self.images.insert(key, texture);
+            }
+            Err(e) => eprintln!("game37: can't make an image: {e}"),
+        }
+    }
+
+    /// Draws the image set for `key` stretched over `r`; returns whether there is one.
+    pub fn draw_image(&mut self, key: &str, r: Rect) -> bool {
+        let Some(texture) = self.images.get(key) else {
+            return false;
+        };
+        let _ = self.canvas.copy(texture, None, FRect::new(r.x, r.y, r.w, r.h));
+        true
+    }
+
+    /// The window's display refresh rate in Hz, if SDL knows it.
+    pub fn refresh_rate(&self) -> Option<f64> {
+        use sdl3::sys::video::{SDL_GetCurrentDisplayMode, SDL_GetDisplayForWindow};
+        // SAFETY: the window is alive for as long as `self.canvas`. SDL returns null or a display
+        // mode that stays valid until the display changes; it's read right away.
+        let mode = unsafe {
+            SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(self.canvas.window().raw())).as_ref()
+        }?;
+        let rate = if mode.refresh_rate_numerator > 0 && mode.refresh_rate_denominator > 0 {
+            mode.refresh_rate_numerator as f64 / mode.refresh_rate_denominator as f64
+        } else {
+            mode.refresh_rate as f64
+        };
+        (rate > 0.0).then_some(rate)
     }
 
     pub fn clear(&mut self, c: Colour) {
