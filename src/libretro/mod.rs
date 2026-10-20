@@ -11,7 +11,6 @@ mod hw;
 #[cfg(test)]
 pub(crate) mod tests;
 
-use std::borrow::Cow;
 use std::ffi::{CString, c_int};
 use std::fmt;
 use std::marker::PhantomData;
@@ -23,10 +22,10 @@ use libloading::Library;
 use libloading::os::unix;
 
 use callbacks::State;
+pub use ffi::ProcAddress;
 use ffi::{Api, RetroGameGeometry, RetroGameInfo, RetroSystemAvInfo, RetroSystemInfo};
 use hw::Hw;
-pub use ffi::ProcAddress;
-pub use hw::{GlHost, GlRequest, HwFrame};
+pub use hw::{GlHost, GlRequest};
 
 /// Ports a Core can read input from.
 pub const MAX_PORTS: usize = 4;
@@ -97,6 +96,9 @@ pub enum PixelFormat {
     Xrgb1555,
     Xrgb8888,
     Rgb565,
+    /// Bytes R, G, B, A in memory (SDL's `RGBA32`): a frame a Core drew with OpenGL, as read back
+    /// from its framebuffer. Never a Core's own format.
+    Rgba32,
 }
 
 impl PixelFormat {
@@ -112,7 +114,7 @@ impl PixelFormat {
     pub fn bytes_per_pixel(self) -> usize {
         match self {
             PixelFormat::Xrgb1555 | PixelFormat::Rgb565 => 2,
-            PixelFormat::Xrgb8888 => 4,
+            PixelFormat::Xrgb8888 | PixelFormat::Rgba32 => 4,
         }
     }
 }
@@ -165,19 +167,11 @@ pub struct Frame {
     pub data: Vec<u8>,
 }
 
-/// A Core's last frame: its pixels, or a frame it drew with OpenGL.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Video<'a> {
-    /// Empty until the Core's first frame.
-    Software(&'a Frame),
-    Hardware(HwFrame),
-}
-
 /// What one [`Core::run_frame`] produced.
 #[derive(Debug)]
 pub struct FrameOutput<'a> {
-    /// The last frame the Core showed.
-    pub video: Video<'a>,
+    /// The last frame the Core showed; empty until its first.
+    pub video: &'a Frame,
     /// The Core showed no new frame this run, so `video` is the previous one.
     pub duped: bool,
     /// Interleaved stereo samples (left, right, left, …) produced during this run.
@@ -260,8 +254,6 @@ pub struct Core {
     video: Frame,
     /// The Core's OpenGL rendering, when it asked for it.
     hw: Option<Hw>,
-    /// The last frame was drawn into the FBO, at this size, rather than sent as `video`.
-    hw_size: Option<(u32, u32)>,
     duped: bool,
     audio: Vec<i16>,
     game_path: CString,
@@ -278,17 +270,20 @@ fn c_path(path: &Path) -> Result<CString, CoreError> {
 }
 
 impl Core {
-    /// Loads the Core at `core_path` and starts `game_path` on it. With a `gl` host, a Core may
+    /// Loads the Core at `core_path` and starts `game_path` on it. `options` are Core option
+    /// values, `(key, value)`, the Core gets ahead of its own defaults. With a `gl` host, a Core may
     /// render with OpenGL (`SET_HW_RENDER`); without one it is refused.
     pub fn load(
         core_path: &Path,
         game_path: &Path,
         dirs: CoreDirs,
+        options: &[(&str, &str)],
         gl: Option<Box<dyn GlHost>>,
     ) -> Result<Core, CoreError> {
         let claim = Claim::take().ok_or(CoreError::AlreadyLoaded)?;
         let game_cpath = c_path(game_path)?;
         let mut state = State::new(c_path(&dirs.system)?, c_path(&dirs.save)?);
+        state.overrides = callbacks::option_overrides(options);
         state.gl_host = gl;
 
         // SAFETY: loading a shared library runs its initialisers. A Core is a plain C library and
@@ -327,7 +322,6 @@ impl Core {
             game_loaded: false,
             video: Frame::default(),
             hw: None,
-            hw_size: None,
             duped: false,
             audio: Vec::new(),
             game_path: game_cpath,
@@ -399,7 +393,7 @@ impl Core {
             s.audio.clear();
         });
         // SAFETY: the Core is loaded with a Game and its callbacks' state is installed; a Core
-        // rendering with OpenGL runs with its context current.
+        // rendering with OpenGL runs with its context current, and its frame is read back.
         let run = || unsafe { (self.api.run)() };
         match &self.hw {
             Some(hw) => hw.run(run),
@@ -408,34 +402,15 @@ impl Core {
         callbacks::with(|s| {
             self.duped = !s.fresh;
             if s.fresh {
-                self.hw_size = s.hw_size.take();
-                if self.hw_size.is_none() {
-                    std::mem::swap(&mut self.video, &mut s.frame);
-                }
+                std::mem::swap(&mut self.video, &mut s.frame);
                 s.fresh = false;
             }
             std::mem::swap(&mut self.audio, &mut s.audio);
         });
         FrameOutput {
-            video: self.video(),
+            video: &self.video,
             duped: self.duped,
             audio: &self.audio,
-        }
-    }
-
-    /// The last frame the Core showed.
-    pub fn video(&self) -> Video<'_> {
-        match (&self.hw, self.hw_size) {
-            (Some(hw), Some((w, h))) => Video::Hardware(hw.frame(w, h)),
-            _ => Video::Software(&self.video),
-        }
-    }
-
-    /// The last frame's pixels, read back from OpenGL when the Core drew it there.
-    pub fn snapshot(&self) -> Cow<'_, Frame> {
-        match (&self.hw, self.hw_size) {
-            (Some(hw), Some((w, h))) => Cow::Owned(hw.read(w, h)),
-            _ => Cow::Borrowed(&self.video),
         }
     }
 
@@ -445,7 +420,7 @@ impl Core {
         callbacks::with(|s| s.input).unwrap_or_default()
     }
 
-    /// The last video frame the Core sent as pixels (see [`Core::snapshot`] for OpenGL ones).
+    /// The last video frame the Core produced.
     pub fn frame(&self) -> &Frame {
         &self.video
     }

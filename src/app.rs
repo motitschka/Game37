@@ -265,7 +265,14 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
                 launcher.start(&game, &mut nav, &ctx);
             }
             if let Some(game) = ctx.play.take() {
-                sdl::start(&game, &mut nav, &ctx, sdl::gl_host(&gfx), audio.as_ref(), Some(SHOT_REFRESH));
+                sdl::start(
+                    &game,
+                    &mut nav,
+                    &ctx,
+                    sdl::gl_host(&gfx),
+                    audio.as_ref(),
+                    Some(SHOT_REFRESH),
+                );
             }
         }
         for _ in 0..step.frames() {
@@ -280,7 +287,14 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
                     break 'steps;
                 }
                 if let Some(game) = ctx.play.take() {
-                    sdl::start(&game, &mut nav, &ctx, sdl::gl_host(&gfx), audio.as_ref(), Some(SHOT_REFRESH));
+                    sdl::start(
+                        &game,
+                        &mut nav,
+                        &ctx,
+                        sdl::gl_host(&gfx),
+                        audio.as_ref(),
+                        Some(SHOT_REFRESH),
+                    );
                 }
             }
             ctx.input_kind = view.kind;

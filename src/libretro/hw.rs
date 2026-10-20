@@ -1,12 +1,14 @@
 //! libretro OpenGL hardware rendering (ADR 0003): a Core that asks for it with `SET_HW_RENDER`
-//! draws into a framebuffer object of the host's, in an OpenGL context of its own that shares
-//! textures with the frontend's, so the frontend can draw the FBO's colour texture.
+//! draws into a framebuffer object of the host's, in an OpenGL context of its own. Each frame it
+//! draws is read back into a [`Frame`] (`Rgba32`), so the frontend shows it like any other: the
+//! Core's context shares nothing with the frontend's.
 //!
 //! Windows and contexts are the frontend's, behind [`GlHost`]; this module makes the few OpenGL
-//! calls the libretro protocol needs (the FBO, `glFinish`, reading a frame back) through function
-//! pointers the host looks up.
+//! calls the libretro protocol needs (the FBO, reading a frame back) through function pointers
+//! the host looks up.
 
 use std::ffi::{CStr, c_void};
+use std::fmt;
 
 use super::callbacks;
 use super::ffi::{HwContextResetFn, ProcAddress};
@@ -23,10 +25,20 @@ pub struct GlRequest {
     pub minor: u32,
 }
 
+impl fmt::Display for GlRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.core_profile {
+            write!(f, "OpenGL {}.{} core", self.major, self.minor)
+        } else {
+            write!(f, "OpenGL compatibility")
+        }
+    }
+}
+
 /// The frontend's side of OpenGL rendering: the Core's context and the frontend's own. Without
 /// one, Cores are refused hardware rendering.
 pub trait GlHost {
-    /// Creates the Core's context as `request` asks, sharing objects with the frontend's.
+    /// Creates the Core's context as `request` asks; it needn't share objects with the frontend's.
     fn create_context(&mut self, request: GlRequest) -> Result<(), String>;
     /// Makes the Core's context current.
     fn make_core_current(&mut self);
@@ -36,19 +48,6 @@ pub trait GlHost {
     fn proc_address(&self, name: &CStr) -> ProcAddress;
     /// Destroys the Core's context, leaving the frontend's current.
     fn destroy_context(&mut self);
-}
-
-/// A frame the Core drew with OpenGL: `width × height` texels at the origin of `texture`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct HwFrame {
-    /// The FBO's colour texture, an `RGBA8` `GL_TEXTURE_2D` shared with the frontend's context.
-    pub texture: u32,
-    pub texture_width: u32,
-    pub texture_height: u32,
-    pub width: u32,
-    pub height: u32,
-    /// Texel row 0 is the bottom of the picture, OpenGL's convention, so it shows flipped.
-    pub bottom_left_origin: bool,
 }
 
 /// What a Core asked for in `SET_HW_RENDER`.
@@ -140,7 +139,6 @@ gl_functions! {
     framebuffer_renderbuffer = c"glFramebufferRenderbuffer": fn(GLenum, GLenum, GLenum, GLuint);
     clear_color = c"glClearColor": fn(f32, f32, f32, f32);
     clear = c"glClear": fn(u32);
-    finish = c"glFinish": fn();
     get_integer_v = c"glGetIntegerv": fn(GLenum, *mut GLint);
     bind_buffer = c"glBindBuffer": fn(GLenum, GLuint);
     pixel_store_i = c"glPixelStorei": fn(GLenum, GLint);
@@ -181,6 +179,10 @@ impl Hw {
             }
         };
         callbacks::with(|s| s.fbo = hw.fbo);
+        eprintln!(
+            "game37: the Core draws with {} into a {width}×{height} framebuffer",
+            request.gl
+        );
         if let Some(reset) = request.context_reset {
             // SAFETY: the Core's context is current with its FBO bound, as libretro.h promises
             // `context_reset`; the callbacks' state is not borrowed, so the Core may call back.
@@ -267,13 +269,16 @@ impl Hw {
         (self.fbo, self.depth, self.texture) = (0, 0, 0);
     }
 
-    /// Runs `f` (a `retro_run`) with the Core's context current, then waits for its drawing to
-    /// finish, so the frontend's context sees the whole frame in the shared texture.
+    /// Runs `f` (a `retro_run`) with the Core's context current, then reads the frame it drew into
+    /// the FBO, if it drew one, into the callbacks' frame.
     pub fn run(&self, f: impl FnOnce()) {
         host(|h| h.make_core_current());
         f();
-        // SAFETY: the Core's context is current.
-        unsafe { (self.gl.finish)() };
+        callbacks::with(|s| {
+            if let Some((width, height)) = s.hw_size.take() {
+                self.read(&mut s.frame, width, height);
+            }
+        });
         host(|h| h.make_frontend_current());
     }
 
@@ -290,25 +295,15 @@ impl Hw {
         host(|h| h.destroy_context());
     }
 
-    pub fn frame(&self, width: u32, height: u32) -> HwFrame {
-        HwFrame {
-            texture: self.texture,
-            texture_width: self.width,
-            texture_height: self.height,
-            width,
-            height,
-            bottom_left_origin: self.request.bottom_left_origin,
-        }
-    }
-
-    /// Reads the `width × height` picture back from the FBO, top row first, as `XRGB8888`.
-    pub fn read(&self, width: u32, height: u32) -> Frame {
+    /// Reads the `width × height` picture (at most the FBO's size) into `frame`, top row first,
+    /// with the Core's context current.
+    fn read(&self, frame: &mut Frame, width: u32, height: u32) {
         let (w, h) = (width.min(self.width), height.min(self.height));
-        let mut rgba = vec![0u8; w as usize * h as usize * 4];
+        let pitch = w as usize * 4;
+        frame.data.resize(pitch * h as usize, 0);
         let gl = &self.gl;
-        host(|h| h.make_core_current());
-        // SAFETY: the Core's context is current. `rgba` holds `w × h` RGBA pixels, which is what
-        // `glReadPixels` writes with no pack buffer bound, rows packed and 4-byte aligned. The
+        // SAFETY: the Core's context is current. `frame.data` holds `w × h` RGBA pixels, which is
+        // what `glReadPixels` writes with no pack buffer bound, rows packed and 4-byte aligned. The
         // Core's bindings and pack state are put back as they were.
         unsafe {
             let (mut read_fbo, mut pack_buffer, mut row_length, mut alignment) = (0, 0, 0, 0);
@@ -327,41 +322,69 @@ impl Hw {
                 h as GLsizei,
                 GL_RGBA,
                 GL_UNSIGNED_BYTE,
-                rgba.as_mut_ptr().cast(),
+                frame.data.as_mut_ptr().cast(),
             );
             (gl.pixel_store_i)(GL_PACK_ALIGNMENT, alignment);
             (gl.pixel_store_i)(GL_PACK_ROW_LENGTH, row_length);
             (gl.bind_buffer)(GL_PIXEL_PACK_BUFFER, pack_buffer as GLuint);
             (gl.bind_framebuffer)(GL_READ_FRAMEBUFFER, read_fbo as GLuint);
         }
-        host(|h| h.make_frontend_current());
-        rgba_to_frame(&rgba, w, h, self.request.bottom_left_origin)
+        if self.request.bottom_left_origin {
+            flip_rows(&mut frame.data, pitch);
+        }
+        frame.width = w;
+        frame.height = h;
+        frame.pitch = pitch;
+        frame.format = PixelFormat::Rgba32;
     }
 }
 
-/// `RGBA` rows as OpenGL reads them into a top-row-first `XRGB8888` frame; rows are reversed
-/// when row 0 is the bottom of the picture.
-pub(super) fn rgba_to_frame(rgba: &[u8], width: u32, height: u32, bottom_left_origin: bool) -> Frame {
-    let row = width as usize * 4;
-    let mut data = Vec::with_capacity(rgba.len());
-    let mut push = |src: &[u8]| {
-        for p in src.chunks_exact(4) {
-            // XRGB8888 is a native-endian u32 0xXXRRGGBB: B, G, R, X in memory.
-            data.extend_from_slice(&u32::from_be_bytes([0xFF, p[0], p[1], p[2]]).to_ne_bytes());
-        }
-    };
-    if row > 0 {
-        if bottom_left_origin {
-            rgba.chunks_exact(row).rev().for_each(&mut push);
-        } else {
-            rgba.chunks_exact(row).for_each(&mut push);
-        }
+/// Reverses the order of `data`'s rows of `row` bytes each: OpenGL reads a picture bottom row
+/// first, and a [`Frame`] is top row first.
+fn flip_rows(data: &mut [u8], row: usize) {
+    if row == 0 {
+        return;
     }
-    Frame {
-        width,
-        height,
-        pitch: row,
-        format: PixelFormat::Xrgb8888,
-        data,
+    let rows = data.len() / row;
+    for top in 0..rows / 2 {
+        let (upper, lower) = data.split_at_mut((rows - 1 - top) * row);
+        upper[top * row..(top + 1) * row].swap_with_slice(&mut lower[..row]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rows_are_flipped_top_to_bottom() {
+        let mut odd = vec![1, 1, 2, 2, 3, 3];
+        flip_rows(&mut odd, 2);
+        assert_eq!(odd, [3, 3, 2, 2, 1, 1]);
+        let mut even = vec![1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4];
+        flip_rows(&mut even, 3);
+        assert_eq!(even, [4, 4, 4, 3, 3, 3, 2, 2, 2, 1, 1, 1]);
+        let mut one = vec![5, 6, 7, 8];
+        flip_rows(&mut one, 4);
+        assert_eq!(one, [5, 6, 7, 8]);
+        let mut empty: Vec<u8> = Vec::new();
+        flip_rows(&mut empty, 0);
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn requests_name_their_profile() {
+        let core = GlRequest {
+            core_profile: true,
+            major: 3,
+            minor: 3,
+        };
+        assert_eq!(core.to_string(), "OpenGL 3.3 core");
+        let compatibility = GlRequest {
+            core_profile: false,
+            major: 0,
+            minor: 0,
+        };
+        assert_eq!(compatibility.to_string(), "OpenGL compatibility");
     }
 }

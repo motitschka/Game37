@@ -1,5 +1,6 @@
 //! The OpenGL host for Cores that render with OpenGL: a context of the Core's own on Game37's
-//! window, sharing textures with the SDL renderer's, so the renderer can draw the Core's frames.
+//! window, next to the SDL renderer's. It shares nothing with the renderer's: the Core's frames
+//! are read back and drawn like any other.
 
 use std::ffi::{CStr, c_int};
 
@@ -7,7 +8,7 @@ use sdl3::sys::video::{
     SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_MAJOR_VERSION, SDL_GL_CONTEXT_MINOR_VERSION,
     SDL_GL_CONTEXT_PROFILE_COMPATIBILITY, SDL_GL_CONTEXT_PROFILE_CORE, SDL_GL_CONTEXT_PROFILE_MASK,
     SDL_GL_CreateContext, SDL_GL_DestroyContext, SDL_GL_GetAttribute, SDL_GL_GetProcAddress,
-    SDL_GL_MakeCurrent, SDL_GL_SHARE_WITH_CURRENT_CONTEXT, SDL_GL_SetAttribute, SDL_GLAttr, SDL_GLContext,
+    SDL_GL_MakeCurrent, SDL_GL_SetAttribute, SDL_GLAttr, SDL_GLContext,
 };
 use sdl3::video::Window;
 
@@ -42,7 +43,7 @@ impl SdlGl {
 }
 
 /// The context attributes a Core's context is made with, as `(attribute, value)`.
-fn attributes(request: GlRequest) -> [(SDL_GLAttr, c_int); 5] {
+fn attributes(request: GlRequest) -> [(SDL_GLAttr, c_int); 4] {
     let profile = if request.core_profile {
         SDL_GL_CONTEXT_PROFILE_CORE
     } else {
@@ -55,7 +56,6 @@ fn attributes(request: GlRequest) -> [(SDL_GLAttr, c_int); 5] {
         (2, 1)
     };
     [
-        (SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1),
         (SDL_GL_CONTEXT_PROFILE_MASK, profile.0 as c_int),
         (SDL_GL_CONTEXT_MAJOR_VERSION, major),
         (SDL_GL_CONTEXT_MINOR_VERSION, minor),
@@ -77,7 +77,6 @@ impl GlHost for SdlGl {
                 SDL_GL_GetAttribute(*attr, old);
                 SDL_GL_SetAttribute(*attr, *value);
             }
-            // Shares with the current context, the renderer's.
             let core = SDL_GL_CreateContext(self.window.raw());
             // Later contexts (a new renderer) are made as before.
             for (attr, old) in saved {
@@ -88,7 +87,11 @@ impl GlHost for SdlGl {
         if core.is_null() {
             let e = sdl3::get_error().to_string();
             self.make_current(self.frontend);
-            let kind = if request.core_profile { "core" } else { "compatibility" };
+            let kind = if request.core_profile {
+                "core"
+            } else {
+                "compatibility"
+            };
             return Err(format!(
                 "no OpenGL {}.{} {kind} context: {e}",
                 request.major, request.minor
@@ -146,8 +149,10 @@ mod tests {
     #[test]
     fn a_core_profile_context_gets_the_version_asked_for() {
         let attrs = attributes(request(true, 3, 3));
-        assert!(attrs.contains(&(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1)));
-        assert!(attrs.contains(&(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE.0 as c_int)));
+        assert!(attrs.contains(&(
+            SDL_GL_CONTEXT_PROFILE_MASK,
+            SDL_GL_CONTEXT_PROFILE_CORE.0 as c_int
+        )));
         assert!(attrs.contains(&(SDL_GL_CONTEXT_MAJOR_VERSION, 3)));
         assert!(attrs.contains(&(SDL_GL_CONTEXT_MINOR_VERSION, 3)));
     }
@@ -176,16 +181,13 @@ mod real_core_tests {
 
     use super::*;
     use crate::libretro::tests::serial;
-    use crate::libretro::{Core, CoreDirs, PixelFormat, Video};
-    use crate::session::states;
+    use crate::libretro::{Core, CoreDirs, Frame, PixelFormat};
 
     const TESTDATA: &str = "/home/matei/Game37/.testdata";
 
-    /// Mupen64Plus-Next draws N64 NICCC with OpenGL into the FBO, on a hidden offscreen window.
-    #[test]
-    #[ignore = "needs /home/matei/Game37/.testdata"]
-    fn hw_mupen64plus_next_draws_into_the_fbo() {
-        let _serial = serial();
+    /// Runs `game` on `core` for `frames` frames through an OpenGL host on a hidden offscreen
+    /// window, with `system` as its system directory; returns the last frame.
+    fn run_on_gl(core: &str, game: &str, system: &Path, frames: usize) -> Frame {
         let data = Path::new(TESTDATA);
         sdl3::hint::set("SDL_VIDEO_DRIVER", "offscreen");
         let sdl = sdl3::init().unwrap();
@@ -202,34 +204,64 @@ mod real_core_tests {
 
         let dirs = TempDir::new().unwrap();
         let mut core = Core::load(
-            &data.join("data/cores/mupen64plus_next_libretro.so"),
-            &data.join("games/n64/N64 NICCC (World).n64"),
+            &data.join("data/cores").join(core),
+            &data.join("games").join(game),
             CoreDirs {
-                system: dirs.path().join("system"),
+                system: system.to_path_buf(),
                 save: dirs.path().join("saves"),
             },
+            &[],
             Some(Box::new(host)),
         )
         .unwrap_or_else(|e| panic!("{e}"));
-        let mut hw = None;
-        for _ in 0..std::env::var("HWN").map_or(300, |v| v.parse().unwrap()) {
-            if let Video::Hardware(frame) = core.run_frame(&Default::default()).video {
-                hw = Some(frame);
-            }
+        for _ in 0..frames {
+            core.run_frame(&Default::default());
         }
-        let frame = core.snapshot();
-        if let Ok(out) = std::env::var("GAME37_HW_PNG") {
-            std::fs::write(out, states::encode_png(&states::frame_rgb(&frame)).unwrap()).unwrap();
-        }
-        let hw = hw.expect("the Core drew with OpenGL");
-        eprintln!("DBG {hw:?}");
-        assert!(hw.width > 0 && hw.height > 0 && hw.texture != 0, "{hw:?}");
-        assert_eq!((frame.width, frame.height), (hw.width, hw.height));
-        assert_eq!(frame.format, PixelFormat::Xrgb8888);
+        core.frame().clone()
+    }
+
+    /// A frame read back from OpenGL: only those are RGBA.
+    fn assert_drawn_with_gl(frame: &Frame) {
+        assert_eq!(frame.format, PixelFormat::Rgba32, "the Core drew with OpenGL");
+        assert!(frame.width > 0 && frame.height > 0);
+        assert_eq!(frame.data.len(), frame.pitch * frame.height as usize);
+    }
+
+    /// PPSSPP draws CMFileManager's file list with OpenGL.
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn hw_ppsspp_draws_cmfilemanager() {
+        let _serial = serial();
+        let system = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(
+            Path::new(TESTDATA).join("data/system/PPSSPP"),
+            system.path().join("PPSSPP"),
+        )
+        .unwrap();
+        let frame = run_on_gl(
+            "ppsspp_libretro.so",
+            "psp/CMFileManager/EBOOT.PBP",
+            system.path(),
+            600,
+        );
+        assert_drawn_with_gl(&frame);
         let colours: HashSet<&[u8]> = frame.data.chunks(4).map(|p| &p[..3]).collect();
         assert!(colours.len() > 1, "a single colour: {colours:?}");
-        if let Ok(out) = std::env::var("GAME37_HW_PNG") {
-            std::fs::write(out, states::encode_png(&states::frame_rgb(&frame)).unwrap()).unwrap();
-        }
+    }
+
+    /// Mupen64Plus-Next runs N64 NICCC with OpenGL without crashing. The demo shows only black on
+    /// this build even with all-software options, so the picture isn't checked.
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn hw_mupen64plus_next_runs_n64_niccc() {
+        let _serial = serial();
+        let system = TempDir::new().unwrap();
+        let frame = run_on_gl(
+            "mupen64plus_next_libretro.so",
+            "n64/N64 NICCC (World).n64",
+            system.path(),
+            300,
+        );
+        assert_drawn_with_gl(&frame);
     }
 }

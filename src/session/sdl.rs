@@ -13,6 +13,7 @@ use sdl3::audio::{AudioFormat, AudioSpec, AudioStreamOwner};
 use sdl3::gamepad::{Axis, Gamepad};
 use sdl3::keyboard::Scancode;
 
+use super::gl::SdlGl;
 use super::input::{self, HeldOver, PadState, PauseTrigger};
 use super::saves::{self, Tracker};
 use super::states::{self, SLOTS, StatePaths};
@@ -21,8 +22,7 @@ use crate::cores;
 use crate::ctx::{self, Ctx};
 use crate::launch::{self, FAILED_TITLE};
 use crate::library::db::GameRow;
-use super::gl::SdlGl;
-use crate::libretro::{Core, CoreDirs, Frame, GlHost, HwFrame, Video};
+use crate::libretro::{Core, CoreDirs, Frame, GlHost};
 use crate::screens::message::Message;
 use crate::screens::pause::{PauseMenu, Request, SlotInfo};
 use crate::systems::{self, System};
@@ -113,16 +113,11 @@ impl Audio {
 /// Where a running Game's new frames go: the [`Gfx`] it is drawn with, or nowhere in tests.
 pub trait GameFrames {
     fn upload_game_frame(&mut self, frame: &Frame);
-    fn show_hw_frame(&mut self, frame: HwFrame);
 }
 
 impl GameFrames for Gfx<'_> {
     fn upload_game_frame(&mut self, frame: &Frame) {
         Gfx::upload_game_frame(self, frame);
-    }
-
-    fn show_hw_frame(&mut self, frame: HwFrame) {
-        Gfx::show_hw_frame(self, frame);
     }
 }
 
@@ -166,7 +161,8 @@ impl Session {
             fs::create_dir_all(dir).map_err(|e| fail(&format!("Can't create {}: {e}", dir.display())))?;
         }
         let core_path = cores::installed_path(&ctx.data_dir, core_info);
-        let mut core = Core::load(&core_path, &root.join(&game.rel_path), dirs, gl).map_err(|e| fail(&e))?;
+        let mut core =
+            Core::load(&core_path, &root.join(&game.rel_path), dirs, &[], gl).map_err(|e| fail(&e))?;
 
         let srm = saves::srm_path(root, system.id, Path::new(&game.rel_path));
         let save = core.save_ram().map(|ram| {
@@ -275,10 +271,7 @@ impl Session {
         for _ in 0..self.scheduler.frames(dt) {
             let out = self.core.run_frame(&input);
             if !out.duped {
-                match out.video {
-                    Video::Software(frame) => gfx.upload_game_frame(frame),
-                    Video::Hardware(frame) => gfx.show_hw_frame(frame),
-                }
+                gfx.upload_game_frame(out.video);
             }
             if let Some(audio) = &self.audio
                 && let Err(e) = audio.stream.put_data_i16(out.audio)
@@ -353,7 +346,7 @@ impl Session {
     /// Writes slot `n`'s Save State and a screenshot of the current frame (FR-EMB-5).
     fn save_slot(&mut self, n: usize) -> Result<SlotInfo, String> {
         let state = self.core.serialize().map_err(|e| e.to_string())?;
-        let png = states::encode_png(&states::frame_rgb(&self.core.snapshot()));
+        let png = states::encode_png(&states::frame_rgb(self.core.frame()));
         states::write_slot(&self.states.slot(n), &state, &self.states.thumb(n), png)
             .map_err(|e| e.to_string())?;
         self.slot_info(n).ok_or_else(|| "the slot is gone".to_owned())
@@ -654,7 +647,6 @@ mod tests {
 
     impl GameFrames for NoPicture {
         fn upload_game_frame(&mut self, _: &Frame) {}
-        fn show_hw_frame(&mut self, _: HwFrame) {}
     }
 
     /// A whole session driven through the functions `app.rs` uses (FR-EMB-3 to FR-EMB-6, US-4):
@@ -804,7 +796,8 @@ mod tests {
         fs::create_dir_all(&dirs.system).unwrap();
         fs::create_dir_all(&dirs.save).unwrap();
 
-        let mut core = Core::load(&core_path, &game_path, dirs.clone(), None).unwrap_or_else(|e| panic!("{e}"));
+        let mut core =
+            Core::load(&core_path, &game_path, dirs.clone(), &[], None).unwrap_or_else(|e| panic!("{e}"));
         let ram = core.save_ram().expect("mGBA's Test Suite Game has save RAM");
         let known: Vec<u8> = (0..ram.len()).map(|i| i as u8).collect();
         ram.copy_from_slice(&known);
@@ -816,7 +809,7 @@ mod tests {
         assert_eq!(srm.parent().unwrap(), saves::save_dir(root.path(), "gba"));
         drop(core);
 
-        let mut core = Core::load(&core_path, &game_path, dirs, None).unwrap_or_else(|e| panic!("{e}"));
+        let mut core = Core::load(&core_path, &game_path, dirs, &[], None).unwrap_or_else(|e| panic!("{e}"));
         let ram = core.save_ram().expect("mGBA's Test Suite Game has save RAM");
         assert!(saves::load(&srm, ram).unwrap());
         assert_eq!(ram, known.as_slice());

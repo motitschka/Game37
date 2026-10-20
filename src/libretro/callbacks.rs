@@ -32,17 +32,19 @@ pub(super) struct State {
     pub fresh: bool,
     /// Interleaved stereo samples since the host last cleared them.
     pub audio: Vec<i16>,
-    /// Each Core option's default value, by key, from `SET_VARIABLES`; handed out as
-    /// `const char *`, so kept until the Core is unloaded.
+    /// Each Core option's default value, by key, from `SET_VARIABLES`. Like `overrides`, handed
+    /// out as `const char *`, so kept until the Core is unloaded.
     pub options: HashMap<CString, CString>,
+    /// The host's values for Core options, by key, answered ahead of the defaults.
+    pub overrides: HashMap<CString, CString>,
     /// The frontend's OpenGL side; without it, hardware rendering is refused.
     pub gl_host: Option<Box<dyn GlHost>>,
     /// What the Core asked for in `SET_HW_RENDER`, once accepted.
     pub hw: Option<HwRequest>,
     /// The FBO the Core draws into, handed out by `get_current_framebuffer`.
     pub fbo: u32,
-    /// The last frame, when `fresh`, was drawn into the FBO at this size rather than sent as
-    /// `frame`.
+    /// The Core drew its last frame into the FBO at this size; it is read back into `frame` after
+    /// `retro_run`.
     pub hw_size: Option<(u32, u32)>,
 }
 
@@ -59,6 +61,7 @@ impl State {
             fresh: false,
             audio: Vec::new(),
             options: HashMap::new(),
+            overrides: HashMap::new(),
             gl_host: None,
             hw: None,
             fbo: 0,
@@ -269,7 +272,7 @@ pub(super) unsafe fn dispatch(s: &mut State, cmd: c_uint, data: *mut c_void) -> 
             }
             // SAFETY: non-null and NUL-terminated, as above.
             let key = unsafe { CStr::from_ptr(var.key) };
-            match s.options.get(key) {
+            match s.overrides.get(key).or_else(|| s.options.get(key)) {
                 Some(value) => {
                     var.value = value.as_ptr();
                     true
@@ -299,12 +302,21 @@ unsafe fn set_variables(s: &mut State, mut vars: *const RetroVariable) {
             // SAFETY: non-null and NUL-terminated, by this function's contract.
             let (key, value) = unsafe { (CStr::from_ptr(var.key), CStr::from_ptr(var.value)) };
             if let Some(default) = option_default(value.to_bytes()) {
-                let default = match std::env::var(format!("DBG_{}", key.to_str().unwrap().replace("-", "_"))) { Ok(v) => CString::new(v).unwrap(), Err(_) => default }; eprintln!("DBGOPT {key:?} = {default:?}"); s.options.insert(key.to_owned(), default);
+                s.options.insert(key.to_owned(), default);
             }
         }
         // SAFETY: the array goes on until the terminator.
         vars = unsafe { vars.add(1) };
     }
+}
+
+/// Core option values given by the host, `(key, value)`, as the C strings handed to the Core.
+///
+/// # Panics
+/// On a NUL in a key or value: they are Game37's own constants.
+pub(super) fn option_overrides(options: &[(&str, &str)]) -> HashMap<CString, CString> {
+    let c = |s: &str| CString::new(s).expect("Core option keys and values have no NUL");
+    options.iter().map(|&(key, value)| (c(key), c(value))).collect()
 }
 
 /// The default in a `SET_VARIABLES` value, `"Description; first|second|..."`: the first choice.
@@ -515,21 +527,256 @@ mod tests {
     }
 
     #[test]
-    fn options_logging_and_unknown_commands_are_unsupported() {
+    fn unknown_commands_are_unsupported() {
         let mut s = state();
         let mut dummy = [0usize; 4];
         for cmd in [
-            ffi::ENV_GET_VARIABLE,
-            ffi::ENV_GET_VARIABLE_UPDATE,
-            ffi::ENV_GET_LOG_INTERFACE,
-            52, // GET_CORE_OPTIONS_VERSION
-            16, // SET_VARIABLES
-            14, // SET_HW_RENDER
+            52,                    // GET_CORE_OPTIONS_VERSION: Cores fall back to SET_VARIABLES
+            ffi::ENV_GET_VARIABLE, // with a null key
             9999,
         ] {
             assert!(!env(&mut s, cmd, &mut dummy), "cmd {cmd}");
         }
         assert_eq!(dummy, [0; 4]);
+    }
+
+    #[test]
+    fn every_core_gets_the_log_callback() {
+        let mut s = state();
+        let mut out: Option<ffi::LogPrintfFn> = None;
+        assert!(env(&mut s, ffi::ENV_GET_LOG_INTERFACE, &mut out));
+        assert_eq!(
+            out.map(|f| f as usize),
+            Some(ffi::game37_core_log as ffi::LogPrintfFn as usize)
+        );
+    }
+
+    /// `SET_VARIABLES`' array: each `(key, value)`, then the terminator. Keeps the strings alive.
+    fn variables(vars: &[(&str, &str)]) -> (Vec<CString>, Vec<RetroVariable>) {
+        let strings: Vec<CString> = vars
+            .iter()
+            .flat_map(|&(k, v)| [CString::new(k).unwrap(), CString::new(v).unwrap()])
+            .collect();
+        let mut array: Vec<RetroVariable> = strings
+            .chunks(2)
+            .map(|kv| RetroVariable {
+                key: kv[0].as_ptr(),
+                value: kv[1].as_ptr(),
+            })
+            .collect();
+        array.push(RetroVariable {
+            key: ptr::null(),
+            value: ptr::null(),
+        });
+        (strings, array)
+    }
+
+    /// `GET_VARIABLE` for `key`: the value, `None` when refused.
+    fn get_variable(s: &mut State, key: &str) -> Option<String> {
+        let key = CString::new(key).unwrap();
+        let mut var = RetroVariable {
+            key: key.as_ptr(),
+            value: ptr::null(),
+        };
+        // SAFETY: on success the value points into `s`, which outlives this read.
+        env(s, ffi::ENV_GET_VARIABLE, &mut var)
+            .then(|| unsafe { CStr::from_ptr(var.value) }.to_str().unwrap().to_owned())
+    }
+
+    #[test]
+    fn options_are_answered_with_their_defaults() {
+        let mut s = state();
+        let (_strings, mut array) = variables(&[
+            ("mupen64plus-rdp-plugin", "RDP Plugin; gliden64|angrylion"),
+            (
+                "ppsspp_internal_resolution",
+                "Internal Resolution; 480x272|960x544",
+            ),
+            ("broken", "no separator"),
+        ]);
+        // SAFETY: `array` is ended by a null key; its strings live in `_strings`.
+        assert!(unsafe { dispatch(&mut s, ffi::ENV_SET_VARIABLES, array.as_mut_ptr().cast()) });
+        assert_eq!(
+            get_variable(&mut s, "mupen64plus-rdp-plugin").as_deref(),
+            Some("gliden64")
+        );
+        assert_eq!(
+            get_variable(&mut s, "ppsspp_internal_resolution").as_deref(),
+            Some("480x272")
+        );
+        assert_eq!(get_variable(&mut s, "broken"), None);
+        assert_eq!(get_variable(&mut s, "unknown"), None);
+        let mut updated = true;
+        assert!(env(&mut s, ffi::ENV_GET_VARIABLE_UPDATE, &mut updated));
+        assert!(!updated, "options never change while a Game runs");
+    }
+
+    #[test]
+    fn the_hosts_option_values_come_before_the_defaults() {
+        let mut s = state();
+        s.overrides = option_overrides(&[("melonds_screen_layout", "Left/Right"), ("only_ours", "on")]);
+        let (_strings, mut array) = variables(&[("melonds_screen_layout", "Layout; Top/Bottom|Left/Right")]);
+        // SAFETY: `array` is ended by a null key; its strings live in `_strings`.
+        assert!(unsafe { dispatch(&mut s, ffi::ENV_SET_VARIABLES, array.as_mut_ptr().cast()) });
+        assert_eq!(
+            get_variable(&mut s, "melonds_screen_layout").as_deref(),
+            Some("Left/Right")
+        );
+        assert_eq!(get_variable(&mut s, "only_ours").as_deref(), Some("on"));
+    }
+
+    #[test]
+    fn an_option_default_is_the_first_choice() {
+        let default = |v: &str| option_default(v.as_bytes()).map(|c| c.into_string().unwrap());
+        assert_eq!(
+            default("Renderer; hardware|software").as_deref(),
+            Some("hardware")
+        );
+        assert_eq!(default("Speed; 100").as_deref(), Some("100"));
+        assert_eq!(
+            default("Layout; Top/Bottom; odd|x").as_deref(),
+            Some("Top/Bottom; odd")
+        );
+        assert_eq!(default("no choices"), None);
+    }
+
+    /// A host whose context is never made: dispatch only checks there is one.
+    struct NoGl;
+
+    impl GlHost for NoGl {
+        fn create_context(&mut self, _: GlRequest) -> Result<(), String> {
+            Err("unused".into())
+        }
+        fn make_core_current(&mut self) {}
+        fn make_frontend_current(&mut self) {}
+        fn proc_address(&self, _: &CStr) -> ProcAddress {
+            None
+        }
+        fn destroy_context(&mut self) {}
+    }
+
+    fn with_gl() -> State {
+        let mut s = state();
+        s.gl_host = Some(Box::new(NoGl));
+        s
+    }
+
+    fn hw_render(context_type: c_int, major: c_uint, minor: c_uint) -> RetroHwRenderCallback {
+        RetroHwRenderCallback {
+            context_type,
+            context_reset: None,
+            get_current_framebuffer: None,
+            get_proc_address: None,
+            depth: true,
+            stencil: false,
+            bottom_left_origin: true,
+            version_major: major,
+            version_minor: minor,
+            cache_context: false,
+            context_destroy: None,
+            debug_context: false,
+        }
+    }
+
+    #[test]
+    fn opengl_and_opengl_core_3_and_4_are_accepted_with_a_host() {
+        for (context_type, major, minor, gl) in [
+            (ffi::RETRO_HW_CONTEXT_OPENGL, 0, 0, (false, 0, 0)),
+            (ffi::RETRO_HW_CONTEXT_OPENGL_CORE, 3, 3, (true, 3, 3)),
+            (ffi::RETRO_HW_CONTEXT_OPENGL_CORE, 4, 5, (true, 4, 5)),
+        ] {
+            let mut s = with_gl();
+            let mut cb = hw_render(context_type, major, minor);
+            assert!(
+                env(&mut s, ffi::ENV_SET_HW_RENDER, &mut cb),
+                "{context_type} {major}.{minor}"
+            );
+            let request = s.hw.expect("recorded");
+            let (core_profile, major, minor) = gl;
+            assert_eq!(
+                request.gl,
+                GlRequest {
+                    core_profile,
+                    major,
+                    minor
+                }
+            );
+            assert!(request.depth && !request.stencil && request.bottom_left_origin);
+            assert_eq!(
+                cb.get_current_framebuffer.map(|f| f as usize),
+                Some(get_current_framebuffer as ffi::HwGetCurrentFramebufferFn as usize)
+            );
+            assert_eq!(
+                cb.get_proc_address.map(|f| f as usize),
+                Some(get_proc_address as ffi::HwGetProcAddressFn as usize)
+            );
+        }
+    }
+
+    #[test]
+    fn gles_vulkan_and_old_core_profiles_are_refused() {
+        for (context_type, major) in [
+            (2, 0),                                 // GLES2
+            (4, 3),                                 // GLES3
+            (5, 3),                                 // GLES_VERSION
+            (6, 1),                                 // Vulkan
+            (ffi::RETRO_HW_CONTEXT_OPENGL_CORE, 2), // a core profile before 3.0
+        ] {
+            let mut s = with_gl();
+            let mut cb = hw_render(context_type, major, 0);
+            assert!(
+                !env(&mut s, ffi::ENV_SET_HW_RENDER, &mut cb),
+                "{context_type} {major}"
+            );
+            assert!(s.hw.is_none() && cb.get_current_framebuffer.is_none());
+        }
+    }
+
+    #[test]
+    fn without_a_host_there_is_no_hardware_rendering() {
+        let mut s = state();
+        let mut cb = hw_render(ffi::RETRO_HW_CONTEXT_OPENGL_CORE, 3, 3);
+        assert!(!env(&mut s, ffi::ENV_SET_HW_RENDER, &mut cb));
+        assert!(s.hw.is_none());
+        let mut preferred: c_int = -1;
+        assert!(!env(&mut s, ffi::ENV_GET_PREFERRED_HW_RENDER, &mut preferred));
+        assert_eq!(preferred, -1);
+        // SAFETY: SET_HW_SHARED_CONTEXT ignores its data.
+        assert!(!unsafe { dispatch(&mut s, ffi::ENV_SET_HW_SHARED_CONTEXT, ptr::null_mut()) });
+    }
+
+    #[test]
+    fn with_a_host_opengl_core_is_preferred() {
+        let mut s = with_gl();
+        let mut preferred: c_int = -1;
+        assert!(env(&mut s, ffi::ENV_GET_PREFERRED_HW_RENDER, &mut preferred));
+        assert_eq!(preferred, ffi::RETRO_HW_CONTEXT_OPENGL_CORE);
+        // SAFETY: SET_HW_SHARED_CONTEXT ignores its data.
+        assert!(unsafe { dispatch(&mut s, ffi::ENV_SET_HW_SHARED_CONTEXT, ptr::null_mut()) });
+    }
+
+    #[test]
+    fn a_frame_drawn_with_opengl_is_marked_for_readback() {
+        install(with_gl());
+        // SAFETY: a null frame is a dupe; the HW marker is never dereferenced.
+        unsafe { video_refresh(ffi::RETRO_HW_FRAME_BUFFER_VALID, 320, 240, 0) };
+        assert_eq!(
+            with(|s| (s.fresh, s.hw_size)),
+            Some((false, None)),
+            "no OpenGL accepted yet"
+        );
+        with(|s| s.hw = Some(hw_request()));
+        // SAFETY: as above.
+        unsafe { video_refresh(ffi::RETRO_HW_FRAME_BUFFER_VALID, 320, 240, 0) };
+        assert_eq!(with(|s| (s.fresh, s.hw_size)), Some((true, Some((320, 240)))));
+        remove();
+    }
+
+    fn hw_request() -> HwRequest {
+        let mut s = with_gl();
+        let mut cb = hw_render(ffi::RETRO_HW_CONTEXT_OPENGL_CORE, 3, 3);
+        assert!(env(&mut s, ffi::ENV_SET_HW_RENDER, &mut cb));
+        s.hw.unwrap()
     }
 
     #[test]
