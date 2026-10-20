@@ -6,10 +6,14 @@
 //! that default.
 
 use std::cell::RefCell;
-use std::ffi::{CString, c_int, c_uint, c_void};
+use std::collections::HashMap;
+use std::ffi::{CStr, CString, c_char, c_int, c_uint, c_void};
 use std::panic::{self, AssertUnwindSafe};
 
-use super::ffi::{self, RetroGameGeometry, RetroSystemAvInfo};
+use super::ffi::{
+    self, ProcAddress, RetroGameGeometry, RetroHwRenderCallback, RetroSystemAvInfo, RetroVariable,
+};
+use super::hw::{GlHost, GlRequest, HwRequest};
 use super::{AvInfo, Frame, InputState, PixelFormat};
 
 /// Everything the callbacks of the loaded Core read and write.
@@ -28,6 +32,18 @@ pub(super) struct State {
     pub fresh: bool,
     /// Interleaved stereo samples since the host last cleared them.
     pub audio: Vec<i16>,
+    /// Each Core option's default value, by key, from `SET_VARIABLES`; handed out as
+    /// `const char *`, so kept until the Core is unloaded.
+    pub options: HashMap<CString, CString>,
+    /// The frontend's OpenGL side; without it, hardware rendering is refused.
+    pub gl_host: Option<Box<dyn GlHost>>,
+    /// What the Core asked for in `SET_HW_RENDER`, once accepted.
+    pub hw: Option<HwRequest>,
+    /// The FBO the Core draws into, handed out by `get_current_framebuffer`.
+    pub fbo: u32,
+    /// The last frame, when `fresh`, was drawn into the FBO at this size rather than sent as
+    /// `frame`.
+    pub hw_size: Option<(u32, u32)>,
 }
 
 impl State {
@@ -42,6 +58,11 @@ impl State {
             frame: Frame::default(),
             fresh: false,
             audio: Vec::new(),
+            options: HashMap::new(),
+            gl_host: None,
+            hw: None,
+            fbo: 0,
+            hw_size: None,
         }
     }
 }
@@ -95,8 +116,16 @@ pub(super) unsafe extern "C" fn video_refresh(
         if data.is_null() {
             return;
         }
+        if data == ffi::RETRO_HW_FRAME_BUFFER_VALID {
+            if s.hw.is_some() {
+                s.hw_size = Some((width, height));
+                s.fresh = true;
+            }
+            return;
+        }
         // SAFETY: this function's contract, which libretro.h places on the Core.
         if unsafe { copy_frame(&mut s.frame, data.cast(), width, height, pitch, s.pixel_format) } {
+            s.hw_size = None;
             s.fresh = true;
         }
     })
@@ -119,6 +148,26 @@ pub(super) unsafe extern "C" fn audio_sample_batch(data: *const i16, frames: usi
         let samples = unsafe { std::slice::from_raw_parts(data, frames * 2) };
         s.audio.extend_from_slice(samples);
         frames
+    })
+}
+
+/// `retro_hw_get_current_framebuffer_t`: the FBO the Core draws into.
+pub(super) extern "C" fn get_current_framebuffer() -> usize {
+    guarded(0, |s| s.fbo as usize)
+}
+
+/// `retro_hw_get_proc_address_t`: an OpenGL function, looked up by the frontend.
+///
+/// # Safety
+/// `sym` is null or a NUL-terminated string.
+pub(super) unsafe extern "C" fn get_proc_address(sym: *const c_char) -> ProcAddress {
+    guarded(None, |s| {
+        if sym.is_null() {
+            return None;
+        }
+        // SAFETY: non-null and NUL-terminated by this function's contract.
+        let name = unsafe { CStr::from_ptr(sym) };
+        s.gl_host.as_ref()?.proc_address(name)
     })
 }
 
@@ -172,6 +221,19 @@ pub(super) unsafe fn dispatch(s: &mut State, cmd: c_uint, data: *mut c_void) -> 
             s.av_info.set_geometry(g);
             true
         }
+        ffi::ENV_SET_HW_RENDER => {
+            // SAFETY: for this command `data` is a `struct retro_hw_render_callback *`.
+            let Some(cb) = (unsafe { data.cast::<RetroHwRenderCallback>().as_mut() }) else {
+                return false;
+            };
+            set_hw_render(s, cb)
+        }
+        ffi::ENV_GET_PREFERRED_HW_RENDER if s.gl_host.is_some() => unsafe {
+            // SAFETY: for this command `data` is an `enum retro_hw_context_type *`.
+            write_out(data, ffi::RETRO_HW_CONTEXT_OPENGL_CORE)
+        },
+        // The Core's context is its own already: nothing else draws with it.
+        ffi::ENV_SET_HW_SHARED_CONTEXT => s.gl_host.is_some(),
         ffi::ENV_SET_SYSTEM_AV_INFO => {
             // SAFETY: for this command `data` is a `const struct retro_system_av_info *`.
             let Some(av) = (unsafe { data.cast::<RetroSystemAvInfo>().as_ref() }) else {
@@ -180,11 +242,110 @@ pub(super) unsafe fn dispatch(s: &mut State, cmd: c_uint, data: *mut c_void) -> 
             s.av_info = AvInfo::from_raw(av);
             true
         }
-        // No options: Cores run with their defaults. No log interface: a Rust log callback would
-        // be C-variadic, so Cores print to stderr themselves.
-        ffi::ENV_GET_VARIABLE | ffi::ENV_GET_VARIABLE_UPDATE | ffi::ENV_GET_LOG_INTERFACE => false,
+        ffi::ENV_GET_LOG_INTERFACE => unsafe {
+            write_out(
+                data,
+                ffi::RetroLogCallback {
+                    log: ffi::game37_core_log,
+                },
+            )
+        },
+        // Cores run with their options' defaults: some (Mupen64Plus-Next) have no defaults of
+        // their own and crash without them.
+        ffi::ENV_SET_VARIABLES => {
+            // SAFETY: for this command `data` is an array of `struct retro_variable` ended by
+            // one with a null key, each value a NUL-terminated string.
+            unsafe { set_variables(s, data.cast()) };
+            true
+        }
+        ffi::ENV_GET_VARIABLE => {
+            // SAFETY: for this command `data` is a `struct retro_variable *` with a
+            // NUL-terminated key.
+            let Some(var) = (unsafe { data.cast::<RetroVariable>().as_mut() }) else {
+                return false;
+            };
+            if var.key.is_null() {
+                return false;
+            }
+            // SAFETY: non-null and NUL-terminated, as above.
+            let key = unsafe { CStr::from_ptr(var.key) };
+            match s.options.get(key) {
+                Some(value) => {
+                    var.value = value.as_ptr();
+                    true
+                }
+                None => false,
+            }
+        }
+        // Options never change while a Game runs.
+        ffi::ENV_GET_VARIABLE_UPDATE => unsafe { write_out(data, false) },
         _ => false,
     }
+}
+
+/// `SET_VARIABLES`: records each option's default, replacing those recorded before.
+///
+/// # Safety
+/// `vars` is null or points at `struct retro_variable`s ended by one with a null key, each
+/// non-null value NUL-terminated.
+unsafe fn set_variables(s: &mut State, mut vars: *const RetroVariable) {
+    s.options.clear();
+    // SAFETY: each element up to the terminator is valid, by this function's contract.
+    while let Some(var) = unsafe { vars.as_ref() } {
+        if var.key.is_null() {
+            break;
+        }
+        if !var.value.is_null() {
+            // SAFETY: non-null and NUL-terminated, by this function's contract.
+            let (key, value) = unsafe { (CStr::from_ptr(var.key), CStr::from_ptr(var.value)) };
+            if let Some(default) = option_default(value.to_bytes()) {
+                let default = match std::env::var(format!("DBG_{}", key.to_str().unwrap().replace("-", "_"))) { Ok(v) => CString::new(v).unwrap(), Err(_) => default }; eprintln!("DBGOPT {key:?} = {default:?}"); s.options.insert(key.to_owned(), default);
+            }
+        }
+        // SAFETY: the array goes on until the terminator.
+        vars = unsafe { vars.add(1) };
+    }
+}
+
+/// The default in a `SET_VARIABLES` value, `"Description; first|second|..."`: the first choice.
+pub(super) fn option_default(value: &[u8]) -> Option<CString> {
+    let at = value.windows(2).position(|w| w == b"; ")?;
+    let choices = &value[at + 2..];
+    let first = choices.split(|&b| b == b'|').next()?;
+    CString::new(first).ok()
+}
+
+/// `SET_HW_RENDER`: accepts OpenGL, compatibility or a 3.x/4.x core profile, when there is a host
+/// to make the context, and hands the Core the frontend's functions. GLES, Vulkan and the rest
+/// are refused, so the Core falls back to what it has.
+fn set_hw_render(s: &mut State, cb: &mut RetroHwRenderCallback) -> bool {
+    if s.gl_host.is_none() {
+        return false;
+    }
+    let gl = match cb.context_type {
+        ffi::RETRO_HW_CONTEXT_OPENGL => GlRequest {
+            core_profile: false,
+            major: 0,
+            minor: 0,
+        },
+        ffi::RETRO_HW_CONTEXT_OPENGL_CORE if matches!(cb.version_major, 3 | 4) => GlRequest {
+            core_profile: true,
+            major: cb.version_major,
+            minor: cb.version_minor,
+        },
+        _ => return false,
+    };
+    s.hw = Some(HwRequest {
+        gl,
+        depth: cb.depth,
+        stencil: cb.stencil,
+        bottom_left_origin: cb.bottom_left_origin,
+        context_reset: cb.context_reset,
+        context_destroy: cb.context_destroy,
+    });
+    cb.get_current_framebuffer = Some(get_current_framebuffer);
+    cb.get_proc_address = Some(get_proc_address);
+    true
 }
 
 /// Writes `value` through `data`; false when `data` is null.

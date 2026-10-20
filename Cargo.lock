@@ -163,6 +163,7 @@ dependencies = [
 name = "game37"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "dirs",
  "libloading",
  "notify",

@@ -756,11 +756,11 @@ mod tests {
     fn an_embedded_system_without_a_core_comes_later() {
         let mut w = world("exit 0");
         w.ctx.data_dir = w._dir.path().join("data");
-        let n64 = game_of(&w, "n64");
-        assert!(!playable(&n64, &w.ctx));
+        let nds = game_of(&w, "nds");
+        assert!(!playable(&nds, &w.ctx));
         assert_eq!(
-            why_not_playable(&n64, &mut w.ctx).as_deref(),
-            Some("Playing Nintendo 64 games inside Game37 comes in a later update.")
+            why_not_playable(&nds, &mut w.ctx).as_deref(),
+            Some("Playing Nintendo DS games inside Game37 comes in a later update.")
         );
         assert!(w.ctx.play.is_none() && w.ctx.launch.is_none());
         let coreless = systems::SYSTEMS

@@ -12,7 +12,7 @@ use sdl3::video::{WindowContext, WindowFlags};
 use super::Rect;
 use super::text::{Fonts, Weight};
 use super::theme::Colour;
-use crate::libretro;
+use crate::libretro::{self, HwFrame};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Align {
@@ -106,6 +106,8 @@ pub struct Gfx<'tc> {
     /// The running Game's last frame. Kept here rather than in its screen, because a texture
     /// borrows the texture creator and a `Box<dyn Screen>` can't.
     game: Option<GameTexture<'tc>>,
+    /// The running Game's last frame when its Core drew it with OpenGL; then `game` is `None`.
+    hw_game: Option<HwTexture>,
     /// Images screens set by key, such as Save State screenshots.
     images: HashMap<&'static str, Texture<'tc>>,
 }
@@ -115,6 +117,76 @@ struct GameTexture<'tc> {
     width: u32,
     height: u32,
     format: libretro::PixelFormat,
+}
+
+/// A Core's OpenGL texture wrapped as an SDL texture, and the frame last drawn into it.
+struct HwTexture {
+    raw: *mut sdl3::sys::render::SDL_Texture,
+    frame: HwFrame,
+}
+
+impl HwTexture {
+    /// Wraps `frame`'s texture, which lives in the renderer's OpenGL share group.
+    fn wrap(renderer: *mut sdl3::sys::render::SDL_Renderer, frame: HwFrame) -> Result<HwTexture, String> {
+        use sdl3::sys::blendmode::SDL_BLENDMODE_NONE;
+        use sdl3::sys::pixels::SDL_PIXELFORMAT_ABGR8888;
+        use sdl3::sys::properties::{SDL_CreateProperties, SDL_DestroyProperties, SDL_SetNumberProperty};
+        use sdl3::sys::render::*;
+        use sdl3::sys::surface::SDL_SCALEMODE_LINEAR;
+        // SAFETY: the renderer is alive; the properties are made, read by SDL during the call and
+        // destroyed. ABGR8888 is how SDL's OpenGL renderer names an RGBA8 texture.
+        let raw = unsafe {
+            let props = SDL_CreateProperties();
+            for (name, value) in [
+                (SDL_PROP_TEXTURE_CREATE_FORMAT_NUMBER, SDL_PIXELFORMAT_ABGR8888.0 as i64),
+                (SDL_PROP_TEXTURE_CREATE_ACCESS_NUMBER, SDL_TEXTUREACCESS_STATIC.0 as i64),
+                (SDL_PROP_TEXTURE_CREATE_WIDTH_NUMBER, frame.texture_width as i64),
+                (SDL_PROP_TEXTURE_CREATE_HEIGHT_NUMBER, frame.texture_height as i64),
+                (SDL_PROP_TEXTURE_CREATE_OPENGL_TEXTURE_NUMBER, frame.texture as i64),
+            ] {
+                SDL_SetNumberProperty(props, name, value);
+            }
+            let raw = SDL_CreateTextureWithProperties(renderer, props);
+            SDL_DestroyProperties(props);
+            raw
+        };
+        if raw.is_null() {
+            return Err(sdl3::get_error().to_string());
+        }
+        // Cores draw at many times their System's resolution: smooth scaling, not pixel art. The
+        // texture's alpha is whatever the Core left there, so it is ignored.
+        // SAFETY: `raw` is the live texture just made.
+        unsafe {
+            SDL_SetTextureScaleMode(raw, SDL_SCALEMODE_LINEAR);
+            SDL_SetTextureBlendMode(raw, SDL_BLENDMODE_NONE);
+        }
+        Ok(HwTexture { raw, frame })
+    }
+}
+
+impl Drop for HwTexture {
+    fn drop(&mut self) {
+        // SAFETY: `raw` is alive and dropped once. SDL leaves a wrapped OpenGL texture to its owner.
+        unsafe { sdl3::sys::render::SDL_DestroyTexture(self.raw) }
+    }
+}
+
+/// The part of a Core's OpenGL texture its frame covers, in SDL's texel coordinates, and whether
+/// it shows flipped vertically. SDL puts texel row 0 at the top, so a picture drawn bottom row
+/// first (OpenGL's convention) is upside down.
+fn hw_source(frame: &HwFrame) -> (Rect, bool) {
+    let w = frame.width.min(frame.texture_width);
+    let h = frame.height.min(frame.texture_height);
+    (Rect::new(0.0, 0.0, w as f32, h as f32), frame.bottom_left_origin)
+}
+
+fn sdl_frect(r: Rect) -> sdl3::sys::rect::SDL_FRect {
+    sdl3::sys::rect::SDL_FRect {
+        x: r.x,
+        y: r.y,
+        w: r.w,
+        h: r.h,
+    }
 }
 
 fn sdl_format(format: libretro::PixelFormat) -> sdl3::pixels::PixelFormat {
@@ -234,6 +306,7 @@ impl<'tc> Gfx<'tc> {
             texts: FrameCache::new(),
             widths: FrameCache::new(),
             game: None,
+            hw_game: None,
             images: HashMap::new(),
         }
     }
@@ -244,6 +317,7 @@ impl<'tc> Gfx<'tc> {
         if frame.width == 0 || frame.height == 0 {
             return;
         }
+        self.hw_game = None;
         let fits = self
             .game
             .as_ref()
@@ -275,8 +349,54 @@ impl<'tc> Gfx<'tc> {
         }
     }
 
+    /// Shows a frame a Core drew into its OpenGL texture, wrapping that texture once.
+    pub fn show_hw_frame(&mut self, frame: HwFrame) {
+        let key = |f: &HwFrame| (f.texture, f.texture_width, f.texture_height);
+        match &mut self.hw_game {
+            Some(hw) if key(&hw.frame) == key(&frame) => hw.frame = frame,
+            _ => {
+                self.hw_game = None;
+                match HwTexture::wrap(self.canvas.raw(), frame) {
+                    Ok(hw) => self.hw_game = Some(hw),
+                    Err(e) => eprintln!("game37: can't draw the Core's OpenGL frames: {e}"),
+                }
+            }
+        }
+        self.game = None;
+    }
+
+    /// The window and the OpenGL context of an `opengl` renderer, for a Core's context to share
+    /// with; `None` on another renderer.
+    pub fn gl_context(&self) -> Option<(sdl3::video::Window, sdl3::sys::video::SDL_GLContext)> {
+        use sdl3::sys::render::{SDL_FlushRenderer, SDL_GetRendererName};
+        use sdl3::sys::video::SDL_GL_GetCurrentContext;
+        let renderer = self.canvas.raw();
+        // SAFETY: the renderer is alive; its name is a static string. Flushing activates the
+        // renderer, which makes its context current.
+        let context = unsafe {
+            let name = SDL_GetRendererName(renderer);
+            if name.is_null() || std::ffi::CStr::from_ptr(name) != c"opengl" {
+                return None;
+            }
+            SDL_FlushRenderer(renderer);
+            SDL_GL_GetCurrentContext()
+        };
+        (!context.is_null()).then(|| (self.canvas.window().clone(), context))
+    }
+
     /// Draws the game texture stretched over `r`.
     pub fn draw_game_frame(&mut self, r: Rect) {
+        if let Some(hw) = &self.hw_game {
+            use sdl3::sys::render::SDL_RenderTextureRotated;
+            use sdl3::sys::surface::{SDL_FLIP_NONE, SDL_FLIP_VERTICAL};
+            let (src, flip) = hw_source(&hw.frame);
+            let flip = if flip { SDL_FLIP_VERTICAL } else { SDL_FLIP_NONE };
+            let (src, dst) = (sdl_frect(src), sdl_frect(r));
+            // SAFETY: the renderer and the texture are alive; the rects are locals.
+            unsafe {
+                SDL_RenderTextureRotated(self.canvas.raw(), hw.raw, &src, &dst, 0.0, std::ptr::null(), flip)
+            };
+        }
         if let Some(game) = &self.game {
             let _ = self
                 .canvas
