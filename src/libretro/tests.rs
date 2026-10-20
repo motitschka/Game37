@@ -279,8 +279,9 @@ fn ds_touch_reaches_melonds_ds_and_r3_swaps_the_screens() {
     );
 
     // R3 for a few frames, then released: the other hybrid layout, whose large screen shows the
-    // touch screen, which the small one keeps showing. Comparing the screens (rather than frames)
-    // keeps hbmenu's own animation from passing for a swap.
+    // touch screen (the small one before) and whose small one, now at the bottom right, shows the
+    // top screen. Comparing the screens (rather than frames) keeps hbmenu's own animation from
+    // passing for a swap.
     let before = core.frame().clone();
     let mut r3 = InputState::default();
     r3.set(0, Button::R3, true);
