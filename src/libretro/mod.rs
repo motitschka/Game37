@@ -97,7 +97,8 @@ pub enum PixelFormat {
     Xrgb8888,
     Rgb565,
     /// Bytes R, G, B, A in memory (SDL's `RGBA32`): a frame a Core drew with OpenGL, as read back
-    /// from its framebuffer. Never a Core's own format.
+    /// from its framebuffer. Never a Core's own format. A is whatever the Core left in its
+    /// framebuffer, not the picture's opacity, so it is ignored like the X of the others.
     Rgba32,
 }
 

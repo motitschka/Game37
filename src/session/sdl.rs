@@ -877,4 +877,80 @@ mod tests {
             Ok(_) => panic!("expected an error"),
         }
     }
+
+    /// The app's path for an OpenGL Core: a PSP session started beside the `opengl` renderer of
+    /// an offscreen window, ticked and drawn through `Gfx` as `app.rs` does for 900 frames, shows
+    /// CMFileManager's picture on the renderer. PPSSPP leaves its framebuffer's alpha at 0, so a
+    /// frame drawn with its alpha would show nothing.
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn hw_ppsspp_session_shows_cmfilemanager_on_the_renderer() {
+        use sdl3::render::create_renderer;
+        use sdl3::surface::Surface;
+
+        use crate::ui::text::Fonts;
+        use crate::ui::theme::Colour;
+
+        let _serial = serial();
+        let root = TempDir::new().unwrap();
+        let game_dir = root.path().join("psp/CMFileManager");
+        fs::create_dir_all(&game_dir).unwrap();
+        for entry in fs::read_dir(Path::new(TESTDATA).join("games/psp/CMFileManager")).unwrap() {
+            let entry = entry.unwrap();
+            fs::copy(entry.path(), game_dir.join(entry.file_name())).unwrap();
+        }
+        let data = TempDir::new().unwrap();
+        for dir in ["cores", "system"] {
+            std::os::unix::fs::symlink(Path::new(TESTDATA).join("data").join(dir), data.path().join(dir))
+                .unwrap();
+        }
+        let mut ctx = Ctx::empty();
+        ctx.games_root = root.path().to_path_buf();
+        ctx.data_dir = data.path().to_path_buf();
+        let game = GameRow {
+            id: 1,
+            system: "psp".into(),
+            rel_path: "psp/CMFileManager/EBOOT.PBP".into(),
+            title: "CMFileManager".into(),
+            date_added: 0,
+            last_played: None,
+            playtime_secs: 0,
+            favorite: false,
+        };
+
+        sdl3::hint::set("SDL_VIDEO_DRIVER", "offscreen");
+        let sdl = sdl3::init().unwrap();
+        let video = sdl.video().unwrap();
+        let window = video.window("hw", 1280, 720).hidden().build().unwrap();
+        let canvas = create_renderer(window, Some(c"opengl")).unwrap();
+        let creator = canvas.texture_creator();
+        let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
+        let frontend = gfx.gl_context();
+        assert!(frontend.is_some(), "the opengl renderer's context");
+        let mut session =
+            Session::start(&game, &ctx, frontend, None, Some(60.0)).unwrap_or_else(|e| panic!("{e}"));
+        for _ in 0..900 {
+            assert!(!session.tick(&mut gfx, 1.0 / 60.0, &[], Mouse::default(), |_| false));
+        }
+        gfx.clear(Colour::hex(0x000000));
+        session.draw(&mut gfx, &ctx);
+        let shot = data.path().join("shot.bmp");
+        gfx.save_bmp(&shot).unwrap();
+        drop(session);
+
+        let shot = Surface::load_bmp(&shot).unwrap();
+        let pitch = shot.pitch() as usize;
+        let bytes = shot.pixel_format().bytes_per_pixel();
+        let colours: std::collections::HashSet<Vec<u8>> = shot.with_lock(|pixels| {
+            pixels
+                .chunks(pitch)
+                .flat_map(|row| row[..shot.width() as usize * bytes].chunks(bytes))
+                .map(<[u8]>::to_vec)
+                .collect()
+        });
+        assert!(
+            colours.len() > 1,
+            "the renderer shows a single colour: {colours:?}"
+        );
+    }
 }

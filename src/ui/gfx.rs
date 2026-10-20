@@ -123,7 +123,9 @@ fn sdl_format(format: libretro::PixelFormat) -> sdl3::pixels::PixelFormat {
         libretro::PixelFormat::Xrgb1555 => PixelFormat::XRGB1555,
         libretro::PixelFormat::Rgb565 => PixelFormat::RGB565,
         libretro::PixelFormat::Xrgb8888 => PixelFormat::XRGB8888,
-        libretro::PixelFormat::Rgba32 => PixelFormat::RGBA32,
+        // The alpha a Core leaves in its framebuffer isn't the picture's (PPSSPP leaves 0): a
+        // Game's picture is opaque.
+        libretro::PixelFormat::Rgba32 => PixelFormat::RGBX32,
     }
 }
 
