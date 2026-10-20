@@ -30,20 +30,35 @@ use crate::ui::nav::{Nav, Transition};
 pub const EARLY: Duration = Duration::from_secs(3);
 pub const FAILED_TITLE: &str = "Couldn't start the game";
 const NOT_PLAYABLE_TITLE: &str = "Not playable yet";
+const BIOS_MISSING_TITLE: &str = "PlayStation BIOS missing";
 
 /// What Confirm on a Game does (until the Details Page exists): asks to play it when its System's
 /// Core or Standalone Emulator is installed, downloads an Embedded System's Core first when it
-/// isn't (FR-EMB-2, US-23), else explains why it can't be played.
+/// isn't (FR-EMB-2, US-23), checks for a required BIOS (FR-EMB-12), else explains why it can't be
+/// played.
 pub fn confirm_game(game: &GameRow, ctx: &mut Ctx) -> Transition {
     let Some(system) = systems::by_id(&game.system) else {
         return Transition::None;
     };
     if system.kind == Kind::Embedded
         && let Some(core) = cores::for_system(system)
-        && !cores::is_installed(&ctx.data_dir, core)
     {
-        let download = (ctx.start_download)(core, ctx.data_dir.clone());
-        return Transition::Push(Box::new(DownloadCore::new(game.clone(), core, download)));
+        if !cores::is_installed(&ctx.data_dir, core) {
+            let screen = if core.system_in_data_dir {
+                let assets = (ctx.start_assets_download)(ctx.data_dir.clone());
+                DownloadCore::new_with_assets(game.clone(), core, assets)
+            } else {
+                let download = (ctx.start_download)(core, ctx.data_dir.clone());
+                DownloadCore::new(game.clone(), core, download)
+            };
+            return Transition::Push(Box::new(screen));
+        }
+        if !cores::has_required_bios(&ctx.games_root, core) {
+            return Transition::Push(Box::new(Message::new(
+                BIOS_MISSING_TITLE,
+                missing_bios_message(&ctx.games_root),
+            )));
+        }
     }
     match why_not_playable(game, ctx) {
         Some(message) => Transition::Push(Box::new(Message::new(NOT_PLAYABLE_TITLE, message))),
@@ -51,8 +66,19 @@ pub fn confirm_game(game: &GameRow, ctx: &mut Ctx) -> Transition {
     }
 }
 
+/// FR-EMB-12's message for PS1's missing BIOS: the only Core with a `required_bios` list today,
+/// so this wording is PS1-specific rather than generated from the list generically.
+fn missing_bios_message(games_root: &Path) -> String {
+    format!(
+        "PlayStation games need a BIOS file. Put scph5501.bin (North America), scph5502.bin \
+         (Europe) or scph5500.bin (Japan) in {}.",
+        tilde(&games_root.join("bios"), dirs::home_dir().as_deref())
+    )
+}
+
 /// Asks to play `game` (`Ctx::play` or `Ctx::launch`) and returns `None`, or returns why it can't
-/// be played. Called once an Embedded Game's Core, if it has one, is already installed.
+/// be played. Called once an Embedded Game's Core, if it has one, is already installed and its
+/// required BIOS, if any, is in place.
 fn why_not_playable(game: &GameRow, ctx: &mut Ctx) -> Option<String> {
     let system = systems::by_id(&game.system)?;
     let message = match system.kind {
@@ -753,14 +779,49 @@ mod tests {
     }
 
     #[test]
+    fn confirm_on_ps1_with_no_bios_shows_the_missing_bios_message() {
+        let mut w = world("exit 0");
+        w.ctx.data_dir = w._dir.path().join("data");
+        touch(&w.ctx.data_dir.join("cores/mednafen_psx_hw_libretro.so"));
+        let ps1 = game_of(&w, "ps1");
+        let Transition::Push(screen) = confirm_game(&ps1, &mut w.ctx) else {
+            panic!("expected the missing-BIOS message to be pushed");
+        };
+        assert_eq!(screen.title(), "PlayStation BIOS missing");
+        assert!(w.ctx.play.is_none());
+    }
+
+    #[test]
+    fn confirm_on_ps1_with_any_bios_file_in_any_case_starts_it() {
+        let mut w = world("exit 0");
+        w.ctx.data_dir = w._dir.path().join("data");
+        touch(&w.ctx.data_dir.join("cores/mednafen_psx_hw_libretro.so"));
+        touch(&w.ctx.games_root.join("bios/SCPH5502.bin"));
+        let ps1 = game_of(&w, "ps1");
+        assert!(matches!(confirm_game(&ps1, &mut w.ctx), Transition::None));
+        assert_eq!(w.ctx.play.take().map(|g| g.system), Some("ps1".to_owned()));
+    }
+
+    #[test]
+    fn confirm_asks_to_play_a_ds_game_once_its_core_is_installed() {
+        let mut w = world("exit 0");
+        w.ctx.data_dir = w._dir.path().join("data");
+        touch(&w.ctx.data_dir.join("cores/melondsds_libretro.so"));
+        let nds = game_of(&w, "nds");
+        assert!(playable(&nds, &w.ctx));
+        assert!(matches!(confirm_game(&nds, &mut w.ctx), Transition::None));
+        assert_eq!(w.ctx.play.take().map(|g| g.system), Some("nds".to_owned()));
+    }
+
+    #[test]
     fn an_embedded_system_without_a_core_comes_later() {
         let mut w = world("exit 0");
         w.ctx.data_dir = w._dir.path().join("data");
-        let nds = game_of(&w, "nds");
-        assert!(!playable(&nds, &w.ctx));
+        let psp = game_of(&w, "psp");
+        assert!(!playable(&psp, &w.ctx));
         assert_eq!(
-            why_not_playable(&nds, &mut w.ctx).as_deref(),
-            Some("Playing Nintendo DS games inside Game37 comes in a later update.")
+            why_not_playable(&psp, &mut w.ctx).as_deref(),
+            Some("Playing PSP games inside Game37 comes in a later update.")
         );
         assert!(w.ctx.play.is_none() && w.ctx.launch.is_none());
         let coreless = systems::SYSTEMS
