@@ -26,7 +26,7 @@ use crate::cores::{self, CoreInfo, GlKind};
 use crate::ctx::{self, Ctx};
 use crate::launch::{self, FAILED_TITLE};
 use crate::library::db::GameRow;
-use crate::libretro::{Core, CoreDirs, Frame, GlHost};
+use crate::libretro::{Core, CoreDirs, Frame, GlHost, Stick};
 use crate::screens::message::Message;
 use crate::screens::pause::{PauseMenu, Request, SlotInfo};
 use crate::systems::{self, System};
@@ -295,6 +295,12 @@ impl Session {
             input::frame_input_with(pads, keyboard, esc, &mut self.pause, self.stick_dpad);
         if paused {
             return true;
+        }
+        // Arrow keys tilt the left stick fully on Cores that read it as analog only (FR-UI-1),
+        // ahead of a pad's own stick on port 1.
+        let (kx, ky) = input::keyboard_stick(&down, self.stick_dpad);
+        if (kx, ky) != (0, 0) {
+            input.set_stick(0, Stick::Left, kx, ky);
         }
         self.held.mask(&mut input);
         self.follow_av_info();
