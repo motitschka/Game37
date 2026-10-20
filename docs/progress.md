@@ -126,6 +126,16 @@ library (`~/Games`, `~/.config/game37/config.toml`) exists but is empty apart fr
     timeout, then cleans up.
   - If `~/Games` is itself a mount point, the watcher misses a remount.
   - Two Games in the same folder with the same stem but different extensions share save files.
+- Open from M4's last review (low severity, not fixed):
+  - No test pins that the GL loader is cleared after a failed `Hw::start`; assert
+    `get_proc_address` is `None` afterwards.
+  - Nothing tests `Hw::resize` itself, only the pure `grown()`. A fake host whose FBO build fails
+    should see `context_destroy`/`context_reset` happen once.
+  - Nothing tests the session's wiring of the keyboard stick (`sdl.rs` ~301), only
+    `keyboard_stick`.
+  - With PPSSPP's assets already present, the download screen still says "(2 of 2)".
+  - With the PPSSPP Core installed but its assets missing, the Core is downloaded again after the
+    assets.
 
 ## How the work was run
 

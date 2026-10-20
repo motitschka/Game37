@@ -113,8 +113,11 @@ impl GlHost for SdlGl {
         self.make_current(self.frontend);
     }
 
-    /// SDL's lookup, safe on any thread; SDL's GL library stays loaded while the window, held by
-    /// the host, exists.
+    /// SDL's lookup. SDL documents it as main-thread only; it is published for any thread because
+    /// on X11 and Wayland it is `glXGetProcAddress`/`eglGetProcAddress` underneath, which are
+    /// thread-safe. If a Core ever looks functions up on its own thread on another platform, hand
+    /// out the GLX/EGL lookup directly instead. SDL's GL library stays loaded while the window,
+    /// held by the host, exists.
     fn loader(&self) -> HwGetProcAddressFn {
         SDL_GL_GetProcAddress
     }
