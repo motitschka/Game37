@@ -3,6 +3,7 @@
 //! its input read from the keyboard (FR-EMB-*). The session is the screen on top of [`Nav`] while
 //! the Game runs, so ending it pops back to where it started.
 
+use std::ffi::CStr;
 use std::fmt::Display;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,13 +13,16 @@ use sdl3::AudioSubsystem;
 use sdl3::audio::{AudioFormat, AudioSpec, AudioStreamOwner};
 use sdl3::gamepad::{Axis, Gamepad};
 use sdl3::keyboard::Scancode;
+use sdl3::sys::video::SDL_GLContext;
+use sdl3::video::Window;
 
 use super::gl::SdlGl;
+use super::glx::GlxGl;
 use super::input::{self, HeldOver, PadState, PauseTrigger};
 use super::saves::{self, Tracker};
 use super::states::{self, SLOTS, StatePaths};
 use super::timing::{self, AUDIO_MAX, PlayTimer, Scheduler};
-use crate::cores;
+use crate::cores::{self, CoreInfo, GlKind};
 use crate::ctx::{self, Ctx};
 use crate::launch::{self, FAILED_TITLE};
 use crate::library::db::GameRow;
@@ -138,19 +142,21 @@ pub fn pad_state(gamepad: &Gamepad) -> PadState {
 }
 
 impl Session {
-    /// Loads `game` on its System's Core, which may render with OpenGL through `gl`. `refresh` is
-    /// the display's refresh rate when frames are synced to it (vsync), else `None`. `Err` is the
-    /// message to show.
+    /// Loads `game` on its System's Core, on the OpenGL host its [`cores::GlKind`] needs (see
+    /// [`open_gl`]), beside the SDL renderer's own window and context `frontend` (`None` on
+    /// another renderer). `refresh` is the display's refresh rate when frames are synced to it
+    /// (vsync), else `None`. `Err` is the message to show.
     pub fn start(
         game: &GameRow,
         ctx: &Ctx,
-        gl: Option<Box<dyn GlHost>>,
+        frontend: Option<(Window, SDL_GLContext)>,
         audio: Option<&AudioSubsystem>,
         refresh: Option<f64>,
     ) -> Result<Session, String> {
         let system = systems::by_id(&game.system).ok_or_else(|| format!("No System {:?}", game.system))?;
         let core_info =
             cores::for_system(system).ok_or_else(|| format!("{} has no Core yet.", system.name))?;
+        let gl = open_gl(core_info, frontend, None, system.name)?;
         let fail = |e: &dyn Display| format!("{} couldn't start {}: {e}.", core_info.name, game.title);
         let root = &ctx.games_root;
         let dirs = CoreDirs {
@@ -432,23 +438,38 @@ impl Screen for Session {
     }
 }
 
-/// The OpenGL host a Core renders through when `gfx` draws with OpenGL.
-pub fn gl_host(gfx: &Gfx<'_>) -> Option<Box<dyn GlHost>> {
-    let (window, context) = gfx.gl_context()?;
-    Some(Box::new(SdlGl::new(window, context)))
+/// Opens the OpenGL host `core_info`'s [`GlKind`] needs: beside the SDL renderer's own window and
+/// context `frontend` (`None` on another renderer), or GLX's, on the X display `display` (`None`:
+/// `$DISPLAY`). `Err` is the message to show for the System `system_name`, with the real error
+/// logged to stderr.
+fn open_gl(
+    core_info: &CoreInfo,
+    frontend: Option<(Window, SDL_GLContext)>,
+    display: Option<&CStr>,
+    system_name: &str,
+) -> Result<Option<Box<dyn GlHost>>, String> {
+    match core_info.gl() {
+        GlKind::Sdl => Ok(frontend.map(|(window, context)| Box::new(SdlGl::new(window, context)) as _)),
+        GlKind::Glx => GlxGl::open(display, frontend)
+            .map(|host| Some(Box::new(host) as Box<dyn GlHost>))
+            .map_err(|e| {
+                eprintln!("game37: can't open the GLX host: {e}");
+                format!("{system_name} games need X11 (XWayland), which isn't available.")
+            }),
+    }
 }
 
 /// Starts `game` and pushes its session, or pushes the message saying why it couldn't start. Its
-/// Core may render with OpenGL through `gl` (see [`gl_host`]).
+/// Core's OpenGL host is chosen from `frontend` and the Core itself (see [`open_gl`]).
 pub fn start(
     game: &GameRow,
     nav: &mut Nav,
     ctx: &Ctx,
-    gl: Option<Box<dyn GlHost>>,
+    frontend: Option<(Window, SDL_GLContext)>,
     audio: Option<&AudioSubsystem>,
     refresh: Option<f64>,
 ) {
-    match Session::start(game, ctx, gl, audio, refresh) {
+    match Session::start(game, ctx, frontend, audio, refresh) {
         Ok(session) => nav.push(Box::new(session)),
         Err(message) => nav.push(Box::new(Message::new(FAILED_TITLE, message))),
     }
@@ -819,5 +840,22 @@ mod tests {
         let ram = core.save_ram().expect("mGBA's Test Suite Game has save RAM");
         assert!(saves::load(&srm, ram).unwrap());
         assert_eq!(ram, known.as_slice());
+    }
+
+    #[test]
+    fn sdl_cores_get_no_host_without_a_frontend_context() {
+        assert!(
+            open_gl(&cores::MESEN, None, None, "NES")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_glx_core_with_no_x_display_fails_with_the_system_name_in_the_message() {
+        match open_gl(&cores::PPSSPP, None, Some(c"/nonexistent/game37-test:0"), "PSP") {
+            Err(message) => assert_eq!(message, "PSP games need X11 (XWayland), which isn't available."),
+            Ok(_) => panic!("expected an error"),
+        }
     }
 }

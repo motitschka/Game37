@@ -815,15 +815,15 @@ mod tests {
 
     #[test]
     fn an_embedded_system_without_a_core_comes_later() {
+        // Every Milestone-4 Embedded System already has a Core (PSP's last of all), so this pins
+        // the message `why_not_playable` shows for a future coreless one via `later_update`
+        // directly, and the loop below still exercises any that do exist.
+        assert_eq!(
+            later_update(systems::by_id("psp").unwrap()),
+            "Playing PSP games inside Game37 comes in a later update."
+        );
         let mut w = world("exit 0");
         w.ctx.data_dir = w._dir.path().join("data");
-        let psp = game_of(&w, "psp");
-        assert!(!playable(&psp, &w.ctx));
-        assert_eq!(
-            why_not_playable(&psp, &mut w.ctx).as_deref(),
-            Some("Playing PSP games inside Game37 comes in a later update.")
-        );
-        assert!(w.ctx.play.is_none() && w.ctx.launch.is_none());
         let coreless = systems::SYSTEMS
             .iter()
             .filter(|s| s.kind == Kind::Embedded && cores::for_system(s).is_none());
