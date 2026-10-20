@@ -4,6 +4,7 @@
 //! Cores are never committed (ADR 0004); they are fetched from the libretro build server into
 //! `~/.local/share/game37/cores/` on first use and kept there for later launches.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::fs;
 use std::io;
@@ -20,40 +21,101 @@ use tempfile::NamedTempFile;
 
 use crate::systems::System;
 
-/// A libretro Core: its display name and the `.so` file the build server publishes.
+/// A libretro Core: its display name, the `.so` file the build server publishes, and what it
+/// needs to run well (FR-EMB-1, FR-EMB-12, FR-DS-1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CoreInfo {
     pub name: &'static str,
     pub file: &'static str,
+    /// `GET_VARIABLE` answers this Core needs ahead of its own defaults, e.g. to turn on hardware
+    /// rendering or to lay out Nintendo DS's two screens (FR-DS-1).
+    pub options: &'static [(&'static str, &'static str)],
+    /// BIOS file names (lowercase), any one of which in `<Games Root>/bios/` is enough
+    /// (FR-EMB-12). Empty when the Core needs none.
+    pub required_bios: &'static [&'static str],
+    /// Whether this Core's system directory is `<data dir>/system` (replaceable data) rather
+    /// than `<Games Root>/bios` (BIOS files). Only PPSSPP needs this, for its asset files.
+    pub system_in_data_dir: bool,
 }
 
 pub static MESEN: CoreInfo = CoreInfo {
     name: "Mesen",
     file: "mesen_libretro.so",
+    options: &[],
+    required_bios: &[],
+    system_in_data_dir: false,
 };
 pub static BSNES: CoreInfo = CoreInfo {
     name: "bsnes",
     file: "bsnes_libretro.so",
+    options: &[],
+    required_bios: &[],
+    system_in_data_dir: false,
 };
 pub static SAMEBOY: CoreInfo = CoreInfo {
     name: "SameBoy",
     file: "sameboy_libretro.so",
+    options: &[],
+    required_bios: &[],
+    system_in_data_dir: false,
 };
 pub static MGBA: CoreInfo = CoreInfo {
     name: "mGBA",
     file: "mgba_libretro.so",
+    options: &[],
+    required_bios: &[],
+    system_in_data_dir: false,
 };
 pub static MUPEN64PLUS_NEXT: CoreInfo = CoreInfo {
     name: "Mupen64Plus-Next",
     file: "mupen64plus_next_libretro.so",
+    options: &[],
+    required_bios: &[],
+    system_in_data_dir: false,
+};
+/// Beetle PSX HW only calls `SET_HW_RENDER` when `GET_VARIABLE` answers its own `renderer`
+/// option, so this is also needed for OpenGL hardware rendering to have any effect (see
+/// `docs/research/m4-cores.md`).
+pub static BEETLE_PSX_HW: CoreInfo = CoreInfo {
+    name: "Beetle PSX HW",
+    file: "mednafen_psx_hw_libretro.so",
+    options: &[("beetle_psx_hw_renderer", "hardware_gl")],
+    required_bios: &[
+        "scph5500.bin",
+        "scph5501.bin",
+        "scph5502.bin",
+        "scph5503.bin",
+        "scph7003.bin",
+        "scph5552.bin",
+    ],
+    system_in_data_dir: false,
+};
+/// Options chosen for FR-DS-1–3: two hybrid layouts (one large screen, one small), the touch
+/// pointer and joystick cursor both live, and a visible cursor for aiming it.
+pub static MELONDS_DS: CoreInfo = CoreInfo {
+    name: "melonDS DS",
+    file: "melondsds_libretro.so",
+    options: &[
+        ("melonds_number_of_screen_layouts", "2"),
+        ("melonds_screen_layout1", "hybrid-top"),
+        ("melonds_screen_layout2", "hybrid-bottom"),
+        ("melonds_hybrid_small_screen", "one"),
+        ("melonds_touch_mode", "auto"),
+        ("melonds_show_cursor", "always"),
+    ],
+    required_bios: &[],
+    system_in_data_dir: false,
 };
 pub static PPSSPP: CoreInfo = CoreInfo {
     name: "PPSSPP",
     file: "ppsspp_libretro.so",
+    options: &[],
+    required_bios: &[],
+    system_in_data_dir: true,
 };
 
-/// The Core for a System, or `None` for a System without one yet (DS, PS1) or an External
-/// System, which never uses a Core.
+/// The Core for a System, or `None` for an External System, which never uses a Core, or for an
+/// Embedded System with no Core yet.
 pub fn for_system(system: &System) -> Option<&'static CoreInfo> {
     match system.id {
         "nes" => Some(&MESEN),
@@ -61,6 +123,8 @@ pub fn for_system(system: &System) -> Option<&'static CoreInfo> {
         "gb" | "gbc" => Some(&SAMEBOY),
         "gba" => Some(&MGBA),
         "n64" => Some(&MUPEN64PLUS_NEXT),
+        "ps1" => Some(&BEETLE_PSX_HW),
+        "nds" => Some(&MELONDS_DS),
         // PSP stays off until PPSSPP runs on EGL: its glewInit() fails there and it crashes.
         _ => None,
     }
@@ -71,8 +135,39 @@ pub fn installed_path(data_dir: &Path, core: &CoreInfo) -> PathBuf {
     data_dir.join("cores").join(core.file)
 }
 
+/// A Core's own system directory (ADR 0005): `<data dir>/system` for PPSSPP's replaceable
+/// assets, `<Games Root>/bios` for every other Core's BIOS files (FR-LIB-9).
+pub fn system_dir(core: &CoreInfo, data_dir: &Path, games_root: &Path) -> PathBuf {
+    if core.system_in_data_dir {
+        data_dir.join("system")
+    } else {
+        games_root.join("bios")
+    }
+}
+
+/// Where PPSSPP's assets from `assets_url` unpack to: `<system dir>/PPSSPP`.
+pub fn assets_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("system").join("PPSSPP")
+}
+
+/// A Core is installed once its library is there and, for PPSSPP, its assets are too.
 pub fn is_installed(data_dir: &Path, core: &CoreInfo) -> bool {
-    installed_path(data_dir, core).is_file()
+    installed_path(data_dir, core).is_file() && (!core.system_in_data_dir || assets_dir(data_dir).is_dir())
+}
+
+/// Whether any of `core`'s `required_bios` names is in `<games_root>/bios/`, matched
+/// case-insensitively. True when the Core needs none.
+pub fn has_required_bios(games_root: &Path, core: &CoreInfo) -> bool {
+    if core.required_bios.is_empty() {
+        return true;
+    }
+    let Ok(entries) = fs::read_dir(games_root.join("bios")) else {
+        return false;
+    };
+    let names: HashSet<String> = entries
+        .filter_map(|e| Some(e.ok()?.file_name().to_string_lossy().to_lowercase()))
+        .collect();
+    core.required_bios.iter().any(|name| names.contains(*name))
 }
 
 /// The libretro build server's URL for a Core's nightly zip.
@@ -125,6 +220,19 @@ const LIMITS: Limits = Limits {
     download: MAX_DOWNLOAD_BYTES,
     core: MAX_CORE_BYTES,
 };
+
+/// Where PPSSPP's assets zip comes from (M4 decision): contains the `PPSSPP/` folder, about
+/// 9 MB, unpacked into `<data dir>/system/`.
+fn assets_url() -> &'static str {
+    "https://buildbot.libretro.com/assets/system/PPSSPP.zip"
+}
+
+/// A cap on the assets zip as downloaded.
+const MAX_ASSETS_DOWNLOAD_BYTES: u64 = 100 * 1024 * 1024;
+
+/// A cap on the assets unpacked, so a zip bomb can't fill memory or the disk. The real assets
+/// are a few MB.
+const MAX_ASSETS_BYTES: u64 = 64 * 1024 * 1024;
 
 /// A Core download running on a background thread. `poll` never blocks; call it every frame.
 /// Dropping a running `Download` cancels it and returns at once: its thread stops at its next step,
@@ -179,6 +287,56 @@ impl Download {
     /// Never blocks: reports the last known state.
     pub fn poll(&mut self) -> DownloadState {
         lock(&self.state).clone()
+    }
+
+    /// Starts downloading PPSSPP's assets zip into `<data_dir>/system/PPSSPP` on a background
+    /// thread. Only needed for PPSSPP (FR-EMB-1); every other Core needs no assets.
+    pub fn start_assets(data_dir: PathBuf) -> Download {
+        Download::spawn_assets_limited(
+            data_dir,
+            Arc::new(ureq_fetch),
+            MAX_ASSETS_DOWNLOAD_BYTES,
+            MAX_ASSETS_BYTES,
+        )
+    }
+
+    #[cfg(test)]
+    fn spawn_assets(data_dir: PathBuf, fetch: Fetcher) -> Download {
+        Download::spawn_assets_limited(data_dir, fetch, MAX_ASSETS_DOWNLOAD_BYTES, MAX_ASSETS_BYTES)
+    }
+
+    fn spawn_assets_limited(
+        data_dir: PathBuf,
+        fetch: Fetcher,
+        download_cap: u64,
+        assets_cap: u64,
+    ) -> Download {
+        let state = Arc::new(Mutex::new(DownloadState::Running {
+            received: 0,
+            total: None,
+        }));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let state_in_thread = Arc::clone(&state);
+        let cancel_in_thread = Arc::clone(&cancel);
+        thread::spawn(move || {
+            let result = panic::catch_unwind(AssertUnwindSafe(|| {
+                run_assets(
+                    &data_dir,
+                    fetch.as_ref(),
+                    download_cap,
+                    assets_cap,
+                    &state_in_thread,
+                    &cancel_in_thread,
+                )
+            }));
+            let final_state = match result {
+                Ok(Ok(path)) => DownloadState::Done(path),
+                Ok(Err(message)) => DownloadState::Failed(message),
+                Err(_) => DownloadState::Failed("Couldn't download the PPSSPP assets.".to_owned()),
+            };
+            *lock(&state_in_thread) = final_state;
+        });
+        Download { state, cancel }
     }
 }
 
@@ -321,6 +479,151 @@ fn temp_file(cores_dir: &Path, core: &CoreInfo, suffix: &str) -> io::Result<Name
         .tempfile_in(cores_dir)
 }
 
+/// Downloads PPSSPP's assets zip and unpacks the entries under `PPSSPP/` into
+/// `<data_dir>/system/PPSSPP`, the same safe way as a Core: a unique temp file and a temp
+/// extraction directory, cleaned up on every path out, with no entry escaping its folder via
+/// `..` or an absolute path, and both the download and the unpacked size capped.
+fn run_assets(
+    data_dir: &Path,
+    fetch: &(dyn Fn(&str) -> FetchResult + Send + Sync),
+    download_cap: u64,
+    assets_cap: u64,
+    state: &Mutex<DownloadState>,
+    cancel: &AtomicBool,
+) -> Result<PathBuf, String> {
+    let system_dir = data_dir.join("system");
+    fs::create_dir_all(&system_dir).map_err(|e| assets_save_failed(&e))?;
+    check_cancel(cancel)?;
+
+    let (mut reader, total) = fetch(assets_url()).map_err(|e| match e {
+        FetchError::Connect => assets_connect_failed(),
+        FetchError::Status(status) => assets_bad_status(status),
+    })?;
+    check_cancel(cancel)?;
+
+    let mut zip_file = tempfile::Builder::new()
+        .prefix(".ppsspp-assets.")
+        .suffix(".zip.part")
+        .tempfile_in(&system_dir)
+        .map_err(|e| assets_save_failed(&e))?;
+    let mut buf = vec![0u8; CHUNK];
+    let mut received: u64 = 0;
+    loop {
+        check_cancel(cancel)?;
+        let n = reader.read(&mut buf).map_err(|_| assets_incomplete())?;
+        if n == 0 {
+            break;
+        }
+        received += n as u64;
+        if received > download_cap {
+            return Err(assets_incomplete());
+        }
+        zip_file
+            .write_all(&buf[..n])
+            .map_err(|e| assets_save_failed(&e))?;
+        *lock(state) = DownloadState::Running { received, total };
+    }
+    drop(reader);
+    if let Some(total) = total
+        && received < total
+    {
+        return Err(assets_incomplete());
+    }
+
+    let mut archive = zip::ZipArchive::new(zip_file.as_file()).map_err(|_| assets_incomplete())?;
+    let extract_dir = tempfile::Builder::new()
+        .prefix(".ppsspp-assets-extract.")
+        .tempdir_in(&system_dir)
+        .map_err(|e| assets_save_failed(&e))?;
+    let mut extracted: u64 = 0;
+    for i in 0..archive.len() {
+        check_cancel(cancel)?;
+        let mut entry = archive.by_index(i).map_err(|_| assets_invalid())?;
+        // Only entries under `PPSSPP/`, and never one that escapes the extraction dir.
+        let Ok(name) = entry.name() else { continue };
+        let Some(rel) = safe_asset_path(&name) else {
+            continue;
+        };
+        let dest = extract_dir.path().join(&rel);
+        if entry.is_dir() {
+            fs::create_dir_all(&dest).map_err(|e| assets_save_failed(&e))?;
+            continue;
+        }
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).map_err(|e| assets_save_failed(&e))?;
+        }
+        extracted += entry.size();
+        if extracted > assets_cap {
+            return Err(assets_invalid());
+        }
+        let mut out = fs::File::create(&dest).map_err(|e| assets_save_failed(&e))?;
+        let mut capped = (&mut entry).take(assets_cap + 1);
+        let mut written: u64 = 0;
+        loop {
+            check_cancel(cancel)?;
+            let n = capped.read(&mut buf).map_err(|_| assets_incomplete())?;
+            if n == 0 {
+                break;
+            }
+            written += n as u64;
+            out.write_all(&buf[..n]).map_err(|e| assets_save_failed(&e))?;
+        }
+        if written > assets_cap {
+            return Err(assets_invalid());
+        }
+    }
+    drop(archive);
+    drop(zip_file);
+    check_cancel(cancel)?;
+
+    let final_dir = assets_dir(data_dir);
+    if final_dir.exists() {
+        fs::remove_dir_all(&final_dir).map_err(|e| assets_save_failed(&e))?;
+    }
+    fs::rename(extract_dir.path(), &final_dir).map_err(|e| assets_save_failed(&e))?;
+    // Already moved to its final place: disarm the temp dir's own cleanup.
+    let _ = extract_dir.keep();
+    Ok(final_dir)
+}
+
+/// The path under the extraction directory for a zip entry named `name`, or `None` when it is
+/// outside `PPSSPP/` or would escape the extraction directory (a `..` component or an absolute
+/// path).
+fn safe_asset_path(name: &str) -> Option<PathBuf> {
+    let rel = name.strip_prefix("PPSSPP/")?;
+    if rel.is_empty() {
+        return None;
+    }
+    let mut out = PathBuf::new();
+    for component in Path::new(rel).components() {
+        match component {
+            std::path::Component::Normal(part) => out.push(part),
+            _ => return None,
+        }
+    }
+    (!out.as_os_str().is_empty()).then_some(out)
+}
+
+fn assets_connect_failed() -> String {
+    "Couldn't download the PPSSPP assets. Check your internet connection.".to_owned()
+}
+
+fn assets_bad_status(status: u16) -> String {
+    format!("The libretro build server couldn't provide the PPSSPP assets (HTTP {status}).")
+}
+
+fn assets_incomplete() -> String {
+    "The PPSSPP assets download was incomplete.".to_owned()
+}
+
+fn assets_invalid() -> String {
+    "The downloaded PPSSPP assets aren't valid.".to_owned()
+}
+
+fn assets_save_failed(error: &io::Error) -> String {
+    format!("Couldn't save the PPSSPP assets: {error}.")
+}
+
 fn connect_failed(core: &CoreInfo) -> String {
     format!(
         "Couldn't download the {} Core. Check your internet connection.",
@@ -416,6 +719,38 @@ pub(crate) mod testing {
             zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
         writer.start_file(core.file, options).unwrap();
         writer.write_all(&content).unwrap();
+        writer.finish().unwrap();
+        buf
+    }
+
+    /// An [`AssetsDownload`]-style `Download` (PPSSPP's assets) that completes with `bytes` as
+    /// the fetched zip's body.
+    pub fn spawn_assets(data_dir: PathBuf, bytes: Vec<u8>, total: Option<u64>) -> Download {
+        let fetch: Fetcher = Arc::new(move |_url: &str| {
+            Ok((
+                Box::new(Cursor::new(bytes.clone())) as Box<dyn Read + Send>,
+                total,
+            ))
+        });
+        Download::spawn_assets(data_dir, fetch)
+    }
+
+    /// An assets `Download` that fails to connect as soon as it is polled.
+    pub fn spawn_assets_failing(data_dir: PathBuf) -> Download {
+        Download::spawn_assets(data_dir, Arc::new(|_url: &str| Err(FetchError::Connect)))
+    }
+
+    /// A zip holding exactly `entries` (`(name, content)`), for assets tests to add entries
+    /// outside `PPSSPP/` or that try to escape it.
+    pub fn assets_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let mut writer = zip::ZipWriter::new(Cursor::new(&mut buf));
+        let options =
+            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (name, content) in entries {
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(content).unwrap();
+        }
         writer.finish().unwrap();
         buf
     }
@@ -536,10 +871,10 @@ mod tests {
         assert_eq!(for_system(by_id("gbc").unwrap()), Some(&SAMEBOY));
         assert_eq!(for_system(by_id("gba").unwrap()), Some(&MGBA));
         assert_eq!(for_system(by_id("n64").unwrap()), Some(&MUPEN64PLUS_NEXT));
+        assert_eq!(for_system(by_id("ps1").unwrap()), Some(&BEETLE_PSX_HW));
+        assert_eq!(for_system(by_id("nds").unwrap()), Some(&MELONDS_DS));
+        // PSP stays routed to no Core until the parallel GL-host job re-enables it.
         assert_eq!(for_system(by_id("psp").unwrap()), None);
-        for id in ["nds", "ps1"] {
-            assert_eq!(for_system(by_id(id).unwrap()), None, "{id}");
-        }
         for system in SYSTEMS
             .iter()
             .filter(|s| s.kind == crate::systems::Kind::External)
@@ -549,11 +884,187 @@ mod tests {
     }
 
     #[test]
+    fn beetle_psx_hw_options_and_required_bios_match_the_research_doc() {
+        assert_eq!(
+            BEETLE_PSX_HW.options,
+            &[("beetle_psx_hw_renderer", "hardware_gl")]
+        );
+        assert_eq!(
+            BEETLE_PSX_HW.required_bios,
+            &[
+                "scph5500.bin",
+                "scph5501.bin",
+                "scph5502.bin",
+                "scph5503.bin",
+                "scph7003.bin",
+                "scph5552.bin",
+            ]
+        );
+    }
+
+    #[test]
+    fn melonds_ds_options_match_fr_ds_1_to_3() {
+        assert_eq!(
+            MELONDS_DS.options,
+            &[
+                ("melonds_number_of_screen_layouts", "2"),
+                ("melonds_screen_layout1", "hybrid-top"),
+                ("melonds_screen_layout2", "hybrid-bottom"),
+                ("melonds_hybrid_small_screen", "one"),
+                ("melonds_touch_mode", "auto"),
+                ("melonds_show_cursor", "always"),
+            ]
+        );
+        assert!(
+            MELONDS_DS.required_bios.is_empty(),
+            "DS's BIOS is optional (FreeBIOS)"
+        );
+    }
+
+    #[test]
+    fn only_ppsspp_uses_the_data_dirs_system_directory() {
+        for core in [
+            &MESEN,
+            &BSNES,
+            &SAMEBOY,
+            &MGBA,
+            &MUPEN64PLUS_NEXT,
+            &BEETLE_PSX_HW,
+            &MELONDS_DS,
+        ] {
+            assert!(!core.system_in_data_dir, "{}", core.name);
+        }
+        assert!(PPSSPP.system_in_data_dir);
+    }
+
+    #[test]
+    fn ppsspps_system_dir_is_under_the_data_dir_everyone_elses_is_the_bios_folder() {
+        let data_dir = Path::new("/data");
+        let root = Path::new("/Games");
+        assert_eq!(system_dir(&PPSSPP, data_dir, root), data_dir.join("system"));
+        assert_eq!(system_dir(&BEETLE_PSX_HW, data_dir, root), root.join("bios"));
+    }
+
+    #[test]
+    fn has_required_bios_is_true_with_no_requirement_or_any_one_match_case_insensitively() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        assert!(has_required_bios(root, &MELONDS_DS), "no requirement");
+        assert!(!has_required_bios(root, &BEETLE_PSX_HW), "nothing there yet");
+
+        fs::create_dir_all(root.join("bios")).unwrap();
+        fs::write(root.join("bios/SCPH5502.BIN"), b"").unwrap();
+        assert!(
+            has_required_bios(root, &BEETLE_PSX_HW),
+            "any one, any case, is enough"
+        );
+
+        fs::write(root.join("bios/unrelated.bin"), b"").unwrap();
+        assert!(has_required_bios(root, &BEETLE_PSX_HW));
+    }
+
+    #[test]
+    fn ppsspp_is_installed_only_once_its_library_and_its_assets_are_both_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().to_owned();
+        assert!(!is_installed(&data_dir, &PPSSPP));
+
+        touch(&installed_path(&data_dir, &PPSSPP));
+        assert!(!is_installed(&data_dir, &PPSSPP), "library only");
+
+        fs::create_dir_all(assets_dir(&data_dir)).unwrap();
+        assert!(is_installed(&data_dir, &PPSSPP));
+    }
+
+    fn touch(path: &Path) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, b"").unwrap();
+    }
+
+    #[test]
     fn url_points_at_the_nightly_zip() {
         assert_eq!(
             url(&MESEN),
             "https://buildbot.libretro.com/nightly/linux/x86_64/latest/mesen_libretro.so.zip"
         );
+    }
+
+    fn wait_for_assets<F: FnMut() -> Option<T>, T>(mut f: F) -> T {
+        for _ in 0..2000 {
+            if let Some(value) = f() {
+                return value;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        panic!("timed out waiting for condition");
+    }
+
+    #[test]
+    fn assets_install_unpacks_only_entries_under_ppsspp() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().to_owned();
+        let zip = testing::assets_zip(&[
+            ("PPSSPP/flash0/font/a.pgf", b"font data"),
+            ("PPSSPP/README.txt", b"readme"),
+            ("not-ppsspp/other.txt", b"should be ignored"),
+        ]);
+        let mut download = testing::spawn_assets(data_dir.clone(), zip, None);
+
+        let path = wait_for_assets(|| match download.poll() {
+            DownloadState::Done(path) => Some(path),
+            DownloadState::Failed(e) => panic!("assets install failed: {e}"),
+            DownloadState::Running { .. } => None,
+        });
+
+        assert_eq!(path, assets_dir(&data_dir));
+        assert_eq!(fs::read(path.join("flash0/font/a.pgf")).unwrap(), b"font data");
+        assert_eq!(fs::read(path.join("README.txt")).unwrap(), b"readme");
+        assert!(!path.join("other.txt").exists());
+        assert!(!data_dir.join("not-ppsspp").exists());
+    }
+
+    #[test]
+    fn assets_install_refuses_a_path_traversal_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().to_owned();
+        let zip = testing::assets_zip(&[
+            ("PPSSPP/good.txt", b"fine"),
+            ("PPSSPP/../../evil.txt", b"escape attempt"),
+        ]);
+        let mut download = testing::spawn_assets(data_dir.clone(), zip, None);
+
+        let path = wait_for_assets(|| match download.poll() {
+            DownloadState::Done(path) => Some(path),
+            DownloadState::Failed(e) => panic!("assets install failed: {e}"),
+            DownloadState::Running { .. } => None,
+        });
+
+        assert_eq!(fs::read(path.join("good.txt")).unwrap(), b"fine");
+        assert!(!dir.path().join("evil.txt").exists());
+        assert!(!data_dir.join("evil.txt").exists());
+    }
+
+    #[test]
+    fn a_failed_assets_download_leaves_no_temp_files_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().to_owned();
+        let mut download = testing::spawn_assets_failing(data_dir.clone());
+
+        let message = wait_for_assets(|| match download.poll() {
+            DownloadState::Failed(m) => Some(m),
+            DownloadState::Done(_) => panic!("expected a failure"),
+            DownloadState::Running { .. } => None,
+        });
+
+        assert_eq!(
+            message,
+            "Couldn't download the PPSSPP assets. Check your internet connection."
+        );
+        assert!(!assets_dir(&data_dir).exists());
+        let leftover = fs::read_dir(data_dir.join("system"))
+            .map(|entries| entries.count())
+            .unwrap_or(0);
+        assert_eq!(leftover, 0, "no temp files left in system/");
     }
 
     #[test]

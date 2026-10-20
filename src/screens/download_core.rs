@@ -44,10 +44,17 @@ fn progress_text(state: &DownloadState) -> String {
     }
 }
 
+/// Which archive is downloading right now. PPSSPP needs two, assets then Core (FR-EMB-1); every
+/// other Core needs only the one.
+enum Step {
+    Assets(Download),
+    Core(Download),
+}
+
 pub struct DownloadCore {
     game: GameRow,
     core: &'static CoreInfo,
-    download: Download,
+    step: Step,
     progress: DownloadState,
     /// Set once the download fails; from then on this screen draws and behaves like `Message`.
     failed: Option<Message>,
@@ -55,17 +62,38 @@ pub struct DownloadCore {
 }
 
 impl DownloadCore {
+    /// Downloads just `core`'s library: every Core except PPSSPP.
     pub fn new(game: GameRow, core: &'static CoreInfo, download: Download) -> DownloadCore {
+        DownloadCore::with_step(game, core, Step::Core(download))
+    }
+
+    /// Downloads `core`'s assets first, then its library (FR-EMB-1): PPSSPP only.
+    pub fn new_with_assets(game: GameRow, core: &'static CoreInfo, assets: Download) -> DownloadCore {
+        DownloadCore::with_step(game, core, Step::Assets(assets))
+    }
+
+    fn with_step(game: GameRow, core: &'static CoreInfo, step: Step) -> DownloadCore {
         DownloadCore {
             game,
             core,
-            download,
+            step,
             progress: DownloadState::Running {
                 received: 0,
                 total: None,
             },
             failed: None,
             cancel_hit: None,
+        }
+    }
+
+    /// "Downloading the <Core> Core" or, for a two-step install, with its step count.
+    fn label(&self) -> String {
+        match &self.step {
+            Step::Assets(_) => format!("Downloading the {} assets (1 of 2)", self.core.name),
+            Step::Core(_) if self.core.system_in_data_dir => {
+                format!("Downloading the {} Core (2 of 2)", self.core.name)
+            }
+            Step::Core(_) => format!("Downloading the {} Core", self.core.name),
         }
     }
 }
@@ -99,11 +127,26 @@ impl Screen for DownloadCore {
         if self.failed.is_some() {
             return Transition::None;
         }
-        match self.download.poll() {
-            DownloadState::Done(_) => {
-                ctx.play = Some(self.game.clone());
-                Transition::Pop
-            }
+        let state = match &mut self.step {
+            Step::Assets(d) => d.poll(),
+            Step::Core(d) => d.poll(),
+        };
+        match state {
+            DownloadState::Done(_) => match &self.step {
+                Step::Assets(_) => {
+                    let download = (ctx.start_download)(self.core, ctx.data_dir.clone());
+                    self.step = Step::Core(download);
+                    self.progress = DownloadState::Running {
+                        received: 0,
+                        total: None,
+                    };
+                    Transition::None
+                }
+                Step::Core(_) => {
+                    ctx.play = Some(self.game.clone());
+                    Transition::Pop
+                }
+            },
             DownloadState::Failed(text) => {
                 self.failed = Some(Message::new(FAILED_TITLE, text));
                 Transition::None
@@ -121,7 +164,7 @@ impl Screen for DownloadCore {
             return;
         }
         message::dim(gfx);
-        let title_text = format!("Downloading the {} Core", self.core.name);
+        let title_text = self.label();
         let progress = progress_text(&self.progress);
         let body = TextStyle::new(22, Weight::Regular, MUTED);
         let h = PAD + 34.0 + 32.0 + 24.0 + BAR_H + 32.0 + BUTTON_H + PAD;

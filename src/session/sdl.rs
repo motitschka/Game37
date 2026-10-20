@@ -154,15 +154,21 @@ impl Session {
         let fail = |e: &dyn Display| format!("{} couldn't start {}: {e}.", core_info.name, game.title);
         let root = &ctx.games_root;
         let dirs = CoreDirs {
-            system: root.join("bios"),
+            system: cores::system_dir(core_info, &ctx.data_dir, root),
             save: saves::save_dir(root, system.id),
         };
         for dir in [&dirs.system, &dirs.save] {
             fs::create_dir_all(dir).map_err(|e| fail(&format!("Can't create {}: {e}", dir.display())))?;
         }
         let core_path = cores::installed_path(&ctx.data_dir, core_info);
-        let mut core =
-            Core::load(&core_path, &root.join(&game.rel_path), dirs, &[], gl).map_err(|e| fail(&e))?;
+        let mut core = Core::load(
+            &core_path,
+            &root.join(&game.rel_path),
+            dirs,
+            core_info.options,
+            gl,
+        )
+        .map_err(|e| fail(&e))?;
 
         let srm = saves::srm_path(root, system.id, Path::new(&game.rel_path));
         let save = core.save_ram().map(|ram| {

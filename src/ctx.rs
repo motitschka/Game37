@@ -38,6 +38,9 @@ pub struct Ctx {
     /// Starts downloading a Core (FR-EMB-2): `Download::start` in production; tests and
     /// screenshot mode's offline cases swap it so they never hit the network.
     pub start_download: Box<dyn Fn(&'static CoreInfo, PathBuf) -> Download>,
+    /// Starts downloading PPSSPP's assets zip: `Download::start_assets` in production; tests and
+    /// screenshot mode's offline cases swap it so they never hit the network.
+    pub start_assets_download: Box<dyn Fn(PathBuf) -> Download>,
 }
 
 impl Ctx {
@@ -56,6 +59,7 @@ impl Ctx {
             launch: None,
             play: None,
             start_download: Box::new(Download::start),
+            start_assets_download: Box::new(Download::start_assets),
         }
     }
 
