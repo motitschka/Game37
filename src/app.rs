@@ -162,7 +162,7 @@ fn interactive(
         }
         if let Some(game) = ctx.play.take() {
             let refresh = if vsync { gfx.refresh_rate() } else { None };
-            sdl::start(&game, &mut nav, &ctx, sdl::gl_host(&gfx), audio.as_ref(), refresh);
+            sdl::start(&game, &mut nav, &ctx, gfx.gl_context(), audio.as_ref(), refresh);
         }
         inputs.extend(input.controls.poll(sdl3::timer::ticks()));
         for i in inputs.drain(..) {
@@ -182,7 +182,7 @@ fn interactive(
             if let Some(game) = ctx.play.take() {
                 // Frames sync to the display only with vsync.
                 let refresh = if vsync { gfx.refresh_rate() } else { None };
-                sdl::start(&game, &mut nav, &ctx, sdl::gl_host(&gfx), audio.as_ref(), refresh);
+                sdl::start(&game, &mut nav, &ctx, gfx.gl_context(), audio.as_ref(), refresh);
             }
         }
         copy_clipboard_request(&mut ctx, &video);
@@ -279,7 +279,7 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
                     &game,
                     &mut nav,
                     &ctx,
-                    sdl::gl_host(&gfx),
+                    gfx.gl_context(),
                     audio.as_ref(),
                     Some(SHOT_REFRESH),
                 );
@@ -307,7 +307,7 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
                         &game,
                         &mut nav,
                         &ctx,
-                        sdl::gl_host(&gfx),
+                        gfx.gl_context(),
                         audio.as_ref(),
                         Some(SHOT_REFRESH),
                     );

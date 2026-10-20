@@ -114,6 +114,26 @@ pub static PPSSPP: CoreInfo = CoreInfo {
     system_in_data_dir: true,
 };
 
+/// Which OpenGL host a Core's context must be made on (see [`CoreInfo::gl`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlKind {
+    /// GLX, on the X display: PPSSPP calls `glewInit()`, which fails on EGL.
+    Glx,
+    /// Beside the SDL renderer's own context, on its window.
+    Sdl,
+}
+
+impl CoreInfo {
+    /// Which OpenGL host this Core's context must be made on.
+    pub fn gl(&self) -> GlKind {
+        if std::ptr::eq(self, &PPSSPP) {
+            GlKind::Glx
+        } else {
+            GlKind::Sdl
+        }
+    }
+}
+
 /// The Core for a System, or `None` for an External System, which never uses a Core, or for an
 /// Embedded System with no Core yet.
 pub fn for_system(system: &System) -> Option<&'static CoreInfo> {
@@ -125,7 +145,7 @@ pub fn for_system(system: &System) -> Option<&'static CoreInfo> {
         "n64" => Some(&MUPEN64PLUS_NEXT),
         "ps1" => Some(&BEETLE_PSX_HW),
         "nds" => Some(&MELONDS_DS),
-        // PSP stays off until PPSSPP runs on EGL: its glewInit() fails there and it crashes.
+        "psp" => Some(&PPSSPP),
         _ => None,
     }
 }
@@ -873,13 +893,28 @@ mod tests {
         assert_eq!(for_system(by_id("n64").unwrap()), Some(&MUPEN64PLUS_NEXT));
         assert_eq!(for_system(by_id("ps1").unwrap()), Some(&BEETLE_PSX_HW));
         assert_eq!(for_system(by_id("nds").unwrap()), Some(&MELONDS_DS));
-        // PSP stays routed to no Core until the parallel GL-host job re-enables it.
-        assert_eq!(for_system(by_id("psp").unwrap()), None);
+        assert_eq!(for_system(by_id("psp").unwrap()), Some(&PPSSPP));
         for system in SYSTEMS
             .iter()
             .filter(|s| s.kind == crate::systems::Kind::External)
         {
             assert_eq!(for_system(system), None, "{}", system.id);
+        }
+    }
+
+    #[test]
+    fn only_ppsspp_needs_the_glx_host() {
+        assert_eq!(PPSSPP.gl(), GlKind::Glx);
+        for core in [
+            &MESEN,
+            &BSNES,
+            &SAMEBOY,
+            &MGBA,
+            &MUPEN64PLUS_NEXT,
+            &BEETLE_PSX_HW,
+            &MELONDS_DS,
+        ] {
+            assert_eq!(core.gl(), GlKind::Sdl, "{}", core.name);
         }
     }
 
