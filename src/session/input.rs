@@ -5,7 +5,8 @@
 use sdl3::gamepad::Button as Pad;
 use sdl3::keyboard::Scancode;
 
-use crate::libretro::{Button, InputState, MAX_PORTS};
+use crate::libretro::{Button, InputState, MAX_PORTS, Pointer, Stick};
+use crate::ui::Rect;
 
 /// Which pad plays on which port. A pad takes the lowest free port when it connects and gives it
 /// up when it disconnects; the other pads keep theirs. A pad that connects while every port is
@@ -75,6 +76,8 @@ pub struct PadState {
     pub buttons: u32,
     pub left_x: i16,
     pub left_y: i16,
+    pub right_x: i16,
+    pub right_y: i16,
     pub left_trigger: i16,
     pub right_trigger: i16,
 }
@@ -156,6 +159,16 @@ pub fn pad_buttons(pad: &PadState) -> InputState {
     input
 }
 
+/// A stick axis as the Core reads it: SDL's -32768 to 32767 clamped to libretro's -0x7fff to
+/// 0x7fff, with no deadzone (the Core keeps its own, as melonDS DS does for its cursor).
+fn axis(value: i16) -> i16 {
+    value.max(-i16::MAX)
+}
+
+/// Swaps the DS screens from the keyboard: R3, melonDS DS's own "next layout" binding. Tab, which
+/// none of RetroArch's player 1 keys in [`KEYBOARD`] use.
+pub const SWAP_SCREENS_KEY: Scancode = Scancode::Tab;
+
 /// RetroArch's default keyboard layout for player 1.
 const KEYBOARD: [(Scancode, Button); 12] = [
     (Scancode::Up, Button::Up),
@@ -172,15 +185,43 @@ const KEYBOARD: [(Scancode, Button); 12] = [
     (Scancode::RShift, Button::Select),
 ];
 
-/// The RetroPad buttons the keyboard holds, given which keys are down.
-pub fn keyboard_buttons(down: impl Fn(Scancode) -> bool) -> InputState {
+/// The RetroPad buttons the keyboard holds, given which keys are down; with a `touch_screen` (a
+/// DS Game), [`SWAP_SCREENS_KEY`] holds R3.
+pub fn keyboard_buttons(down: impl Fn(Scancode) -> bool, touch_screen: bool) -> InputState {
     let mut input = InputState::default();
     for (key, button) in KEYBOARD {
         if down(key) {
             input.set(0, button, true);
         }
     }
+    if touch_screen && down(SWAP_SCREENS_KEY) {
+        input.set(0, Button::R3, true);
+    }
     input
+}
+
+/// The mouse this frame: where it is, in logical 1920×1080 coordinates, and whether its left
+/// button is held.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Mouse {
+    pub at: Option<(f32, f32)>,
+    pub left: bool,
+}
+
+/// The pointer the Core reads for `mouse` over the Game's `picture` (where its frame is drawn):
+/// the left button touches. `None` when the mouse is off the picture.
+pub fn touch(picture: Rect, mouse: Mouse) -> Option<Pointer> {
+    let (x, y) = mouse.at?;
+    let (fx, fy) = ((x - picture.x) / picture.w, (y - picture.y) / picture.h);
+    if !(0.0..=1.0).contains(&fx) || !(0.0..=1.0).contains(&fy) {
+        return None;
+    }
+    let scale = |f: f32| ((f * 2.0 - 1.0) * f32::from(i16::MAX)).round() as i16;
+    Some(Pointer {
+        x: scale(fx),
+        y: scale(fy),
+        pressed: mouse.left,
+    })
 }
 
 /// Watches for the pause trigger: Guide on any pad, Select+Start together on one pad, or Esc.
@@ -204,7 +245,8 @@ fn is_chord(pad: &PadState) -> bool {
     pad.is_pressed(Pad::Back) && pad.is_pressed(Pad::Start)
 }
 
-/// This frame's Core input from the pads on their ports and the keyboard (on port 1), and whether
+/// This frame's Core input from the pads on their ports (buttons and sticks) and the keyboard (on
+/// port 1), and whether
 /// the pause trigger fired. Select+Start held together on a pad never reaches the Core.
 pub fn frame_input(
     pads: &[(usize, PadState)],
@@ -220,6 +262,8 @@ pub fn frame_input(
             buttons.set(0, Button::Start, false);
         }
         merge(&mut input, *port, &buttons);
+        input.set_stick(*port, Stick::Left, axis(pad.left_x), axis(pad.left_y));
+        input.set_stick(*port, Stick::Right, axis(pad.right_x), axis(pad.right_y));
     }
     merge(&mut input, 0, &keyboard);
     let held = esc || pads.iter().any(|(_, p)| p.is_pressed(Pad::Guide) || is_chord(p));
@@ -468,19 +512,22 @@ mod tests {
         for (key, button) in KEYBOARD {
             let mut want = InputState::default();
             want.set(0, button, true);
-            assert_eq!(keyboard_buttons(|k| k == key), want, "{key:?}");
+            assert_eq!(keyboard_buttons(|k| k == key, false), want, "{key:?}");
         }
-        assert!(keyboard_buttons(|k| k == Scancode::X).is_pressed(0, Button::A));
-        assert!(keyboard_buttons(|k| k == Scancode::Z).is_pressed(0, Button::B));
-        assert!(keyboard_buttons(|k| k == Scancode::RShift).is_pressed(0, Button::Select));
-        assert_eq!(keyboard_buttons(|k| k == Scancode::Escape), InputState::default());
+        assert!(keyboard_buttons(|k| k == Scancode::X, false).is_pressed(0, Button::A));
+        assert!(keyboard_buttons(|k| k == Scancode::Z, false).is_pressed(0, Button::B));
+        assert!(keyboard_buttons(|k| k == Scancode::RShift, false).is_pressed(0, Button::Select));
+        assert_eq!(
+            keyboard_buttons(|k| k == Scancode::Escape, false),
+            InputState::default()
+        );
     }
 
     #[test]
     fn pads_play_on_their_ports_and_the_keyboard_joins_port_1() {
         let mut pause = PauseTrigger::default();
         let pads = [(0, pad(&[Pad::South])), (1, pad(&[Pad::East]))];
-        let keys = keyboard_buttons(|k| k == Scancode::X);
+        let keys = keyboard_buttons(|k| k == Scancode::X, false);
         let (input, paused) = frame_input(&pads, keys, false, &mut pause);
         assert!(!paused);
         assert!(input.is_pressed(0, Button::B) && input.is_pressed(0, Button::A));
@@ -531,5 +578,79 @@ mod tests {
         assert!(!frame_input(&[], InputState::default(), true, &mut pause).1);
         assert!(!frame_input(&[], InputState::default(), false, &mut pause).1);
         assert!(frame_input(&[], InputState::default(), true, &mut pause).1);
+    }
+
+    #[test]
+    fn tab_swaps_the_ds_screens_with_r3_and_clashes_with_no_other_key() {
+        let tab = |k| k == SWAP_SCREENS_KEY;
+        let mut r3 = InputState::default();
+        r3.set(0, Button::R3, true);
+        assert_eq!(SWAP_SCREENS_KEY, Scancode::Tab);
+        assert_eq!(keyboard_buttons(tab, true), r3, "in a DS Game");
+        assert_eq!(keyboard_buttons(tab, false), InputState::default(), "elsewhere");
+        assert!(KEYBOARD.iter().all(|(key, _)| *key != SWAP_SCREENS_KEY));
+        assert_ne!(SWAP_SCREENS_KEY, Scancode::Escape, "Esc pauses");
+    }
+
+    #[test]
+    fn both_sticks_reach_the_core_on_the_pads_port_without_a_deadzone() {
+        let mut pause = PauseTrigger::default();
+        let pad = PadState {
+            left_x: -32768,
+            left_y: 1,
+            right_x: 32767,
+            right_y: -200,
+            ..Default::default()
+        };
+        let (input, _) = frame_input(&[(2, pad)], InputState::default(), false, &mut pause);
+        assert_eq!(
+            input.stick(2, Stick::Left),
+            (-0x7fff, 1),
+            "clamped to libretro's range"
+        );
+        assert_eq!(
+            input.stick(2, Stick::Right),
+            (0x7fff, -200),
+            "the right stick apart"
+        );
+        assert_eq!(input.stick(0, Stick::Left), (0, 0), "other ports centred");
+        assert_eq!(input.stick(0, Stick::Right), (0, 0));
+    }
+
+    /// A 4:3 picture pillarboxed in the logical screen, as `timing::fit` places it.
+    const PICTURE: Rect = Rect::new(240.0, 0.0, 1440.0, 1080.0);
+
+    fn at(x: f32, y: f32, left: bool) -> Mouse {
+        Mouse {
+            at: Some((x, y)),
+            left,
+        }
+    }
+
+    #[test]
+    fn the_mouse_touches_the_picture_from_corner_to_corner() {
+        let p = |x, y, pressed| Some(Pointer { x, y, pressed });
+        assert_eq!(touch(PICTURE, at(960.0, 540.0, true)), p(0, 0, true), "centre");
+        assert_eq!(touch(PICTURE, at(240.0, 0.0, false)), p(-0x7fff, -0x7fff, false));
+        assert_eq!(touch(PICTURE, at(1680.0, 1080.0, true)), p(0x7fff, 0x7fff, true));
+        assert_eq!(touch(PICTURE, at(1680.0, 0.0, false)), p(0x7fff, -0x7fff, false));
+        assert_eq!(touch(PICTURE, at(600.0, 810.0, false)), p(-0x4000, 0x4000, false));
+    }
+
+    #[test]
+    fn the_mouse_off_the_picture_touches_nothing() {
+        assert_eq!(touch(PICTURE, at(100.0, 540.0, true)), None, "in the black bar");
+        assert_eq!(touch(PICTURE, at(1700.0, 540.0, true)), None, "the other bar");
+        assert_eq!(touch(PICTURE, at(960.0, -5.0, true)), None, "above the picture");
+        assert_eq!(touch(PICTURE, at(960.0, 1081.0, true)), None);
+        assert_eq!(touch(PICTURE, Mouse::default()), None, "no mouse");
+        let letterboxed = Rect::new(0.0, 60.0, 1920.0, 960.0);
+        assert_eq!(touch(letterboxed, at(960.0, 30.0, true)), None);
+        let corner = Pointer {
+            x: -0x7fff,
+            y: -0x7fff,
+            pressed: true,
+        };
+        assert_eq!(touch(letterboxed, at(0.0, 60.0, true)), Some(corner));
     }
 }

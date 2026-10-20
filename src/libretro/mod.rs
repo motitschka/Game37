@@ -200,13 +200,53 @@ pub enum Button {
     R3,
 }
 
-/// The pressed RetroPad buttons of each port, one bit per [`Button`].
+/// A RetroPad's analog sticks, numbered as `RETRO_DEVICE_INDEX_ANALOG_*`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Stick {
+    Left = 0,
+    Right,
+}
+
+/// Where the pointer (`RETRO_DEVICE_POINTER`) is on the Core's frame: `x` and `y` run from
+/// -0x7fff at its left and top edges to 0x7fff at its right and bottom ones.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Pointer {
+    pub x: i16,
+    pub y: i16,
+    pub pressed: bool,
+}
+
+/// What the Core reads: the pressed RetroPad buttons of each port, one bit per [`Button`], each
+/// port's analog sticks, and port 0's pointer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InputState {
     ports: [u16; MAX_PORTS],
+    /// Per port, per [`Stick`]: x and y, from -0x7fff (left, up) to 0x7fff (right, down).
+    sticks: [[(i16, i16); 2]; MAX_PORTS],
+    /// `None` while the pointer is off the frame.
+    pointer: Option<Pointer>,
 }
 
 impl InputState {
+    /// Panics when `port` is not below [`MAX_PORTS`].
+    pub fn set_stick(&mut self, port: usize, stick: Stick, x: i16, y: i16) {
+        self.sticks[port][stick as usize] = (x, y);
+    }
+
+    /// The stick's x and y; centred for a port beyond [`MAX_PORTS`].
+    pub fn stick(&self, port: usize, stick: Stick) -> (i16, i16) {
+        self.sticks.get(port).map_or((0, 0), |s| s[stick as usize])
+    }
+
+    pub fn set_pointer(&mut self, pointer: Option<Pointer>) {
+        self.pointer = pointer;
+    }
+
+    pub fn pointer(&self) -> Option<Pointer> {
+        self.pointer
+    }
+
     /// Panics when `port` is not below [`MAX_PORTS`].
     pub fn set(&mut self, port: usize, button: Button, pressed: bool) {
         let bit = 1 << button as u16;
@@ -418,6 +458,12 @@ impl Core {
     #[cfg(test)]
     pub fn last_input(&self) -> InputState {
         callbacks::with(|s| s.input).unwrap_or_default()
+    }
+
+    /// Each input query the Core made, `(port, device, index, id)`, and the last answer to it.
+    #[cfg(test)]
+    pub fn input_queries(&self) -> std::collections::HashMap<(u32, u32, u32, u32), i16> {
+        callbacks::with(|s| s.queries.clone()).unwrap_or_default()
     }
 
     /// The last video frame the Core produced.

@@ -15,7 +15,7 @@ use super::ffi::{
     self, ProcAddress, RetroGameGeometry, RetroHwRenderCallback, RetroSystemAvInfo, RetroVariable,
 };
 use super::hw::{GlHost, GlRequest, HwRequest};
-use super::{AvInfo, Frame, InputState, PixelFormat};
+use super::{AvInfo, Frame, InputState, PixelFormat, Stick};
 
 /// Everything the callbacks of the loaded Core read and write.
 pub(super) struct State {
@@ -45,6 +45,9 @@ pub(super) struct State {
     /// The Core drew its last frame into the FBO at this size; it is read back into `frame` after
     /// `retro_run`.
     pub hw_size: Option<(u32, u32)>,
+    /// Each input query the Core made, `(port, device, index, id)`, and the last answer to it.
+    #[cfg(test)]
+    pub queries: HashMap<(c_uint, c_uint, c_uint, c_uint), i16>,
 }
 
 impl State {
@@ -64,6 +67,8 @@ impl State {
             gl_host: None,
             hw: None,
             hw_size: None,
+            #[cfg(test)]
+            queries: HashMap::new(),
         }
     }
 }
@@ -184,8 +189,13 @@ pub(super) unsafe extern "C" fn get_proc_address(sym: *const c_char) -> ProcAddr
 /// The host sets the input before each `retro_run`, so there is nothing to poll.
 pub(super) extern "C" fn input_poll() {}
 
-pub(super) extern "C" fn input_state(port: c_uint, device: c_uint, _index: c_uint, id: c_uint) -> i16 {
-    guarded(0, |s| input_answer(&s.input, s.bitmasks, port, device, id))
+pub(super) extern "C" fn input_state(port: c_uint, device: c_uint, index: c_uint, id: c_uint) -> i16 {
+    guarded(0, |s| {
+        let answer = input_answer(&s.input, s.bitmasks, port, device, index, id);
+        #[cfg(test)]
+        s.queries.insert((port, device, index, id), answer);
+        answer
+    })
 }
 
 /// Answers `cmd` for the Core, returning whether it is supported.
@@ -381,22 +391,50 @@ unsafe fn write_out<T>(data: *mut c_void, value: T) -> bool {
     true
 }
 
-/// What `input_state` returns for `RETRO_DEVICE_JOYPAD` queries; 0 for any other device.
+/// What `input_state` returns: the joypad's buttons, the analog sticks, and port 0's pointer; 0
+/// for any other device.
 pub(super) fn input_answer(
     input: &InputState,
     bitmasks: bool,
     port: c_uint,
     device: c_uint,
+    index: c_uint,
     id: c_uint,
 ) -> i16 {
-    if device & ffi::RETRO_DEVICE_MASK != ffi::RETRO_DEVICE_JOYPAD {
-        return 0;
-    }
-    let mask = input.mask(port as usize);
-    match id {
-        // R3 is bit 15, the sign bit of the returned i16.
-        ffi::RETRO_DEVICE_ID_JOYPAD_MASK if bitmasks => mask as i16,
-        0..=15 => i16::from(mask >> id & 1 == 1),
+    match device & ffi::RETRO_DEVICE_MASK {
+        ffi::RETRO_DEVICE_JOYPAD => {
+            let mask = input.mask(port as usize);
+            match id {
+                // R3 is bit 15, the sign bit of the returned i16.
+                ffi::RETRO_DEVICE_ID_JOYPAD_MASK if bitmasks => mask as i16,
+                0..=15 => i16::from(mask >> id & 1 == 1),
+                _ => 0,
+            }
+        }
+        ffi::RETRO_DEVICE_ANALOG => {
+            let stick = match index {
+                0 => Stick::Left,
+                1 => Stick::Right,
+                // The analog buttons (`RETRO_DEVICE_INDEX_ANALOG_BUTTON`) read as released.
+                _ => return 0,
+            };
+            let (x, y) = input.stick(port as usize, stick);
+            match id {
+                0 => x,
+                1 => y,
+                _ => 0,
+            }
+        }
+        ffi::RETRO_DEVICE_POINTER if port == 0 && index == 0 => match (input.pointer(), id) {
+            (Some(p), ffi::RETRO_DEVICE_ID_POINTER_X) => p.x,
+            (Some(p), ffi::RETRO_DEVICE_ID_POINTER_Y) => p.y,
+            (Some(p), ffi::RETRO_DEVICE_ID_POINTER_PRESSED) => i16::from(p.pressed),
+            (Some(_), ffi::RETRO_DEVICE_ID_POINTER_IS_OFFSCREEN) => 0,
+            // Off the frame: -0x8000 lies outside the -0x7fff to 0x7fff a frame spans.
+            (None, ffi::RETRO_DEVICE_ID_POINTER_X | ffi::RETRO_DEVICE_ID_POINTER_Y) => i16::MIN,
+            (None, ffi::RETRO_DEVICE_ID_POINTER_IS_OFFSCREEN) => 1,
+            _ => 0,
+        },
         _ => 0,
     }
 }
@@ -916,19 +954,28 @@ mod tests {
         let mut input = InputState::default();
         input.set(1, Button::Start, true);
         let joypad = ffi::RETRO_DEVICE_JOYPAD;
-        assert_eq!(input_answer(&input, false, 1, joypad, Button::Start as c_uint), 1);
-        assert_eq!(input_answer(&input, false, 1, joypad, Button::A as c_uint), 0);
-        assert_eq!(input_answer(&input, false, 0, joypad, Button::Start as c_uint), 0);
-        assert_eq!(input_answer(&input, false, 9, joypad, Button::Start as c_uint), 0);
+        assert_eq!(
+            input_answer(&input, false, 1, joypad, 0, Button::Start as c_uint),
+            1
+        );
+        assert_eq!(input_answer(&input, false, 1, joypad, 0, Button::A as c_uint), 0);
+        assert_eq!(
+            input_answer(&input, false, 0, joypad, 0, Button::Start as c_uint),
+            0
+        );
+        assert_eq!(
+            input_answer(&input, false, 9, joypad, 0, Button::Start as c_uint),
+            0
+        );
         // A joypad subclass is still a joypad.
         let subclass = (1 + 1) << ffi::RETRO_DEVICE_TYPE_SHIFT | joypad;
         assert_eq!(
-            input_answer(&input, false, 1, subclass, Button::Start as c_uint),
+            input_answer(&input, false, 1, subclass, 0, Button::Start as c_uint),
             1
         );
         // Other devices (here the keyboard, 3) read nothing.
-        assert_eq!(input_answer(&input, false, 1, 3, Button::Start as c_uint), 0);
-        assert_eq!(input_answer(&input, false, 1, joypad, 16), 0);
+        assert_eq!(input_answer(&input, false, 1, 3, 0, Button::Start as c_uint), 0);
+        assert_eq!(input_answer(&input, false, 1, joypad, 0, 16), 0);
     }
 
     #[test]
@@ -937,8 +984,45 @@ mod tests {
         input.set(0, Button::Y, true);
         input.set(0, Button::R3, true);
         let (joypad, mask) = (ffi::RETRO_DEVICE_JOYPAD, ffi::RETRO_DEVICE_ID_JOYPAD_MASK);
-        assert_eq!(input_answer(&input, false, 0, joypad, mask), 0);
-        assert_eq!(input_answer(&input, true, 0, joypad, mask) as u16, 0x8002);
+        assert_eq!(input_answer(&input, false, 0, joypad, 0, mask), 0);
+        assert_eq!(input_answer(&input, true, 0, joypad, 0, mask) as u16, 0x8002);
+    }
+
+    #[test]
+    fn analog_queries_answer_each_stick_on_its_port() {
+        let mut input = InputState::default();
+        input.set_stick(1, Stick::Left, -0x7fff, 100);
+        input.set_stick(1, Stick::Right, 200, 0x7fff);
+        let analog = ffi::RETRO_DEVICE_ANALOG;
+        let ask = |port, index, id| input_answer(&input, false, port, analog, index, id);
+        assert_eq!((ask(1, 0, 0), ask(1, 0, 1)), (-0x7fff, 100), "left stick");
+        assert_eq!((ask(1, 1, 0), ask(1, 1, 1)), (200, 0x7fff), "right stick");
+        assert_eq!((ask(0, 0, 0), ask(9, 1, 1)), (0, 0), "other ports are centred");
+        assert_eq!(ask(1, 2, 0), 0, "analog buttons read as released");
+        assert_eq!(ask(1, 0, 2), 0);
+    }
+
+    #[test]
+    fn pointer_queries_answer_port_0s_pointer_or_off_the_frame() {
+        let mut input = InputState::default();
+        let pointer = ffi::RETRO_DEVICE_POINTER;
+        let ask = |input: &InputState, port, id| input_answer(input, false, port, pointer, 0, id);
+        let (x, y, pressed, offscreen) = (
+            ffi::RETRO_DEVICE_ID_POINTER_X,
+            ffi::RETRO_DEVICE_ID_POINTER_Y,
+            ffi::RETRO_DEVICE_ID_POINTER_PRESSED,
+            ffi::RETRO_DEVICE_ID_POINTER_IS_OFFSCREEN,
+        );
+        let answers = |input: &InputState| [x, y, pressed, offscreen].map(|id| ask(input, 0, id));
+        assert_eq!(answers(&input), [-0x8000, -0x8000, 0, 1], "off the frame");
+        input.set_pointer(Some(super::super::Pointer {
+            x: -0x7fff,
+            y: 1234,
+            pressed: true,
+        }));
+        assert_eq!(answers(&input), [-0x7fff, 1234, 1, 0]);
+        assert_eq!(ask(&input, 1, x), 0, "only port 0 has a pointer");
+        assert_eq!(input_answer(&input, false, 0, pointer, 1, x), 0, "only one touch");
     }
 
     #[test]
