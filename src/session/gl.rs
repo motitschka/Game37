@@ -182,12 +182,21 @@ mod real_core_tests {
     use super::*;
     use crate::libretro::tests::serial;
     use crate::libretro::{Core, CoreDirs, Frame, PixelFormat};
+    use crate::session::glx::GlxGl;
 
     const TESTDATA: &str = "/home/matei/Game37/.testdata";
 
-    /// Runs `game` on `core` for `frames` frames through an OpenGL host on a hidden offscreen
-    /// window, with `system` as its system directory; returns the last frame.
-    fn run_on_gl(core: &str, game: &str, system: &Path, frames: usize) -> Frame {
+    /// Which [`GlHost`] a test runs its Core on.
+    #[derive(Clone, Copy)]
+    enum Host {
+        Sdl,
+        Glx,
+    }
+
+    /// Runs `game` on `core` for `frames` frames through an OpenGL host beside the renderer of a
+    /// hidden offscreen window, with `system` as its system directory; returns the last frame.
+    /// The renderer's context is current again after every frame.
+    fn run_on_gl(core: &str, game: &str, system: &Path, frames: usize, host: Host) -> Frame {
         let data = Path::new(TESTDATA);
         sdl3::hint::set("SDL_VIDEO_DRIVER", "offscreen");
         let sdl = sdl3::init().unwrap();
@@ -200,7 +209,11 @@ mod real_core_tests {
             SDL_GL_GetCurrentContext()
         };
         assert!(!frontend.is_null(), "{}", sdl3::get_error());
-        let host = SdlGl::new(canvas.window().clone(), frontend);
+        let window = canvas.window().clone();
+        let host: Box<dyn GlHost> = match host {
+            Host::Sdl => Box::new(SdlGl::new(window, frontend)),
+            Host::Glx => Box::new(GlxGl::open(None, Some((window, frontend))).unwrap()),
+        };
 
         let dirs = TempDir::new().unwrap();
         let mut core = Core::load(
@@ -211,11 +224,17 @@ mod real_core_tests {
                 save: dirs.path().join("saves"),
             },
             &[],
-            Some(Box::new(host)),
+            Some(host),
         )
         .unwrap_or_else(|e| panic!("{e}"));
         for _ in 0..frames {
             core.run_frame(&Default::default());
+            // SAFETY: a plain query.
+            assert_eq!(
+                unsafe { SDL_GL_GetCurrentContext() },
+                frontend,
+                "the renderer's context"
+            );
         }
         core.frame().clone()
     }
@@ -227,7 +246,8 @@ mod real_core_tests {
         assert_eq!(frame.data.len(), frame.pitch * frame.height as usize);
     }
 
-    /// PPSSPP draws CMFileManager's file list with OpenGL.
+    /// PPSSPP draws CMFileManager's file list with OpenGL on the GLX host. The file list shows
+    /// between frames 600 and 900 (also with PPSSPP's software renderer).
     #[test]
     #[ignore = "needs /home/matei/Game37/.testdata"]
     fn hw_ppsspp_draws_cmfilemanager() {
@@ -242,7 +262,8 @@ mod real_core_tests {
             "ppsspp_libretro.so",
             "psp/CMFileManager/EBOOT.PBP",
             system.path(),
-            600,
+            900,
+            Host::Glx,
         );
         assert_drawn_with_gl(&frame);
         let colours: HashSet<&[u8]> = frame.data.chunks(4).map(|p| &p[..3]).collect();
@@ -261,6 +282,7 @@ mod real_core_tests {
             "n64/N64 NICCC (World).n64",
             system.path(),
             300,
+            Host::Sdl,
         );
         assert_drawn_with_gl(&frame);
     }
