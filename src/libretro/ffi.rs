@@ -25,7 +25,9 @@ pub const ENV_GET_CAN_DUPE: c_uint = 3;
 pub const ENV_GET_SYSTEM_DIRECTORY: c_uint = 9;
 pub const ENV_SET_PIXEL_FORMAT: c_uint = 10;
 pub const ENV_SET_INPUT_DESCRIPTORS: c_uint = 11;
+pub const ENV_SET_HW_RENDER: c_uint = 14;
 pub const ENV_GET_VARIABLE: c_uint = 15;
+pub const ENV_SET_VARIABLES: c_uint = 16;
 pub const ENV_GET_VARIABLE_UPDATE: c_uint = 17;
 pub const ENV_GET_LOG_INTERFACE: c_uint = 27;
 pub const ENV_GET_SAVE_DIRECTORY: c_uint = 31;
@@ -35,8 +37,26 @@ pub const ENV_SET_CONTROLLER_INFO: c_uint = 35;
 pub const ENV_SET_MEMORY_MAPS: c_uint = 36 | EXPERIMENTAL;
 pub const ENV_SET_GEOMETRY: c_uint = 37;
 pub const ENV_SET_SUPPORT_ACHIEVEMENTS: c_uint = 42 | EXPERIMENTAL;
+pub const ENV_SET_HW_SHARED_CONTEXT: c_uint = 44 | EXPERIMENTAL;
 pub const ENV_GET_AUDIO_VIDEO_ENABLE: c_uint = 47 | EXPERIMENTAL;
 pub const ENV_GET_INPUT_BITMASKS: c_uint = 51 | EXPERIMENTAL;
+pub const ENV_GET_PREFERRED_HW_RENDER: c_uint = 56;
+
+/// `enum retro_hw_context_type`: the two the host accepts.
+pub const RETRO_HW_CONTEXT_OPENGL: c_int = 1;
+pub const RETRO_HW_CONTEXT_OPENGL_CORE: c_int = 3;
+
+/// The `data` a Core passes to `retro_video_refresh_t` when it drew the frame into the frontend's
+/// framebuffer: `((void *)-1)`.
+pub const RETRO_HW_FRAME_BUFFER_VALID: *const c_void = usize::MAX as *const c_void;
+
+/// `struct retro_variable`: a Core option's key and value. In `SET_VARIABLES` the value is
+/// `"Description; first|second|..."`, the first choice being the default.
+#[repr(C)]
+pub struct RetroVariable {
+    pub key: *const c_char,
+    pub value: *const c_char,
+}
 
 #[repr(C)]
 pub struct RetroSystemInfo {
@@ -77,6 +97,43 @@ pub struct RetroGameInfo {
     pub data: *const c_void,
     pub size: usize,
     pub meta: *const c_char,
+}
+
+/// `retro_log_printf_t`.
+pub type LogPrintfFn = unsafe extern "C" fn(level: c_int, fmt: *const c_char, ...);
+
+/// `struct retro_log_callback`.
+#[repr(C)]
+pub struct RetroLogCallback {
+    pub log: LogPrintfFn,
+}
+
+unsafe extern "C" {
+    /// The log callback every Core gets, in `log.c`.
+    pub fn game37_core_log(level: c_int, fmt: *const c_char, ...);
+}
+
+pub type ProcAddress = Option<unsafe extern "C" fn()>;
+pub type HwContextResetFn = unsafe extern "C" fn();
+pub type HwGetCurrentFramebufferFn = unsafe extern "C" fn() -> usize;
+pub type HwGetProcAddressFn = unsafe extern "C" fn(sym: *const c_char) -> ProcAddress;
+
+/// `struct retro_hw_render_callback`: the Core fills in what it wants, the frontend its two
+/// functions.
+#[repr(C)]
+pub struct RetroHwRenderCallback {
+    pub context_type: c_int,
+    pub context_reset: Option<HwContextResetFn>,
+    pub get_current_framebuffer: Option<HwGetCurrentFramebufferFn>,
+    pub get_proc_address: Option<HwGetProcAddressFn>,
+    pub depth: bool,
+    pub stencil: bool,
+    pub bottom_left_origin: bool,
+    pub version_major: c_uint,
+    pub version_minor: c_uint,
+    pub cache_context: bool,
+    pub context_destroy: Option<HwContextResetFn>,
+    pub debug_context: bool,
 }
 
 pub type EnvironmentFn = unsafe extern "C" fn(cmd: c_uint, data: *mut c_void) -> bool;

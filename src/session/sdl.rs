@@ -13,6 +13,7 @@ use sdl3::audio::{AudioFormat, AudioSpec, AudioStreamOwner};
 use sdl3::gamepad::{Axis, Gamepad};
 use sdl3::keyboard::Scancode;
 
+use super::gl::SdlGl;
 use super::input::{self, HeldOver, PadState, PauseTrigger};
 use super::saves::{self, Tracker};
 use super::states::{self, SLOTS, StatePaths};
@@ -21,7 +22,7 @@ use crate::cores;
 use crate::ctx::{self, Ctx};
 use crate::launch::{self, FAILED_TITLE};
 use crate::library::db::GameRow;
-use crate::libretro::{Core, CoreDirs, Frame};
+use crate::libretro::{Core, CoreDirs, Frame, GlHost};
 use crate::screens::message::Message;
 use crate::screens::pause::{PauseMenu, Request, SlotInfo};
 use crate::systems::{self, System};
@@ -137,11 +138,13 @@ pub fn pad_state(gamepad: &Gamepad) -> PadState {
 }
 
 impl Session {
-    /// Loads `game` on its System's Core. `refresh` is the display's refresh rate when frames are
-    /// synced to it (vsync), else `None`. `Err` is the message to show.
+    /// Loads `game` on its System's Core, which may render with OpenGL through `gl`. `refresh` is
+    /// the display's refresh rate when frames are synced to it (vsync), else `None`. `Err` is the
+    /// message to show.
     pub fn start(
         game: &GameRow,
         ctx: &Ctx,
+        gl: Option<Box<dyn GlHost>>,
         audio: Option<&AudioSubsystem>,
         refresh: Option<f64>,
     ) -> Result<Session, String> {
@@ -158,7 +161,8 @@ impl Session {
             fs::create_dir_all(dir).map_err(|e| fail(&format!("Can't create {}: {e}", dir.display())))?;
         }
         let core_path = cores::installed_path(&ctx.data_dir, core_info);
-        let mut core = Core::load(&core_path, &root.join(&game.rel_path), dirs).map_err(|e| fail(&e))?;
+        let mut core =
+            Core::load(&core_path, &root.join(&game.rel_path), dirs, &[], gl).map_err(|e| fail(&e))?;
 
         let srm = saves::srm_path(root, system.id, Path::new(&game.rel_path));
         let save = core.save_ram().map(|ram| {
@@ -422,9 +426,23 @@ impl Screen for Session {
     }
 }
 
-/// Starts `game` and pushes its session, or pushes the message saying why it couldn't start.
-pub fn start(game: &GameRow, nav: &mut Nav, ctx: &Ctx, audio: Option<&AudioSubsystem>, refresh: Option<f64>) {
-    match Session::start(game, ctx, audio, refresh) {
+/// The OpenGL host a Core renders through when `gfx` draws with OpenGL.
+pub fn gl_host(gfx: &Gfx<'_>) -> Option<Box<dyn GlHost>> {
+    let (window, context) = gfx.gl_context()?;
+    Some(Box::new(SdlGl::new(window, context)))
+}
+
+/// Starts `game` and pushes its session, or pushes the message saying why it couldn't start. Its
+/// Core may render with OpenGL through `gl` (see [`gl_host`]).
+pub fn start(
+    game: &GameRow,
+    nav: &mut Nav,
+    ctx: &Ctx,
+    gl: Option<Box<dyn GlHost>>,
+    audio: Option<&AudioSubsystem>,
+    refresh: Option<f64>,
+) {
+    match Session::start(game, ctx, gl, audio, refresh) {
         Ok(session) => nav.push(Box::new(session)),
         Err(message) => nav.push(Box::new(Message::new(FAILED_TITLE, message))),
     }
@@ -582,7 +600,7 @@ mod tests {
             favorite: false,
         };
 
-        let mut session = Session::start(&game, &ctx, None, None).unwrap_or_else(|e| panic!("{e}"));
+        let mut session = Session::start(&game, &ctx, None, None, None).unwrap_or_else(|e| panic!("{e}"));
         run(&mut session, 100);
         let info = session.save_slot(1).unwrap();
         assert!(info.thumb.is_some_and(|t| t.width > 0), "slot 1 has a screenshot");
@@ -605,7 +623,7 @@ mod tests {
         let next = run(&mut session, 2);
         drop(session);
         assert!(states.join("240p Test Suite (World).resume.state").exists());
-        let mut session = Session::start(&game, &ctx, None, None).unwrap_or_else(|e| panic!("{e}"));
+        let mut session = Session::start(&game, &ctx, None, None, None).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(run(&mut session, 2), next, "the relaunch continues where it quit");
     }
 
@@ -679,7 +697,7 @@ mod tests {
             nav.handle(Input::Action(action), &Hits::default(), ctx);
         };
 
-        start(&game, &mut nav, &ctx, None, None);
+        start(&game, &mut nav, &ctx, None, None, None);
         tick(&mut nav, &mut ctx, &enter);
         assert!(
             !start_held(&mut nav),
@@ -736,7 +754,7 @@ mod tests {
         // The next launch continues where it quit; closing the window while paused writes a new
         // Resume State and records the Playtime.
         let game = games(&ctx).remove(0);
-        start(&game, &mut nav, &ctx, None, None);
+        start(&game, &mut nav, &ctx, None, None, None);
         assert_eq!(run(running(&mut nav).unwrap(), 2), next, "the relaunch resumes");
         fs::remove_file(&resume).unwrap();
         tick(&mut nav, &mut ctx, &none);
@@ -778,7 +796,8 @@ mod tests {
         fs::create_dir_all(&dirs.system).unwrap();
         fs::create_dir_all(&dirs.save).unwrap();
 
-        let mut core = Core::load(&core_path, &game_path, dirs.clone()).unwrap_or_else(|e| panic!("{e}"));
+        let mut core =
+            Core::load(&core_path, &game_path, dirs.clone(), &[], None).unwrap_or_else(|e| panic!("{e}"));
         let ram = core.save_ram().expect("mGBA's Test Suite Game has save RAM");
         let known: Vec<u8> = (0..ram.len()).map(|i| i as u8).collect();
         ram.copy_from_slice(&known);
@@ -790,7 +809,7 @@ mod tests {
         assert_eq!(srm.parent().unwrap(), saves::save_dir(root.path(), "gba"));
         drop(core);
 
-        let mut core = Core::load(&core_path, &game_path, dirs).unwrap_or_else(|e| panic!("{e}"));
+        let mut core = Core::load(&core_path, &game_path, dirs, &[], None).unwrap_or_else(|e| panic!("{e}"));
         let ram = core.save_ram().expect("mGBA's Test Suite Game has save RAM");
         assert!(saves::load(&srm, ram).unwrap());
         assert_eq!(ram, known.as_slice());

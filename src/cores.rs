@@ -43,15 +43,25 @@ pub static MGBA: CoreInfo = CoreInfo {
     name: "mGBA",
     file: "mgba_libretro.so",
 };
+pub static MUPEN64PLUS_NEXT: CoreInfo = CoreInfo {
+    name: "Mupen64Plus-Next",
+    file: "mupen64plus_next_libretro.so",
+};
+pub static PPSSPP: CoreInfo = CoreInfo {
+    name: "PPSSPP",
+    file: "ppsspp_libretro.so",
+};
 
-/// The Core for a System, or `None` for a System without one yet (N64, DS, PS1, PSP) or an
-/// External System, which never uses a Core.
+/// The Core for a System, or `None` for a System without one yet (DS, PS1) or an External
+/// System, which never uses a Core.
 pub fn for_system(system: &System) -> Option<&'static CoreInfo> {
     match system.id {
         "nes" => Some(&MESEN),
         "snes" => Some(&BSNES),
         "gb" | "gbc" => Some(&SAMEBOY),
         "gba" => Some(&MGBA),
+        "n64" => Some(&MUPEN64PLUS_NEXT),
+        "psp" => Some(&PPSSPP),
         _ => None,
     }
 }
@@ -525,7 +535,9 @@ mod tests {
         assert_eq!(for_system(by_id("gb").unwrap()), Some(&SAMEBOY));
         assert_eq!(for_system(by_id("gbc").unwrap()), Some(&SAMEBOY));
         assert_eq!(for_system(by_id("gba").unwrap()), Some(&MGBA));
-        for id in ["n64", "nds", "ps1", "psp"] {
+        assert_eq!(for_system(by_id("n64").unwrap()), Some(&MUPEN64PLUS_NEXT));
+        assert_eq!(for_system(by_id("psp").unwrap()), Some(&PPSSPP));
+        for id in ["nds", "ps1"] {
             assert_eq!(for_system(by_id(id).unwrap()), None, "{id}");
         }
         for system in SYSTEMS

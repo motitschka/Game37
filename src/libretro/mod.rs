@@ -7,6 +7,7 @@
 
 mod callbacks;
 mod ffi;
+mod hw;
 #[cfg(test)]
 pub(crate) mod tests;
 
@@ -21,7 +22,10 @@ use libloading::Library;
 use libloading::os::unix;
 
 use callbacks::State;
+pub use ffi::ProcAddress;
 use ffi::{Api, RetroGameGeometry, RetroGameInfo, RetroSystemAvInfo, RetroSystemInfo};
+use hw::Hw;
+pub use hw::{GlHost, GlRequest};
 
 /// Ports a Core can read input from.
 pub const MAX_PORTS: usize = 4;
@@ -57,6 +61,8 @@ pub enum CoreError {
     LoadGame(PathBuf),
     Serialize,
     Unserialize,
+    /// The Core asked for OpenGL rendering, and it couldn't be set up.
+    Gl(String),
 }
 
 impl fmt::Display for CoreError {
@@ -75,6 +81,7 @@ impl fmt::Display for CoreError {
             CoreError::LoadGame(path) => write!(f, "The Core couldn't load {}", path.display()),
             CoreError::Serialize => write!(f, "The Core couldn't save its state"),
             CoreError::Unserialize => write!(f, "The Core couldn't restore the state"),
+            CoreError::Gl(e) => write!(f, "Can't start OpenGL for the Core: {e}"),
         }
     }
 }
@@ -89,6 +96,9 @@ pub enum PixelFormat {
     Xrgb1555,
     Xrgb8888,
     Rgb565,
+    /// Bytes R, G, B, A in memory (SDL's `RGBA32`): a frame a Core drew with OpenGL, as read back
+    /// from its framebuffer. Never a Core's own format.
+    Rgba32,
 }
 
 impl PixelFormat {
@@ -104,7 +114,7 @@ impl PixelFormat {
     pub fn bytes_per_pixel(self) -> usize {
         match self {
             PixelFormat::Xrgb1555 | PixelFormat::Rgb565 => 2,
-            PixelFormat::Xrgb8888 => 4,
+            PixelFormat::Xrgb8888 | PixelFormat::Rgba32 => 4,
         }
     }
 }
@@ -242,6 +252,8 @@ pub struct Core {
     api: Api,
     game_loaded: bool,
     video: Frame,
+    /// The Core's OpenGL rendering, when it asked for it.
+    hw: Option<Hw>,
     duped: bool,
     audio: Vec<i16>,
     game_path: CString,
@@ -258,11 +270,21 @@ fn c_path(path: &Path) -> Result<CString, CoreError> {
 }
 
 impl Core {
-    /// Loads the Core at `core_path` and starts `game_path` on it.
-    pub fn load(core_path: &Path, game_path: &Path, dirs: CoreDirs) -> Result<Core, CoreError> {
+    /// Loads the Core at `core_path` and starts `game_path` on it. `options` are Core option
+    /// values, `(key, value)`, the Core gets ahead of its own defaults. With a `gl` host, a Core may
+    /// render with OpenGL (`SET_HW_RENDER`); without one it is refused.
+    pub fn load(
+        core_path: &Path,
+        game_path: &Path,
+        dirs: CoreDirs,
+        options: &[(&str, &str)],
+        gl: Option<Box<dyn GlHost>>,
+    ) -> Result<Core, CoreError> {
         let claim = Claim::take().ok_or(CoreError::AlreadyLoaded)?;
         let game_cpath = c_path(game_path)?;
-        let state = State::new(c_path(&dirs.system)?, c_path(&dirs.save)?);
+        let mut state = State::new(c_path(&dirs.system)?, c_path(&dirs.save)?);
+        state.overrides = callbacks::option_overrides(options);
+        state.gl_host = gl;
 
         // SAFETY: loading a shared library runs its initialisers. A Core is a plain C library and
         // its initialisers only set up its own statics; this is the trust any frontend places in
@@ -299,6 +321,7 @@ impl Core {
             api,
             game_loaded: false,
             video: Frame::default(),
+            hw: None,
             duped: false,
             audio: Vec::new(),
             game_path: game_cpath,
@@ -342,7 +365,20 @@ impl Core {
         let mut av = RetroSystemAvInfo::default();
         // SAFETY: `av` is a valid, writable `retro_system_av_info` for the duration of the call.
         unsafe { (core.api.get_system_av_info)(&mut av) };
-        callbacks::with(|s| s.av_info = AvInfo::from_raw(&av));
+        let info = AvInfo::from_raw(&av);
+        let request = callbacks::with(|s| {
+            s.av_info = info;
+            s.hw
+        })
+        .flatten();
+        if let Some(request) = request {
+            let (w, h) = if info.max_width > 0 && info.max_height > 0 {
+                (info.max_width, info.max_height)
+            } else {
+                (info.base_width, info.base_height)
+            };
+            core.hw = Some(Hw::start(request, w, h).map_err(CoreError::Gl)?);
+        }
         Ok(core)
     }
 
@@ -356,8 +392,13 @@ impl Core {
             s.input = *input;
             s.audio.clear();
         });
-        // SAFETY: the Core is loaded with a Game and its callbacks' state is installed.
-        unsafe { (self.api.run)() };
+        // SAFETY: the Core is loaded with a Game and its callbacks' state is installed; a Core
+        // rendering with OpenGL runs with its context current, and its frame is read back.
+        let run = || unsafe { (self.api.run)() };
+        match &self.hw {
+            Some(hw) => hw.run(run),
+            None => run(),
+        }
         callbacks::with(|s| {
             self.duped = !s.fresh;
             if s.fresh {
@@ -435,13 +476,19 @@ impl Core {
 
 impl Drop for Core {
     fn drop(&mut self) {
+        let hw = self.hw.take();
         // SAFETY: `retro_init` ran in `load`, and `retro_load_game` succeeded when `game_loaded`
         // is set; libretro.h orders unload, then deinit. The library is still loaded.
-        unsafe {
+        let shut_down = || unsafe {
             if self.game_loaded {
                 (self.api.unload_game)();
             }
             (self.api.deinit)();
+        };
+        // An OpenGL Core gets `context_destroy` first, and shuts down with its context current.
+        match hw {
+            Some(hw) => hw.stop(shut_down),
+            None => shut_down(),
         }
         // The directory strings the Core was given stay alive until it has shut down.
         callbacks::remove();

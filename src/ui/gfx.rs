@@ -123,6 +123,7 @@ fn sdl_format(format: libretro::PixelFormat) -> sdl3::pixels::PixelFormat {
         libretro::PixelFormat::Xrgb1555 => PixelFormat::XRGB1555,
         libretro::PixelFormat::Rgb565 => PixelFormat::RGB565,
         libretro::PixelFormat::Xrgb8888 => PixelFormat::XRGB8888,
+        libretro::PixelFormat::Rgba32 => PixelFormat::RGBA32,
     }
 }
 
@@ -217,6 +218,13 @@ fn set_pixel_art_scaling(texture: &Texture<'_>) {
     }
 }
 
+fn set_linear_scaling(texture: &Texture<'_>) {
+    use sdl3::sys::render::SDL_SetTextureScaleMode;
+    use sdl3::sys::surface::SDL_SCALEMODE_LINEAR;
+    // SAFETY: the texture is alive.
+    unsafe { SDL_SetTextureScaleMode(texture.raw(), SDL_SCALEMODE_LINEAR) };
+}
+
 /// Half the width of the soft edge drawn around shapes, standing in for anti-aliasing.
 const FEATHER: f32 = 0.5;
 
@@ -261,7 +269,13 @@ impl<'tc> Gfx<'tc> {
                     return;
                 }
             };
-            set_pixel_art_scaling(&texture);
+            if frame.format == libretro::PixelFormat::Rgba32 {
+                // Only frames a Core drew with OpenGL are RGBA. Those are often drawn at several
+                // times the System's resolution: smooth scaling, not pixel art.
+                set_linear_scaling(&texture);
+            } else {
+                set_pixel_art_scaling(&texture);
+            }
             self.game = Some(GameTexture {
                 texture,
                 width: frame.width,
@@ -273,6 +287,25 @@ impl<'tc> Gfx<'tc> {
         if let Err(e) = game.texture.update(None, &frame.data, frame.pitch) {
             eprintln!("game37: can't upload the game frame: {e}");
         }
+    }
+
+    /// The window and the OpenGL context of an `opengl` renderer, for a Core's context to sit
+    /// next to; `None` on another renderer.
+    pub fn gl_context(&self) -> Option<(sdl3::video::Window, sdl3::sys::video::SDL_GLContext)> {
+        use sdl3::sys::render::{SDL_FlushRenderer, SDL_GetRendererName};
+        use sdl3::sys::video::SDL_GL_GetCurrentContext;
+        let renderer = self.canvas.raw();
+        // SAFETY: the renderer is alive; its name is a static string. Flushing activates the
+        // renderer, which makes its context current.
+        let context = unsafe {
+            let name = SDL_GetRendererName(renderer);
+            if name.is_null() || std::ffi::CStr::from_ptr(name) != c"opengl" {
+                return None;
+            }
+            SDL_FlushRenderer(renderer);
+            SDL_GL_GetCurrentContext()
+        };
+        (!context.is_null()).then(|| (self.canvas.window().clone(), context))
     }
 
     /// Draws the game texture stretched over `r`.

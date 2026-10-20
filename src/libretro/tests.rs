@@ -86,7 +86,7 @@ fn load(case: &Case, dirs: &TempDir) -> Result<Core, CoreError> {
         system: dirs.path().join("system"),
         save: dirs.path().join("saves"),
     };
-    Core::load(&core, &game, dirs)
+    Core::load(&core, &game, dirs, &[], None)
 }
 
 fn run(core: &mut Core, frames: usize) -> (Frame, usize) {
@@ -94,9 +94,8 @@ fn run(core: &mut Core, frames: usize) -> (Frame, usize) {
     let mut samples = 0;
     let mut last = Frame::default();
     for _ in 0..frames {
-        let out = core.run_frame(&input);
-        samples += out.audio.len();
-        last = out.video.clone();
+        samples += core.run_frame(&input).audio.len();
+        last = core.frame().clone();
     }
     (last, samples)
 }
@@ -110,6 +109,7 @@ fn distinct_colours(frame: &Frame) -> usize {
                 PixelFormat::Xrgb8888 => u32::from_le_bytes(px.try_into().unwrap()) & 0x00FF_FFFF,
                 PixelFormat::Xrgb1555 => u32::from(u16::from_le_bytes(px.try_into().unwrap()) & 0x7FFF),
                 PixelFormat::Rgb565 => u32::from(u16::from_le_bytes(px.try_into().unwrap())),
+                PixelFormat::Rgba32 => u32::from_le_bytes(px.try_into().unwrap()) & 0x00FF_FFFF,
             });
         }
     }

@@ -98,6 +98,7 @@ pub fn frame_rgb(frame: &Frame) -> Rgb {
         for px in row[..frame.width as usize * bpp].chunks(bpp) {
             let rgb = match frame.format {
                 PixelFormat::Xrgb8888 => [px[2], px[1], px[0]],
+                PixelFormat::Rgba32 => [px[0], px[1], px[2]],
                 PixelFormat::Rgb565 => {
                     let v = u32::from(u16::from_le_bytes([px[0], px[1]]));
                     [expand(v >> 11, 5), expand(v >> 5 & 0x3F, 6), expand(v & 0x1F, 5)]
