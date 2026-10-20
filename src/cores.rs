@@ -61,7 +61,7 @@ pub fn for_system(system: &System) -> Option<&'static CoreInfo> {
         "gb" | "gbc" => Some(&SAMEBOY),
         "gba" => Some(&MGBA),
         "n64" => Some(&MUPEN64PLUS_NEXT),
-        "psp" => Some(&PPSSPP),
+        // PSP stays off until PPSSPP runs on EGL: its glewInit() fails there and it crashes.
         _ => None,
     }
 }
@@ -536,7 +536,7 @@ mod tests {
         assert_eq!(for_system(by_id("gbc").unwrap()), Some(&SAMEBOY));
         assert_eq!(for_system(by_id("gba").unwrap()), Some(&MGBA));
         assert_eq!(for_system(by_id("n64").unwrap()), Some(&MUPEN64PLUS_NEXT));
-        assert_eq!(for_system(by_id("psp").unwrap()), Some(&PPSSPP));
+        assert_eq!(for_system(by_id("psp").unwrap()), None);
         for id in ["nds", "ps1"] {
             assert_eq!(for_system(by_id(id).unwrap()), None, "{id}");
         }
