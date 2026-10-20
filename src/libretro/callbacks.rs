@@ -10,9 +10,11 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_int, c_uint, c_void};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{PoisonError, RwLock};
 
 use super::ffi::{
-    self, ProcAddress, RetroGameGeometry, RetroHwRenderCallback, RetroSystemAvInfo, RetroVariable,
+    self, HwGetProcAddressFn, ProcAddress, RetroGameGeometry, RetroHwRenderCallback, RetroSystemAvInfo,
+    RetroVariable,
 };
 use super::hw::{GlHost, GlRequest, HwRequest};
 use super::{AvInfo, Frame, InputState, PixelFormat, Stick};
@@ -171,19 +173,27 @@ pub(super) extern "C" fn get_current_framebuffer() -> usize {
     FBO.load(Ordering::Relaxed) as usize
 }
 
-/// `retro_hw_get_proc_address_t`: an OpenGL function, looked up by the frontend.
+/// The host's OpenGL loader while a Core renders with OpenGL. Like [`FBO`], not in the thread-local
+/// [`State`]: a Core may look functions up from a thread of its own, or while the state is in use.
+static LOADER: RwLock<Option<HwGetProcAddressFn>> = RwLock::new(None);
+
+/// Hands out `loader` to look OpenGL functions up with; `None` when there is none.
+pub(super) fn set_loader(loader: Option<HwGetProcAddressFn>) {
+    *LOADER.write().unwrap_or_else(PoisonError::into_inner) = loader;
+}
+
+/// `retro_hw_get_proc_address_t`: an OpenGL function, looked up by the frontend, on any thread.
 ///
 /// # Safety
 /// `sym` is null or a NUL-terminated string.
 pub(super) unsafe extern "C" fn get_proc_address(sym: *const c_char) -> ProcAddress {
-    guarded(None, |s| {
-        if sym.is_null() {
-            return None;
-        }
-        // SAFETY: non-null and NUL-terminated by this function's contract.
-        let name = unsafe { CStr::from_ptr(sym) };
-        s.gl_host.as_ref()?.proc_address(name)
-    })
+    let loader = *LOADER.read().unwrap_or_else(PoisonError::into_inner);
+    match loader {
+        // SAFETY: the host's loader, live while it is set; `sym` is NUL-terminated by this
+        // function's contract.
+        Some(loader) if !sym.is_null() => unsafe { loader(sym) },
+        _ => None,
+    }
 }
 
 /// The host sets the input before each `retro_run`, so there is nothing to poll.
@@ -694,10 +704,18 @@ mod tests {
         }
         fn make_core_current(&mut self) {}
         fn make_frontend_current(&mut self) {}
-        fn proc_address(&self, _: &CStr) -> ProcAddress {
-            None
+        fn loader(&self) -> HwGetProcAddressFn {
+            fake_loader
         }
         fn destroy_context(&mut self) {}
+    }
+
+    extern "C" fn fake_gl() {}
+
+    /// A loader with one function, `glFake`.
+    unsafe extern "C" fn fake_loader(sym: *const c_char) -> ProcAddress {
+        // SAFETY: the loader's contract: `sym` is NUL-terminated.
+        (unsafe { CStr::from_ptr(sym) } == c"glFake").then_some(fake_gl as unsafe extern "C" fn())
     }
 
     fn with_gl() -> State {
@@ -779,12 +797,35 @@ mod tests {
 
     #[test]
     fn the_framebuffer_is_handed_out_on_any_thread() {
+        let _serial = crate::libretro::tests::serial();
         set_fbo(7);
         assert_eq!(get_current_framebuffer(), 7);
         let elsewhere = std::thread::spawn(|| get_current_framebuffer()).join().unwrap();
         set_fbo(0);
         assert_eq!(elsewhere, 7, "the FBO, asked for from a thread of the Core's");
         assert_eq!(get_current_framebuffer(), 0);
+    }
+
+    #[test]
+    fn opengl_functions_are_looked_up_on_any_thread_and_while_the_state_is_in_use() {
+        let _serial = crate::libretro::tests::serial();
+        let look_up = |name: &CStr| {
+            // SAFETY: `name` is NUL-terminated.
+            unsafe { get_proc_address(name.as_ptr()) }.map(|f| f as usize)
+        };
+        install(with_gl());
+        set_loader(Some(fake_loader));
+        let elsewhere = std::thread::spawn(move || look_up(c"glFake")).join().unwrap();
+        let busy = with(|_| look_up(c"glFake")).flatten();
+        let missing = look_up(c"glMissing");
+        set_loader(None);
+        let after = look_up(c"glFake");
+        remove();
+        let fake = Some(fake_gl as unsafe extern "C" fn() as usize);
+        assert_eq!(elsewhere, fake, "from a thread of the Core's");
+        assert_eq!(busy, fake, "while the callbacks' state is borrowed");
+        assert_eq!(missing, None);
+        assert_eq!(after, None, "no loader once the Core's context is gone");
     }
 
     #[test]

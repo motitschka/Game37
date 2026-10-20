@@ -29,5 +29,6 @@ for every new screen.
   Only one Core may be loaded per process, so every such test holds `crate::libretro::tests::serial()`.
 - libretro callbacks that a Core may call from its own threads (e.g. `get_current_framebuffer`) must not
   depend on the per-thread callback state; keep what they need in process-wide state.
+- Real-Core OpenGL tests check the picture as the renderer shows it, not only the read-back bytes.
 - Never commit game files, BIOS, keys or secrets (NFR-6). Test fixtures are empty or tiny dummy files
   created by the tests themselves.
