@@ -12,14 +12,13 @@ way, and what's still open.
 |---|---|---|---|
 | M1 Skeleton | Done, reviewed | `m1-skeleton` | Yes |
 | M2 External launching | Done, reviewed | `m2-external` | Yes |
-| M3 Embedded player (software) | Done, reviewed, regression-checked | `m3-embedded` | No |
-| M4 OpenGL hardware rendering | Done, reviewed, regression-checked | `m4-opengl` | No |
+| M3 Embedded player (software) | Done, reviewed, regression-checked | `m3-embedded` | Yes |
+| M4 OpenGL hardware rendering | Done, reviewed, regression-checked | `m4-opengl` | Yes |
 | M5 Artwork, Details Page, Options Menu | Not started | | |
 | M6 Settings, search, First-run Setup | Not started | | |
 
-Each milestone branch builds on the previous one, so **`m4-opengl` holds everything**. Merging it into
-`main` brings in M3 and M4 together; the owner hadn't approved that merge yet when this file was
-written. Start M5 from `m4-opengl` (or from `main` once it's merged), on a new branch `m5-…`.
+Each milestone branch builds on the previous one. `main` has everything through M4, merged on
+2026-10-20. Start M5 from `main`, on a new branch `m5-…`.
 
 ## Code map
 
