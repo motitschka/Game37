@@ -65,6 +65,8 @@ pub struct Session {
     /// The Game has a touch screen (DS): the mouse touches it, Tab swaps screens, and the mouse
     /// cursor shows.
     touch_screen: bool,
+    /// Whether the left stick also presses the d-pad ([`cores::CoreInfo::stick_is_dpad`]).
+    stick_dpad: bool,
 }
 
 struct Audio {
@@ -226,6 +228,7 @@ impl Session {
             shown: true,
             paused: false,
             touch_screen: std::ptr::eq(core_info, &cores::MELONDS_DS),
+            stick_dpad: core_info.stick_is_dpad(),
         })
     }
 
@@ -287,7 +290,9 @@ impl Session {
         down: impl Fn(Scancode) -> bool,
     ) -> bool {
         let keyboard = input::keyboard_buttons(&down, self.touch_screen);
-        let (mut input, paused) = input::frame_input(pads, keyboard, down(Scancode::Escape), &mut self.pause);
+        let esc = down(Scancode::Escape);
+        let (mut input, paused) =
+            input::frame_input_with(pads, keyboard, esc, &mut self.pause, self.stick_dpad);
         if paused {
             return true;
         }

@@ -135,8 +135,15 @@ const BY_POSITION: [(Pad, Button); 14] = [
     (Pad::DPadRight, Button::Right),
 ];
 
-/// The RetroPad buttons a pad holds.
+/// The RetroPad buttons a pad holds, the left stick counting as the d-pad.
 pub fn pad_buttons(pad: &PadState) -> InputState {
+    pad_buttons_with(pad, true)
+}
+
+/// The RetroPad buttons a pad holds. With `stick_dpad`, the left stick past half way also presses
+/// the d-pad, for Systems without an analog stick; Cores of Systems with one (N64, PSP) read the
+/// stick as analog only, so it doesn't press the d-pad as well.
+pub fn pad_buttons_with(pad: &PadState, stick_dpad: bool) -> InputState {
     let mut input = InputState::default();
     for (from, to) in BY_POSITION {
         if pad.is_pressed(from) {
@@ -146,10 +153,10 @@ pub fn pad_buttons(pad: &PadState) -> InputState {
     let analog = [
         (pad.left_trigger > HALF, Button::L2),
         (pad.right_trigger > HALF, Button::R2),
-        (pad.left_y < -HALF, Button::Up),
-        (pad.left_y > HALF, Button::Down),
-        (pad.left_x < -HALF, Button::Left),
-        (pad.left_x > HALF, Button::Right),
+        (stick_dpad && pad.left_y < -HALF, Button::Up),
+        (stick_dpad && pad.left_y > HALF, Button::Down),
+        (stick_dpad && pad.left_x < -HALF, Button::Left),
+        (stick_dpad && pad.left_x > HALF, Button::Right),
     ];
     for (held, button) in analog {
         if held {
@@ -254,9 +261,21 @@ pub fn frame_input(
     esc: bool,
     pause: &mut PauseTrigger,
 ) -> (InputState, bool) {
+    frame_input_with(pads, keyboard, esc, pause, true)
+}
+
+/// [`frame_input`], with the left stick pressing the d-pad only if `stick_dpad` (see
+/// [`pad_buttons_with`]).
+pub fn frame_input_with(
+    pads: &[(usize, PadState)],
+    keyboard: InputState,
+    esc: bool,
+    pause: &mut PauseTrigger,
+    stick_dpad: bool,
+) -> (InputState, bool) {
     let mut input = InputState::default();
     for (port, pad) in pads {
-        let mut buttons = pad_buttons(pad);
+        let mut buttons = pad_buttons_with(pad, stick_dpad);
         if is_chord(pad) {
             buttons.set(0, Button::Select, false);
             buttons.set(0, Button::Start, false);
@@ -442,6 +461,30 @@ mod tests {
             InputState::default(),
             "Guide is Game37's"
         );
+    }
+
+    #[test]
+    fn an_analog_system_reads_the_left_stick_as_analog_only() {
+        let pad = PadState {
+            left_x: 20000,
+            left_y: -20000,
+            ..PadState::default()
+        };
+        assert_eq!(
+            pad_buttons_with(&pad, false).mask(0),
+            0,
+            "no d-pad from the stick"
+        );
+        let mut pause = PauseTrigger::default();
+        let (input, _) = frame_input_with(&[(0, pad)], InputState::default(), false, &mut pause, false);
+        assert_eq!(input.mask(0), 0);
+        assert_eq!(
+            input.stick(0, Stick::Left),
+            (20000, -20000),
+            "still read as analog"
+        );
+        let (input, _) = frame_input(&[(0, pad)], InputState::default(), false, &mut pause);
+        assert!(input.is_pressed(0, Button::Right) && input.is_pressed(0, Button::Up));
     }
 
     #[test]

@@ -36,6 +36,7 @@ shot() {
     local data=$root/data-$name
     mkdir -p "$data"
     ln -s "$testdata/data/cores" "$data/cores"
+    ln -s "$testdata/data/system" "$data/system"
     if "$bin" --screenshot "$out/$name.bmp" --config "$cfg" --data-dir "$data" --actions "$actions" "$@" \
         >"$out/$name.log" 2>&1; then
         magick "$out/$name.bmp" -resize 50% "$out/$name.png" && rm "$out/$name.bmp"
@@ -49,7 +50,7 @@ shot() {
 shot m1-no-config "$root/missing.toml" ""
 shot m1-home-empty "$root/empty.toml" ""
 shot m1-home "$root/cfg.toml" ""
-shot m1-see-all "$root/cfg.toml" "down,down,right,right,right,right,right,right,right,right,right,confirm"
+shot m1-see-all "$root/cfg.toml" "down,down,$(printf 'right,%.0s' {1..25})confirm"
 shot m1-carousel "$root/cfg.toml" "nexttab,right,right"
 shot m1-console-page "$root/cfg.toml" "nexttab,right,right,confirm,sort"
 shot m1-console-empty "$root/cfg.toml" "nexttab,left,left,confirm"
@@ -66,5 +67,10 @@ shot m3-snes "$root/cfg.toml" "nexttab,right,right,confirm,confirm" --frames 180
 shot m3-gbc "$root/cfg.toml" "nexttab,right,right,right,right,confirm,confirm" --frames 600
 shot m3-gba "$root/cfg.toml" "nexttab,right,right,right,right,right,confirm,confirm" --frames 240
 shot m3-pause-saved "$root/cfg.toml" "nexttab,right,right,confirm,confirm,wait:120,back,down,confirm,confirm"
+# M4: OpenGL Cores (N64, PSP), DS layout, PS1 without a BIOS
+shot m4-n64 "$root/cfg.toml" "nexttab,right,right,right,confirm,confirm" --frames 300
+shot m4-ds "$root/cfg.toml" "nexttab,right,right,right,right,right,right,right,confirm,confirm" --frames 300
+shot m4-psp "$root/cfg.toml" "nexttab,left,left,left,confirm,confirm" --frames 900
+shot m4-ps1-no-bios "$root/cfg.toml" "nexttab,left,left,left,left,left,confirm,confirm"
 
 echo "screenshots in $out"

@@ -102,6 +102,9 @@ pub static MELONDS_DS: CoreInfo = CoreInfo {
         ("melonds_hybrid_small_screen", "one"),
         ("melonds_touch_mode", "auto"),
         ("melonds_show_cursor", "always"),
+        // The JIT crashed the DS homebrew test Game here; the interpreter is fast enough on a
+        // desktop CPU.
+        ("melonds_jit_enable", "disabled"),
     ],
     required_bios: &[],
     system_in_data_dir: false,
@@ -131,6 +134,12 @@ impl CoreInfo {
         } else {
             GlKind::Sdl
         }
+    }
+
+    /// Whether the left stick also presses the d-pad: for Systems without an analog stick. N64
+    /// and PSP have one, so their Cores read it as analog only.
+    pub fn stick_is_dpad(&self) -> bool {
+        !(std::ptr::eq(self, &MUPEN64PLUS_NEXT) || std::ptr::eq(self, &PPSSPP))
     }
 }
 
@@ -903,6 +912,15 @@ mod tests {
     }
 
     #[test]
+    fn only_n64_and_psp_read_the_left_stick_as_analog_only() {
+        assert!(!MUPEN64PLUS_NEXT.stick_is_dpad());
+        assert!(!PPSSPP.stick_is_dpad());
+        for core in [&MESEN, &BSNES, &SAMEBOY, &MGBA, &BEETLE_PSX_HW, &MELONDS_DS] {
+            assert!(core.stick_is_dpad(), "{}", core.name);
+        }
+    }
+
+    #[test]
     fn only_ppsspp_needs_the_glx_host() {
         assert_eq!(PPSSPP.gl(), GlKind::Glx);
         for core in [
@@ -948,6 +966,7 @@ mod tests {
                 ("melonds_hybrid_small_screen", "one"),
                 ("melonds_touch_mode", "auto"),
                 ("melonds_show_cursor", "always"),
+                ("melonds_jit_enable", "disabled"),
             ]
         );
         assert!(
