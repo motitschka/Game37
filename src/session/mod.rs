@@ -3,6 +3,7 @@
 //! In-game Saves) live here, apart from the SDL parts, so they can be tested without a window.
 
 pub mod gl;
+pub mod glx;
 pub mod input;
 pub mod saves;
 pub mod sdl;

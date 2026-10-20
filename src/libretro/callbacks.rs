@@ -9,6 +9,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_int, c_uint, c_void};
 use std::panic::{self, AssertUnwindSafe};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::ffi::{
     self, ProcAddress, RetroGameGeometry, RetroHwRenderCallback, RetroSystemAvInfo, RetroVariable,
@@ -41,8 +42,6 @@ pub(super) struct State {
     pub gl_host: Option<Box<dyn GlHost>>,
     /// What the Core asked for in `SET_HW_RENDER`, once accepted.
     pub hw: Option<HwRequest>,
-    /// The FBO the Core draws into, handed out by `get_current_framebuffer`.
-    pub fbo: u32,
     /// The Core drew its last frame into the FBO at this size; it is read back into `frame` after
     /// `retro_run`.
     pub hw_size: Option<(u32, u32)>,
@@ -64,7 +63,6 @@ impl State {
             overrides: HashMap::new(),
             gl_host: None,
             hw: None,
-            fbo: 0,
             hw_size: None,
         }
     }
@@ -154,9 +152,18 @@ pub(super) unsafe extern "C" fn audio_sample_batch(data: *const i16, frames: usi
     })
 }
 
-/// `retro_hw_get_current_framebuffer_t`: the FBO the Core draws into.
+/// The FBO the Core draws into, 0 when there is none. Not in the thread-local [`State`]: a Core may
+/// ask for it from a thread of its own (PPSSPP records its draws on its emulator thread).
+static FBO: AtomicU32 = AtomicU32::new(0);
+
+/// Hands out `fbo` as the FBO the Core draws into; 0 when it has none.
+pub(super) fn set_fbo(fbo: u32) {
+    FBO.store(fbo, Ordering::Relaxed);
+}
+
+/// `retro_hw_get_current_framebuffer_t`: the FBO the Core draws into, on any thread.
 pub(super) extern "C" fn get_current_framebuffer() -> usize {
-    guarded(0, |s| s.fbo as usize)
+    FBO.load(Ordering::Relaxed) as usize
 }
 
 /// `retro_hw_get_proc_address_t`: an OpenGL function, looked up by the frontend.
@@ -730,6 +737,16 @@ mod tests {
             );
             assert!(s.hw.is_none() && cb.get_current_framebuffer.is_none());
         }
+    }
+
+    #[test]
+    fn the_framebuffer_is_handed_out_on_any_thread() {
+        set_fbo(7);
+        assert_eq!(get_current_framebuffer(), 7);
+        let elsewhere = std::thread::spawn(|| get_current_framebuffer()).join().unwrap();
+        set_fbo(0);
+        assert_eq!(elsewhere, 7, "the FBO, asked for from a thread of the Core's");
+        assert_eq!(get_current_framebuffer(), 0);
     }
 
     #[test]

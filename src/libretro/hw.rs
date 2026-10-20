@@ -178,7 +178,7 @@ impl Hw {
                 return Err(e);
             }
         };
-        callbacks::with(|s| s.fbo = hw.fbo);
+        callbacks::set_fbo(hw.fbo);
         eprintln!(
             "game37: the Core draws with {} into a {width}×{height} framebuffer",
             request.gl
@@ -292,6 +292,7 @@ impl Hw {
         }
         f();
         self.delete();
+        callbacks::set_fbo(0);
         host(|h| h.destroy_context());
     }
 
