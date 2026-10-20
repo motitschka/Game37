@@ -21,7 +21,7 @@ use crate::launch::{Launcher, NeverExits, Processes};
 use crate::library::db::Library;
 use crate::library::watch::LibraryWatcher;
 use crate::screens;
-use crate::session::input::{self, Ports};
+use crate::session::input::{self, Mouse, Ports};
 use crate::session::sdl;
 use crate::ui::chrome::{self, TopBar};
 use crate::ui::controls::{ControlEvent, Controls, StickAxis};
@@ -194,9 +194,19 @@ fn interactive(
         }
         let keys = events.keyboard_state();
         let pads = input.pad_states();
-        sdl::tick(&mut nav, &mut ctx, &mut gfx, dt, &pads, |k| {
+        let state = events.mouse_state();
+        let mouse = Mouse {
+            at: Some(gfx.to_logical(state.x(), state.y())),
+            left: state.left(),
+        };
+        sdl::tick(&mut nav, &mut ctx, &mut gfx, dt, &pads, mouse, |k| {
             keys.is_scancode_pressed(k)
         });
+        // The mouse cursor hides while a Game plays, unless the mouse touches its screen.
+        let cursor = !sdl::playing(&mut nav) || sdl::running(&mut nav).is_some_and(|s| s.touch_screen());
+        if cursor != sdl.mouse().is_cursor_showing() {
+            sdl.mouse().show_cursor(cursor);
+        }
         ctx.input_kind = input.controls.kind;
         ctx.button_style = input.controls.style;
         hits = draw(&mut gfx, &mut nav, &ctx, &input.view(), &clock());
@@ -276,9 +286,15 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
             }
         }
         for _ in 0..step.frames() {
-            sdl::tick(&mut nav, &mut ctx, &mut gfx, 1.0 / SHOT_REFRESH, &[], |k| {
-                esc && k == Scancode::Escape
-            });
+            sdl::tick(
+                &mut nav,
+                &mut ctx,
+                &mut gfx,
+                1.0 / SHOT_REFRESH,
+                &[],
+                Mouse::default(),
+                |k| esc && k == Scancode::Escape,
+            );
             // A Core download (FR-EMB-2) runs on its own thread; block until it settles so the
             // screenshot is deterministic, with a cap in case it never does.
             let deadline = Instant::now() + Duration::from_secs(60);
@@ -303,7 +319,15 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
         }
     }
     for frame in 1..=shot.frames {
-        sdl::tick(&mut nav, &mut ctx, &mut gfx, 1.0 / SHOT_REFRESH, &[], |_| false);
+        sdl::tick(
+            &mut nav,
+            &mut ctx,
+            &mut gfx,
+            1.0 / SHOT_REFRESH,
+            &[],
+            Mouse::default(),
+            |_| false,
+        );
         draw(&mut gfx, &mut nav, &ctx, &view, &clock);
         if frame < shot.frames {
             gfx.present();

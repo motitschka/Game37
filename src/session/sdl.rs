@@ -14,7 +14,7 @@ use sdl3::gamepad::{Axis, Gamepad};
 use sdl3::keyboard::Scancode;
 
 use super::gl::SdlGl;
-use super::input::{self, HeldOver, PadState, PauseTrigger};
+use super::input::{self, HeldOver, Mouse, PadState, PauseTrigger};
 use super::saves::{self, Tracker};
 use super::states::{self, SLOTS, StatePaths};
 use super::timing::{self, AUDIO_MAX, PlayTimer, Scheduler};
@@ -58,6 +58,9 @@ pub struct Session {
     shown: bool,
     /// Whether the Pause Menu is open over it.
     paused: bool,
+    /// The Game has a touch screen (DS): the mouse touches it, Tab swaps screens, and the mouse
+    /// cursor shows.
+    touch_screen: bool,
 }
 
 struct Audio {
@@ -132,6 +135,8 @@ pub fn pad_state(gamepad: &Gamepad) -> PadState {
     }
     state.left_x = gamepad.axis(Axis::LeftX);
     state.left_y = gamepad.axis(Axis::LeftY);
+    state.right_x = gamepad.axis(Axis::RightX);
+    state.right_y = gamepad.axis(Axis::RightY);
     state.left_trigger = gamepad.axis(Axis::TriggerLeft);
     state.right_trigger = gamepad.axis(Axis::TriggerRight);
     state
@@ -214,7 +219,13 @@ impl Session {
             timer: PlayTimer::start(Instant::now()),
             shown: true,
             paused: false,
+            touch_screen: std::ptr::eq(core_info, &cores::MELONDS_DS),
         })
+    }
+
+    /// Whether the Game has a touch screen the mouse touches, so the mouse cursor shows.
+    pub fn touch_screen(&self) -> bool {
+        self.touch_screen
     }
 
     /// The window was hidden or shown: a hidden Game runs no frames and plays no sound, and owes
@@ -257,7 +268,8 @@ impl Session {
     }
 
     /// Runs the Core frames due `dt` seconds after the last tick, with `pads` holding each
-    /// occupied port's state and the keys `down` reports held, uploading new frames to `gfx` and
+    /// occupied port's state, `mouse` touching a touch screen and the keys `down` reports held,
+    /// uploading new frames to `gfx` and
     /// queueing their sound. Returns whether the pause trigger (Esc, Guide or Select+Start)
     /// fired, in which case no frame runs.
     pub fn tick(
@@ -265,15 +277,20 @@ impl Session {
         gfx: &mut impl GameFrames,
         dt: f64,
         pads: &[(usize, PadState)],
+        mouse: Mouse,
         down: impl Fn(Scancode) -> bool,
     ) -> bool {
-        let keyboard = input::keyboard_buttons(&down);
+        let keyboard = input::keyboard_buttons(&down, self.touch_screen);
         let (mut input, paused) = input::frame_input(pads, keyboard, down(Scancode::Escape), &mut self.pause);
         if paused {
             return true;
         }
         self.held.mask(&mut input);
         self.follow_av_info();
+        if self.touch_screen {
+            // Where `draw` puts the frame.
+            input.set_pointer(input::touch(timing::fit(self.core.av_info().aspect_ratio), mouse));
+        }
         for _ in 0..self.scheduler.frames(dt) {
             let out = self.core.run_frame(&input);
             if !out.duped {
@@ -472,13 +489,14 @@ pub fn tick(
     gfx: &mut impl GameFrames,
     dt: f64,
     pads: &[(usize, PadState)],
+    mouse: Mouse,
     down: impl Fn(Scancode) -> bool,
 ) {
     let paused = nav.modal().is_some();
     let Some(session) = running(nav) else { return };
     session.set_paused(paused);
     if !paused {
-        if session.tick(gfx, dt, pads, down) {
+        if session.tick(gfx, dt, pads, mouse, down) {
             on_pause(nav);
         }
         return;
@@ -693,7 +711,7 @@ mod tests {
         let esc = |k: Scancode| k == Scancode::Escape;
         // A tick of 20 ms runs at least one Core frame.
         let tick = |nav: &mut Nav, ctx: &mut Ctx, down: &dyn Fn(Scancode) -> bool| {
-            tick(nav, ctx, &mut NoPicture, 0.02, &[], down)
+            tick(nav, ctx, &mut NoPicture, 0.02, &[], Mouse::default(), down)
         };
         let start_held = |nav: &mut Nav| {
             let session = running(nav).expect("a Game runs");

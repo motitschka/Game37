@@ -10,6 +10,12 @@ pub const RETRO_DEVICE_TYPE_SHIFT: c_uint = 8;
 pub const RETRO_DEVICE_MASK: c_uint = (1 << RETRO_DEVICE_TYPE_SHIFT) - 1;
 pub const RETRO_DEVICE_JOYPAD: c_uint = 1;
 pub const RETRO_DEVICE_ID_JOYPAD_MASK: c_uint = 256;
+pub const RETRO_DEVICE_ANALOG: c_uint = 5;
+pub const RETRO_DEVICE_POINTER: c_uint = 6;
+pub const RETRO_DEVICE_ID_POINTER_X: c_uint = 0;
+pub const RETRO_DEVICE_ID_POINTER_Y: c_uint = 1;
+pub const RETRO_DEVICE_ID_POINTER_PRESSED: c_uint = 2;
+pub const RETRO_DEVICE_ID_POINTER_IS_OFFSCREEN: c_uint = 15;
 
 pub const RETRO_MEMORY_SAVE_RAM: c_uint = 0;
 

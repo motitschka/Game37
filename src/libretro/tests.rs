@@ -204,3 +204,79 @@ fn libretro_only_one_core_at_a_time() {
         assert!(frame.width > 0, "{}: the reloaded Core shows nothing", case.game);
     }
 }
+
+/// melonDS DS with its hybrid layout (FR-DS-1) reads the pointer: a press at the centre of the
+/// small touch screen reaches it as `RETRO_DEVICE_POINTER` coordinates (FR-DS-3), and R3 swaps
+/// the screens (FR-DS-2). Run with `cargo test -- --ignored ds`.
+#[test]
+#[ignore = "needs /home/matei/Game37/.testdata"]
+fn ds_touch_reaches_melonds_ds_and_r3_swaps_the_screens() {
+    use super::{Button, Pointer, ffi};
+    use crate::cores::MELONDS_DS;
+
+    let _serial = serial();
+    let dirs = TempDir::new().unwrap();
+    let data = Path::new(TESTDATA);
+    let mut options = MELONDS_DS.options.to_vec();
+    // hbmenu crashes on melonDS DS's JIT ("undefined THUMB9 instruction") and its SD card
+    // driver doesn't fit; without both, it boots.
+    options.push(("melonds_homebrew_sdcard", "disabled"));
+    options.push(("melonds_jit_enable", "disabled"));
+    let mut core = Core::load(
+        &data.join("data/cores").join(MELONDS_DS.file),
+        &data.join("games/nds/Homebrew Menu (World).nds"),
+        CoreDirs {
+            system: dirs.path().join("system"),
+            save: dirs.path().join("saves"),
+        },
+        &options,
+        None,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let (top, _) = run(&mut core, 120);
+    eprintln!("frame {}x{}, {:?}", top.width, top.height, core.av_info());
+    assert!(distinct_colours(&top) > 2, "hbmenu shows something");
+    // Hybrid, scale 2: the large screen (512×384) on the left, the small one (256×192) below on
+    // its right.
+    assert_eq!(
+        (top.width, top.height),
+        (768, 384),
+        "one large and one small screen"
+    );
+
+    let centre = Pointer {
+        x: (640.0 / 768.0 * 2.0 * 32767.0 - 32767.0_f64).round() as i16,
+        y: (288.0 / 384.0 * 2.0 * 32767.0 - 32767.0_f64).round() as i16,
+        pressed: true,
+    };
+    let mut input = InputState::default();
+    input.set_pointer(Some(centre));
+    for _ in 0..10 {
+        core.run_frame(&input);
+    }
+    let queries = core.input_queries();
+    let asked = |id| queries.get(&(0, ffi::RETRO_DEVICE_POINTER, 0, id)).copied();
+    let mut devices: Vec<_> = queries.keys().map(|k| k.1).collect();
+    devices.sort();
+    devices.dedup();
+    eprintln!("devices queried: {devices:?}");
+    assert_eq!(asked(ffi::RETRO_DEVICE_ID_POINTER_X), Some(centre.x));
+    assert_eq!(asked(ffi::RETRO_DEVICE_ID_POINTER_Y), Some(centre.y));
+    assert_eq!(asked(ffi::RETRO_DEVICE_ID_POINTER_PRESSED), Some(1));
+
+    // R3 for a few frames, then released: the other hybrid layout.
+    let before = hash(core.frame());
+    let mut r3 = InputState::default();
+    r3.set(0, Button::R3, true);
+    for _ in 0..5 {
+        core.run_frame(&r3);
+    }
+    let (swapped, _) = run(&mut core, 30);
+    eprintln!(
+        "after R3: {}x{}, {:?}",
+        swapped.width,
+        swapped.height,
+        core.av_info()
+    );
+    assert_ne!(hash(&swapped), before, "R3 changed the picture");
+}
