@@ -73,8 +73,8 @@ impl Kind {
         }
     }
 
-    /// The box decoded Artwork is scaled down to fit: covers as large as the Details Page shows
-    /// them, heroes as wide as the screen.
+    /// The box decoded Artwork is drawn to fill: covers as large as the Details Page shows them,
+    /// heroes the whole screen.
     fn max_size(self) -> (u32, u32) {
         match self {
             Kind::Cover => (400, 600),
@@ -667,7 +667,9 @@ fn encode(text: &str) -> String {
     out
 }
 
-/// Decodes a PNG or JPEG file and scales it down to fit `kind`'s box.
+/// Decodes a PNG or JPEG file and scales it down to the smallest size that still covers `kind`'s
+/// box, since drawing fills the box and crops the rest. Shrinking it to fit inside the box instead
+/// would make a wide hero blurry once it is enlarged again to fill the screen's height.
 fn decode(bytes: &[u8], kind: Kind) -> Option<Picture> {
     let mut reader = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
@@ -678,8 +680,12 @@ fn decode(bytes: &[u8], kind: Kind) -> Option<Picture> {
     reader.limits(limits);
     let image = reader.decode().ok()?;
     let (w, h) = kind.max_size();
-    let image = if image.width() > w || image.height() > h {
-        image.resize(w, h, image::imageops::FilterType::Triangle)
+    let (iw, ih) = (image.width(), image.height());
+    let scale = (w as f64 / iw as f64).max(h as f64 / ih as f64);
+    let image = if scale < 1.0 {
+        let nw = ((iw as f64 * scale).round() as u32).max(w);
+        let nh = ((ih as f64 * scale).round() as u32).max(h);
+        image.resize_exact(nw, nh, image::imageops::FilterType::Triangle)
     } else {
         image
     };
@@ -1305,6 +1311,20 @@ mod tests {
         size(&wait(&artwork, &library, &games[0], Kind::Cover));
         size(&wait(&artwork, &library, &games[0], Kind::Hero));
         size(&wait(&artwork, &library, &games[1], Kind::Cover));
+    }
+
+    #[test]
+    fn artwork_is_scaled_down_only_as_far_as_it_still_fills_its_box() {
+        let size = |w, h, kind| {
+            let picture = decode(&png(w, h), kind).unwrap();
+            (picture.width, picture.height)
+        };
+        // A 3840×1240 hero keeps the full 1080 lines it needs to fill the screen's height.
+        assert_eq!(size(3840, 1240, Kind::Hero), (3345, 1080));
+        assert_eq!(size(1920, 620, Kind::Hero), (1920, 620));
+        assert_eq!(size(600, 900, Kind::Cover), (400, 600));
+        // A wide cover keeps the height it needs to fill the 2:3 cover.
+        assert_eq!(size(1200, 900, Kind::Cover), (800, 600));
     }
 
     #[test]
