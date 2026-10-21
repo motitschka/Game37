@@ -252,10 +252,12 @@ impl Home {
     }
 
     /// Y or a right-click on a Game opens its Options Menu (FR-DET-3).
-    fn options(&self) -> Transition {
+    fn options(&self, ctx: &Ctx) -> Transition {
         let row = &self.shelves[self.focus.shelf];
         match item_at(row.games.len(), self.focus.col()) {
-            Item::Game(i) => Transition::Push(Box::new(OptionsMenu::new(row.games[i].clone()))),
+            Item::Game(i) => {
+                Transition::Push(Box::new(OptionsMenu::new(row.games[i].clone(), &ctx.games_root)))
+            }
             _ => Transition::None,
         }
     }
@@ -413,7 +415,7 @@ impl Screen for Home {
         self.reload_if_changed(ctx);
         match input {
             Input::Action(Action::Confirm) => return self.confirm(ctx),
-            Input::Action(Action::Options) => return self.options(),
+            Input::Action(Action::Options) => return self.options(ctx),
             Input::Action(dir) if dir.is_direction() => {
                 if self.focus.step(dir, self.counts()) {
                     self.reveal(self.focus.shelf);
@@ -442,7 +444,7 @@ impl Screen for Home {
                 if let Some(Target::Item(s, c)) = hit(&self.hits, x, y) {
                     self.focus.shelf = s;
                     self.focus.cols[s] = c.min(self.counts()[s].saturating_sub(1));
-                    return self.options();
+                    return self.options(ctx);
                 }
             }
             Input::Pointer(Pointer::Wheel { dy }) => {

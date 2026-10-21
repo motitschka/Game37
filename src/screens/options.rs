@@ -1,9 +1,16 @@
 //! The Options Menu for one Game (FR-DET-3, FR-DET-4), after `screen_options` in
 //! `design/generate_mockups.py`: a panel on the right over the dimmed screen. With five Favorites
-//! already, adding a sixth shows a picker of them in the same panel (FR-HOME-6, US-6).
+//! already, adding a sixth shows a picker of them in the same panel (FR-HOME-6, US-6). Loading a
+//! Save State shows a picker of the Game's slots there too, each with its screenshot and time
+//! (FR-EMB-5), and starts the Game from the one chosen.
 
-use crate::ctx::{self, Ctx};
+use std::path::Path;
+
+use crate::ctx::{self, Ctx, Play};
+use crate::launch;
 use crate::library::db::{GameRow, Shelf};
+use crate::session::sdl;
+use crate::session::states::{Rgb, SLOTS, StatePaths};
 use crate::systems::{self, Kind};
 use crate::ui::cover::{self, ellipsize, playtime_label};
 use crate::ui::gfx::{Align, Gfx, TextStyle};
@@ -22,14 +29,21 @@ const ITEM_Y: f32 = 252.0;
 const ITEM_PITCH: f32 = 86.0;
 const PICK_Y: f32 = 290.0;
 const PICK_PITCH: f32 = 112.0;
+const SLOT_Y: f32 = 290.0;
+const SLOT_PITCH: f32 = 176.0;
+const SLOT_ROW_H: f32 = 160.0;
+/// A slot's screenshot, 4:3 like the Pause Menu's.
+const THUMB_W: f32 = 176.0;
+const THUMB_H: f32 = 132.0;
+const THUMB_KEYS: [&str; SLOTS] = ["options-slot-1", "options-slot-2", "options-slot-3"];
 
 /// One action in the menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Item {
     /// Add to or remove from Favorites.
     Favorite,
-    /// Load one of the Game's Save States, with a slot picker; Embedded Systems only. Shown but
-    /// not selectable until it is built.
+    /// Load one of the Game's Save States, with a slot picker; Embedded Systems only, and only
+    /// selectable when a slot is filled.
     LoadSaveState,
     /// Choose different Artwork. Shown but not selectable until it is built.
     ChooseArtwork,
@@ -40,11 +54,6 @@ pub enum Item {
 }
 
 impl Item {
-    /// Whether the action is built yet; the others are greyed and skipped by focus.
-    pub fn enabled(self) -> bool {
-        !matches!(self, Item::LoadSaveState | Item::ChooseArtwork | Item::Rename)
-    }
-
     fn label(self, favorite: bool) -> &'static str {
         match self {
             Item::Favorite if favorite => "Remove from favorites",
@@ -68,6 +77,14 @@ pub enum View {
     List,
     /// Five Favorites exist: choose which one the Game replaces.
     Replace,
+    /// Choose the Save State slot to start the Game from.
+    Load,
+}
+
+/// A filled Save State slot as the slot picker shows it.
+struct Slot {
+    when: String,
+    has_thumb: bool,
 }
 
 pub struct OptionsMenu {
@@ -79,13 +96,19 @@ pub struct OptionsMenu {
     item: usize,
     /// The current Favorites, newest first, while the replace picker is open.
     favorites: Vec<GameRow>,
+    /// The Game's Save State slots, slot 1 first, `None` when empty; none for an External System.
+    slots: Vec<Option<Slot>>,
+    /// Slot screenshots to hand to `Gfx` on the first draw: `None` forgets an old one.
+    uploads: Vec<(usize, Option<Rgb>)>,
+    /// The focused entry of the replace or slot picker.
     pick: usize,
     item_hits: Vec<(Rect, usize)>,
     pick_hits: Vec<(Rect, usize)>,
 }
 
 impl OptionsMenu {
-    pub fn new(game: GameRow) -> OptionsMenu {
+    /// The menu for `game`, its Save State slots read from under `games_root`.
+    pub fn new(game: GameRow, games_root: &Path) -> OptionsMenu {
         let system = systems::by_id(&game.system);
         let short = system.map_or("?", |s| s.short);
         let meta = match game.playtime_secs {
@@ -104,6 +127,29 @@ impl OptionsMenu {
         .into_iter()
         .filter(|&i| i != Item::LoadSaveState || embedded)
         .collect();
+        let states = StatePaths::new(games_root, &game.system, Path::new(&game.rel_path));
+        let infos = if embedded {
+            sdl::slot_infos(&states)
+        } else {
+            Vec::new()
+        };
+        let (slots, uploads) = infos
+            .into_iter()
+            .enumerate()
+            .map(|(i, info)| match info {
+                Some(info) => {
+                    let has_thumb = info.thumb.is_some();
+                    (
+                        Some(Slot {
+                            when: info.when,
+                            has_thumb,
+                        }),
+                        (i, info.thumb),
+                    )
+                }
+                None => (None, (i, None)),
+            })
+            .unzip();
         OptionsMenu {
             game,
             meta,
@@ -111,10 +157,31 @@ impl OptionsMenu {
             view: View::List,
             item: 0,
             favorites: Vec::new(),
+            slots,
+            uploads,
             pick: 0,
             item_hits: Vec::new(),
             pick_hits: Vec::new(),
         }
+    }
+
+    /// Whether `item` can be chosen; the others are greyed and skipped by focus.
+    pub fn enabled(&self, item: Item) -> bool {
+        match item {
+            Item::LoadSaveState => self.filled() > 0,
+            Item::ChooseArtwork | Item::Rename => false,
+            Item::Favorite | Item::Hide | Item::ShowFile => true,
+        }
+    }
+
+    /// How many Save State slots are filled.
+    fn filled(&self) -> usize {
+        self.slots.iter().filter(|s| s.is_some()).count()
+    }
+
+    /// The focused entry of the replace or slot picker.
+    pub fn picked(&self) -> usize {
+        self.pick
     }
 
     pub fn items(&self) -> &[Item] {
@@ -129,11 +196,11 @@ impl OptionsMenu {
         self.items[self.item]
     }
 
-    /// Moves focus one step `dir` (-1 or 1), skipping actions that aren't built yet.
+    /// Moves focus one step `dir` (-1 or 1), skipping actions that can't be chosen.
     fn move_item(&mut self, dir: isize) {
         let mut i = self.item as isize + dir;
         while (0..self.items.len() as isize).contains(&i) {
-            if self.items[i as usize].enabled() {
+            if self.enabled(self.items[i as usize]) {
                 self.item = i as usize;
                 return;
             }
@@ -141,9 +208,61 @@ impl OptionsMenu {
         }
     }
 
+    /// Whether the open picker's `i`th entry can be chosen: any Favorite, a filled slot.
+    fn pickable(&self, i: usize) -> bool {
+        match self.view {
+            View::List => false,
+            View::Replace => i < self.favorites.len(),
+            View::Load => self.slots.get(i).is_some_and(Option::is_some),
+        }
+    }
+
+    /// Moves picker focus one step `dir` (-1 or 1), skipping entries that can't be chosen.
+    fn move_pick(&mut self, dir: isize) {
+        let len = match self.view {
+            View::List => 0,
+            View::Replace => self.favorites.len(),
+            View::Load => self.slots.len(),
+        };
+        let mut i = self.pick as isize + dir;
+        while (0..len as isize).contains(&i) {
+            if self.pickable(i as usize) {
+                self.pick = i as usize;
+                return;
+            }
+            i += dir;
+        }
+    }
+
+    /// Chooses the open picker's `i`th entry, if it can be chosen.
+    fn pick_at(&mut self, i: usize, ctx: &mut Ctx) -> Transition {
+        if !self.pickable(i) {
+            return Transition::None;
+        }
+        match self.view {
+            View::Replace => self.replace(i, ctx),
+            View::Load => self.load(i, ctx),
+            View::List => Transition::None,
+        }
+    }
+
+    /// Starts the Game from the Save State in the `i`th slot (FR-DET-4). The menu closes; a Core
+    /// download or a missing BIOS message takes its place.
+    fn load(&mut self, i: usize, ctx: &mut Ctx) -> Transition {
+        let play = Play {
+            game: self.game.clone(),
+            slot: Some(i + 1),
+        };
+        match launch::confirm_play(play, ctx) {
+            Transition::None => Transition::Pop,
+            Transition::Push(screen) => Transition::Replace(screen),
+            other => other,
+        }
+    }
+
     fn choose(&mut self, i: usize, ctx: &mut Ctx) -> Transition {
         let item = self.items[i];
-        if !item.enabled() {
+        if !self.enabled(item) {
             return Transition::None;
         }
         self.item = i;
@@ -169,7 +288,12 @@ impl OptionsMenu {
                 ctx.show_file_request = Some(ctx.games_root.join(&self.game.rel_path));
                 return Transition::Pop;
             }
-            Item::LoadSaveState | Item::ChooseArtwork | Item::Rename => return Transition::None,
+            Item::LoadSaveState => {
+                self.view = View::Load;
+                self.pick = (0..SLOTS).find(|&n| self.pickable(n)).unwrap_or(0);
+                return Transition::None;
+            }
+            Item::ChooseArtwork | Item::Rename => return Transition::None,
         };
         finish(done, ctx)
     }
@@ -202,8 +326,9 @@ impl OptionsMenu {
                 gfx.fill_round_rect(r, 14.0, SURFACE2);
                 gfx.fill_round_rect(Rect::new(r.x, y + 16.0, 5.0, 40.0), 2.0, ACCENT);
             }
+            let enabled = self.enabled(item);
             let (ink, icon_ink) = match item {
-                _ if !item.enabled() => (DIM, DIM),
+                _ if !enabled => (DIM, DIM),
                 Item::Favorite if self.game.favorite => (TEXT, STAR),
                 _ => (TEXT, MUTED),
             };
@@ -217,11 +342,58 @@ impl OptionsMenu {
                 TextStyle::new(22, weight, ink),
                 Align::Left,
             );
+            let side = if enabled { MUTED } else { DIM };
+            if item == Item::LoadSaveState {
+                let count = format!("{} of {SLOTS}", self.filled());
+                let style = TextStyle::new(18, Weight::Medium, side);
+                gfx.text(W - 76.0, y + 45.0, &count, style, Align::Right);
+            }
             if item.opens_view() {
-                let arrow = TextStyle::new(26, Weight::SemiBold, if item.enabled() { MUTED } else { DIM });
+                let arrow = TextStyle::new(26, Weight::SemiBold, side);
                 gfx.text(W - 48.0, y + 45.0, "›", arrow, Align::Right);
             }
             self.item_hits.push((r, i));
+        }
+    }
+
+    /// The slot picker, after the Pause Menu's Load view: each slot's screenshot, name and time,
+    /// the empty ones faded and never focused.
+    fn draw_load(&mut self, gfx: &mut Gfx<'_>) {
+        self.pick_hits.clear();
+        let heading = TextStyle::new(24, Weight::ExtraBold, TEXT);
+        gfx.text(PANEL_X + 48.0, 238.0, "Load save state", heading, Align::Left);
+        let sub = TextStyle::new(18, Weight::Medium, MUTED);
+        gfx.text(PANEL_X + 48.0, 268.0, "Choose a slot", sub, Align::Left);
+        for (i, slot) in self.slots.iter().enumerate() {
+            let y = SLOT_Y + i as f32 * SLOT_PITCH;
+            let r = Rect::new(PANEL_X + 24.0, y, PANEL_W - 48.0, SLOT_ROW_H);
+            let fade = if slot.is_some() { 1.0 } else { 0.4 };
+            if i == self.pick && slot.is_some() {
+                gfx.fill_round_rect(r, 14.0, SURFACE2);
+                let bar_y = y + (SLOT_ROW_H - 40.0) / 2.0;
+                gfx.fill_round_rect(Rect::new(r.x, bar_y, 5.0, 40.0), 2.0, ACCENT);
+            }
+            let thumb = Rect::new(PANEL_X + 48.0, y + 14.0, THUMB_W, THUMB_H);
+            match slot {
+                Some(s) if s.has_thumb && gfx.draw_image(THUMB_KEYS[i], thumb) => {
+                    gfx.stroke_round_rect(thumb, 10.0, 2.0, LINE);
+                }
+                Some(_) => {
+                    gfx.fill_round_rect(thumb, 10.0, SURFACE2);
+                    gfx.stroke_round_rect(thumb, 10.0, 2.0, LINE);
+                }
+                None => {
+                    gfx.fill_round_rect(thumb, 10.0, SURFACE2.alpha(fade));
+                    gfx.stroke_round_rect_dashed(thumb, 10.0, 2.0, 10.0, 8.0, LINE.alpha(fade));
+                }
+            }
+            let x = thumb.x + THUMB_W + 24.0;
+            let name = TextStyle::new(22, Weight::Bold, TEXT.alpha(fade));
+            gfx.text(x, y + 68.0, &format!("Slot {}", i + 1), name, Align::Left);
+            let when = slot.as_ref().map_or("Empty", |s| s.when.as_str());
+            let style = TextStyle::new(18, Weight::Medium, MUTED.alpha(fade));
+            gfx.text(x, y + 100.0, when, style, Align::Left);
+            self.pick_hits.push((r, i));
         }
     }
 
@@ -311,20 +483,19 @@ impl Screen for OptionsMenu {
 
     fn handle(&mut self, input: Input, ctx: &mut Ctx) -> Transition {
         let list = self.view == View::List;
-        let last_pick = self.favorites.len().saturating_sub(1);
         match input {
             Input::Action(Action::Up) if list => self.move_item(-1),
             Input::Action(Action::Down) if list => self.move_item(1),
             Input::Action(Action::Confirm) if list => return self.choose(self.item, ctx),
             Input::Action(Action::Back) | Input::Pointer(Pointer::Back) if list => return Transition::Pop,
-            Input::Action(Action::Up) => self.pick = self.pick.saturating_sub(1),
-            Input::Action(Action::Down) => self.pick = (self.pick + 1).min(last_pick),
-            Input::Action(Action::Confirm) => return self.replace(self.pick, ctx),
+            Input::Action(Action::Up) => self.move_pick(-1),
+            Input::Action(Action::Down) => self.move_pick(1),
+            Input::Action(Action::Confirm) => return self.pick_at(self.pick, ctx),
             Input::Action(Action::Back) | Input::Pointer(Pointer::Back) => self.back_to_list(),
             Input::Pointer(Pointer::Move { x, y }) => {
-                if let Some(i) = hit(&self.item_hits, x, y).filter(|&i| list && self.items[i].enabled()) {
+                if let Some(i) = hit(&self.item_hits, x, y).filter(|&i| list && self.enabled(self.items[i])) {
                     self.item = i;
-                } else if let Some(i) = hit(&self.pick_hits, x, y).filter(|_| !list) {
+                } else if let Some(i) = hit(&self.pick_hits, x, y).filter(|&i| self.pickable(i)) {
                     self.pick = i;
                 }
             }
@@ -335,7 +506,7 @@ impl Screen for OptionsMenu {
                 if let Some(i) = hit(&self.item_hits, x, y).filter(|_| list) {
                     return self.choose(i, ctx);
                 } else if let Some(i) = hit(&self.pick_hits, x, y).filter(|_| !list) {
-                    return self.replace(i, ctx);
+                    return self.pick_at(i, ctx);
                 }
             }
             _ => {}
@@ -344,6 +515,9 @@ impl Screen for OptionsMenu {
     }
 
     fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
+        for (i, thumb) in self.uploads.drain(..) {
+            gfx.set_image(THUMB_KEYS[i], thumb.as_ref());
+        }
         gfx.fill_rect(Rect::new(0.0, 0.0, W, H), Colour::hex(0x000000).alpha(0.62));
         gfx.fill_rect(Rect::new(PANEL_X, 0.0, PANEL_W, H), SURFACE);
         gfx.fill_rect(Rect::new(PANEL_X, 0.0, 1.0, H), LINE);
@@ -369,6 +543,10 @@ impl Screen for OptionsMenu {
                 self.item_hits.clear();
                 self.draw_replace(gfx, ctx);
             }
+            View::Load => {
+                self.item_hits.clear();
+                self.draw_load(gfx);
+            }
         }
     }
 
@@ -380,6 +558,10 @@ impl Screen for OptionsMenu {
             ],
             View::Replace => vec![
                 Hint::new(&[Action::Confirm], "Replace"),
+                Hint::new(&[Action::Back], "Back"),
+            ],
+            View::Load => vec![
+                Hint::new(&[Action::Confirm], "Load"),
                 Hint::new(&[Action::Back], "Back"),
             ],
         }
@@ -432,7 +614,7 @@ mod tests {
     #[test]
     fn favorite_toggles_and_the_menu_closes() {
         let (_dir, mut ctx, games) = world(1);
-        let mut menu = OptionsMenu::new(games[0].clone());
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
         assert_eq!(menu.focused(), Item::Favorite, "focus starts on Favorite");
         assert_eq!(Item::Favorite.label(menu.game.favorite), "Add to favorites");
         let revision = ctx.revision;
@@ -443,7 +625,7 @@ mod tests {
         assert!(fresh(&ctx, &games[0]).favorite);
         assert!(ctx.revision > revision, "screens reload");
 
-        let mut menu = OptionsMenu::new(fresh(&ctx, &games[0]));
+        let mut menu = OptionsMenu::new(fresh(&ctx, &games[0]), &ctx.games_root);
         assert_eq!(Item::Favorite.label(menu.game.favorite), "Remove from favorites");
         assert!(matches!(
             act(&mut menu, &mut ctx, Action::Confirm),
@@ -458,7 +640,7 @@ mod tests {
         for (i, game) in games[..5].iter().enumerate() {
             ctx.library.set_favorite(game.id, true, i as i64).unwrap();
         }
-        let menu = OptionsMenu::new(games[5].clone());
+        let menu = OptionsMenu::new(games[5].clone(), &ctx.games_root);
         (dir, ctx, games, menu)
     }
 
@@ -525,7 +707,7 @@ mod tests {
     #[test]
     fn the_actions_not_built_yet_are_listed_but_not_selectable() {
         let (_dir, mut ctx, games) = world(1);
-        let mut menu = OptionsMenu::new(games[0].clone());
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
         use Item::*;
         assert_eq!(
             menu.items(),
@@ -559,14 +741,178 @@ mod tests {
     fn load_save_state_is_listed_for_embedded_systems_only() {
         let mut game = world(1).2.remove(0);
         game.system = "gc".into();
-        assert!(!OptionsMenu::new(game).items().contains(&Item::LoadSaveState));
+        assert!(
+            !OptionsMenu::new(game, Path::new("/nonexistent"))
+                .items()
+                .contains(&Item::LoadSaveState)
+        );
+    }
+
+    /// Fills Save State slots `slots` of `game`, each with a tiny screenshot.
+    fn fill_slots(ctx: &Ctx, game: &GameRow, slots: &[usize]) {
+        let states = StatePaths::new(&ctx.games_root, &game.system, Path::new(&game.rel_path));
+        let thumb = Rgb {
+            width: 1,
+            height: 1,
+            data: vec![0, 128, 255],
+        };
+        for &n in slots {
+            let png = crate::session::states::encode_png(&thumb);
+            crate::session::states::write_slot(&states.slot(n), b"state", &states.thumb(n), png).unwrap();
+        }
+    }
+
+    fn click(menu: &mut OptionsMenu, ctx: &mut Ctx, (x, y): (f32, f32)) -> Transition {
+        menu.handle(Input::Pointer(Pointer::Click { x, y }), ctx)
+    }
+
+    #[test]
+    fn load_save_state_cant_be_chosen_without_a_filled_slot() {
+        let (_dir, mut ctx, games) = world(1);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        assert!(!menu.enabled(Item::LoadSaveState));
+        menu.item_hits = vec![(Rect::new(PANEL_X, 338.0, 100.0, 72.0), 1)];
+        assert!(matches!(
+            click(&mut menu, &mut ctx, (PANEL_X + 1.0, 340.0)),
+            Transition::None
+        ));
+        assert_eq!(menu.view(), View::List, "no slot picker opens");
+
+        fill_slots(&ctx, &games[0], &[3]);
+        let menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        assert!(menu.enabled(Item::LoadSaveState), "one filled slot is enough");
+    }
+
+    #[test]
+    fn the_slot_picker_lists_the_filled_slots_and_skips_the_empty_one() {
+        let (_dir, mut ctx, games) = world(1);
+        fill_slots(&ctx, &games[0], &[1, 3]);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        act(&mut menu, &mut ctx, Action::Down);
+        assert_eq!(menu.focused(), Item::LoadSaveState);
+        assert!(matches!(
+            act(&mut menu, &mut ctx, Action::Confirm),
+            Transition::None
+        ));
+        assert_eq!((menu.view(), menu.picked()), (View::Load, 0));
+        assert_eq!(menu.hints()[0], Hint::new(&[Action::Confirm], "Load"));
+        let shown: Vec<_> = menu
+            .slots
+            .iter()
+            .map(|s| s.as_ref().map(|s| s.has_thumb))
+            .collect();
+        assert_eq!(
+            shown,
+            [Some(true), None, Some(true)],
+            "slots 1 and 3, with screenshots"
+        );
+        assert!(menu.slots[0].as_ref().unwrap().when.starts_with("Today, "));
+        let uploads: Vec<_> = menu.uploads.iter().map(|(i, t)| (*i, t.is_some())).collect();
+        assert_eq!(uploads, [(0, true), (1, false), (2, true)]);
+
+        act(&mut menu, &mut ctx, Action::Down);
+        assert_eq!(menu.picked(), 2, "the empty slot 2 is skipped");
+        act(&mut menu, &mut ctx, Action::Down);
+        assert_eq!(menu.picked(), 2, "and focus stops at the end");
+        act(&mut menu, &mut ctx, Action::Up);
+        assert_eq!(menu.picked(), 0);
+
+        // The empty slot takes neither the pointer's focus nor a click.
+        menu.pick_hits = vec![(Rect::new(PANEL_X, 466.0, 100.0, 160.0), 1)];
+        let at = (PANEL_X + 1.0, 470.0);
+        menu.handle(Input::Pointer(Pointer::Move { x: at.0, y: at.1 }), &mut ctx);
+        assert_eq!(menu.picked(), 0);
+        assert!(matches!(click(&mut menu, &mut ctx, at), Transition::None));
+        assert_eq!(menu.view(), View::Load);
+        assert!(ctx.play.is_none(), "nothing to load");
+    }
+
+    /// A Ctx whose snes Core is installed, so playing an snes Game asks `app.rs` to start it.
+    fn install_snes_core(ctx: &mut Ctx, dir: &Path) {
+        ctx.data_dir = dir.join("data");
+        let core = crate::cores::for_system(systems::by_id("snes").unwrap()).unwrap();
+        let path = crate::cores::installed_path(&ctx.data_dir, core);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"").unwrap();
+    }
+
+    #[test]
+    fn choosing_slot_2_asks_to_play_the_game_from_slot_2_and_closes_the_menu() {
+        let (dir, mut ctx, games) = world(1);
+        install_snes_core(&mut ctx, dir.path());
+        fill_slots(&ctx, &games[0], &[2]);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        act(&mut menu, &mut ctx, Action::Down);
+        act(&mut menu, &mut ctx, Action::Confirm);
+        assert_eq!(menu.picked(), 1, "focus starts on the first filled slot");
+        assert!(matches!(
+            act(&mut menu, &mut ctx, Action::Confirm),
+            Transition::Pop
+        ));
+        let want = Play {
+            game: games[0].clone(),
+            slot: Some(2),
+        };
+        assert_eq!(ctx.play.take(), Some(want.clone()));
+
+        // A click on the slot does the same.
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        act(&mut menu, &mut ctx, Action::Down);
+        act(&mut menu, &mut ctx, Action::Confirm);
+        menu.pick_hits = vec![(Rect::new(PANEL_X, 466.0, 100.0, 160.0), 1)];
+        assert!(matches!(
+            click(&mut menu, &mut ctx, (PANEL_X + 1.0, 470.0)),
+            Transition::Pop
+        ));
+        assert_eq!(ctx.play.take(), Some(want));
+    }
+
+    #[test]
+    fn choosing_a_slot_before_the_core_is_downloaded_puts_the_download_in_the_menus_place() {
+        let (dir, mut ctx, games) = world(1);
+        ctx.data_dir = dir.path().join("data");
+        ctx.start_download = Box::new(crate::cores::testing::spawn_failing);
+        fill_slots(&ctx, &games[0], &[1]);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        act(&mut menu, &mut ctx, Action::Down);
+        act(&mut menu, &mut ctx, Action::Confirm);
+        assert!(matches!(
+            act(&mut menu, &mut ctx, Action::Confirm),
+            Transition::Replace(_)
+        ));
+        assert!(ctx.play.is_none(), "the download plays it once done");
+    }
+
+    #[test]
+    fn back_from_the_slot_picker_returns_to_the_list_unchanged() {
+        let (dir, mut ctx, games) = world(1);
+        install_snes_core(&mut ctx, dir.path());
+        fill_slots(&ctx, &games[0], &[1, 2]);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        act(&mut menu, &mut ctx, Action::Down);
+        act(&mut menu, &mut ctx, Action::Confirm);
+        act(&mut menu, &mut ctx, Action::Down);
+        let revision = ctx.revision;
+        let outside = Input::Pointer(Pointer::Click { x: 10.0, y: 10.0 });
+        assert!(matches!(menu.handle(outside, &mut ctx), Transition::None));
+        assert_eq!(menu.view(), View::Load, "a click outside keeps the picker");
+        assert!(matches!(act(&mut menu, &mut ctx, Action::Back), Transition::None));
+        assert_eq!(menu.view(), View::List, "Back returns to the list");
+        assert_eq!(menu.focused(), Item::LoadSaveState);
+        assert_eq!(menu.hints()[0], Hint::new(&[Action::Confirm], "Choose"));
+        assert!(matches!(
+            menu.handle(Input::Pointer(Pointer::Back), &mut ctx),
+            Transition::Pop
+        ));
+        assert!(ctx.play.is_none() && ctx.launch.is_none());
+        assert_eq!(ctx.revision, revision);
     }
 
     #[test]
     fn hide_hides_the_game_and_unfavorites_it() {
         let (_dir, mut ctx, games) = world(2);
         ctx.library.set_favorite(games[0].id, true, 0).unwrap();
-        let mut menu = OptionsMenu::new(fresh(&ctx, &games[0]));
+        let mut menu = OptionsMenu::new(fresh(&ctx, &games[0]), &ctx.games_root);
         act(&mut menu, &mut ctx, Action::Down);
         assert_eq!(menu.focused(), Item::Hide);
         let revision = ctx.revision;
@@ -584,7 +930,7 @@ mod tests {
     #[test]
     fn show_file_asks_for_the_games_file_and_a_folder_game_for_its_folder() {
         let (_dir, mut ctx, games) = world(1);
-        let mut menu = OptionsMenu::new(games[0].clone());
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
         act(&mut menu, &mut ctx, Action::Down);
         act(&mut menu, &mut ctx, Action::Down);
         assert_eq!(menu.focused(), Item::ShowFile);
@@ -603,7 +949,7 @@ mod tests {
         std::fs::create_dir_all(folder.join("PS3_GAME")).unwrap();
         ctx.scan_all(0).unwrap();
         let game = ctx.library.system_games("ps3", SortOrder::AZ).unwrap().remove(0);
-        let mut menu = OptionsMenu::new(game);
+        let mut menu = OptionsMenu::new(game, &ctx.games_root);
         let at = (PANEL_X + 10.0, 600.0);
         menu.item_hits = vec![(Rect::new(PANEL_X, 590.0, 100.0, 50.0), menu.items().len() - 1)];
         menu.handle(Input::Pointer(Pointer::Click { x: at.0, y: at.1 }), &mut ctx);
@@ -613,7 +959,7 @@ mod tests {
     #[test]
     fn back_or_a_click_outside_the_panel_closes_the_menu_and_changes_nothing() {
         let (_dir, mut ctx, games) = world(1);
-        let mut menu = OptionsMenu::new(games[0].clone());
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
         let revision = ctx.revision;
         assert!(matches!(act(&mut menu, &mut ctx, Action::Back), Transition::Pop));
         let outside = Input::Pointer(Pointer::Click {

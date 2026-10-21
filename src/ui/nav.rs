@@ -53,6 +53,8 @@ pub enum Transition {
     None,
     Push(Box<dyn Screen>),
     Pop,
+    /// Pops this screen and pushes another in its place.
+    Replace(Box<dyn Screen>),
     Quit,
 }
 
@@ -189,10 +191,19 @@ impl Nav {
 
     /// Hands `input` to the top screen and carries out its transition.
     fn apply(&mut self, input: Input, ctx: &mut Ctx) -> Flow {
-        match self.top().handle(input, ctx) {
+        let transition = self.top().handle(input, ctx);
+        self.follow(transition)
+    }
+
+    fn follow(&mut self, transition: Transition) -> Flow {
+        match transition {
             Transition::None => {}
             Transition::Push(screen) => self.push(screen),
             Transition::Pop => self.pop(),
+            Transition::Replace(screen) => {
+                self.pop();
+                self.push(screen);
+            }
             Transition::Quit => return Flow::Quit,
         }
         Flow::Continue
@@ -205,13 +216,8 @@ impl Nav {
     /// Polls the top screen's pending async work and carries out its transition. Call once a
     /// frame, for every frame, not only when there is input.
     pub fn tick(&mut self, ctx: &mut Ctx) -> Flow {
-        match self.top().tick(ctx) {
-            Transition::None => {}
-            Transition::Push(screen) => self.push(screen),
-            Transition::Pop => self.pop(),
-            Transition::Quit => return Flow::Quit,
-        }
-        Flow::Continue
+        let transition = self.top().tick(ctx);
+        self.follow(transition)
     }
 
     fn switch_to(&mut self, tab: usize, ctx: &Ctx) {
@@ -323,6 +329,25 @@ mod tests {
             log: Rc::default(),
             on_confirm: || Transition::None,
         }))
+    }
+
+    #[test]
+    fn replace_puts_the_new_screen_where_the_old_one_was() {
+        let log = Log::default();
+        let mut nav = Nav::single(probe("Home", &log, push_page));
+        let ctx = &mut Ctx::empty();
+        nav.handle(Input::Action(Action::Confirm), &Hits::default(), ctx);
+        nav.push(probe("Menu", &log, || {
+            Transition::Replace(Box::new(Probe {
+                title: "Download",
+                log: Rc::default(),
+                on_confirm: || Transition::None,
+            }))
+        }));
+        nav.handle(Input::Action(Action::Confirm), &Hits::default(), ctx);
+        assert_eq!((nav.depth(), nav.top().title()), (3, "Download"));
+        nav.pop();
+        assert_eq!(nav.top().title(), "Page", "the menu is gone");
     }
 
     fn tabs(log: &Log) -> Nav {
