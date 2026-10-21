@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use crate::artwork::Artwork;
 use crate::cores::{CoreInfo, Download};
 use crate::emulators::Emulators;
 use crate::library::db::{DbError, GameRow, Library};
@@ -41,6 +42,9 @@ pub struct Ctx {
     /// Starts downloading PPSSPP's assets zip: `Download::start_assets` in production; tests and
     /// screenshot mode's offline cases swap it so they never hit the network.
     pub start_assets_download: Box<dyn Fn(PathBuf) -> Download>,
+    /// Games' covers and heroes (FR-ART-1–4). Off (placeholder art only) until `app.rs` starts it
+    /// with the data dir and the API key; tests swap in one with a fake fetcher.
+    pub artwork: Artwork,
 }
 
 impl Ctx {
@@ -60,6 +64,7 @@ impl Ctx {
             play: None,
             start_download: Box::new(Download::start),
             start_assets_download: Box::new(Download::start_assets),
+            artwork: Artwork::off(),
         }
     }
 

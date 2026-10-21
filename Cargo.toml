@@ -7,12 +7,14 @@ publish = false
 
 [dependencies]
 dirs = "7"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 libloading = "0.9.0"
 notify = "8"
 png = "0.18.1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 sdl3 = { version = "0.20", features = ["ttf"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1.0.154"
 tempfile = "3"
 toml = "0.9"
 ureq = "3.4.2"
