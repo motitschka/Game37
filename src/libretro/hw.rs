@@ -457,6 +457,7 @@ fn flip_rows(data: &mut [u8], row: usize) {
 mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     use super::*;
 
@@ -599,6 +600,8 @@ mod tests {
     #[test]
     fn the_loader_is_cleared_after_a_failed_start() {
         let _serial = crate::libretro::tests::serial();
+        // Other tests in this process leave the loader set; start from a known state.
+        callbacks::set_loader(None);
         let mut state = callbacks::State::new(c"/sys".into(), c"/save".into());
         state.gl_host = Some(Box::new(OneFunction));
         callbacks::install(state);
@@ -636,6 +639,213 @@ mod tests {
         assert!(
             unsafe { callbacks::get_proc_address(c"glGenTextures".as_ptr()) }.is_none(),
             "the loader is cleared after the failed start"
+        );
+    }
+
+    static FBO_BUILD_COUNT: AtomicU32 = AtomicU32::new(0);
+    /// The 1-based FBO build (counted by calls to `glCheckFramebufferStatus`) that comes back
+    /// incomplete; 0 means every build succeeds.
+    static FBO_FAIL_AT: AtomicU32 = AtomicU32::new(0);
+    static CONTEXT_RESET_CALLS: AtomicU32 = AtomicU32::new(0);
+    static CONTEXT_DESTROY_CALLS: AtomicU32 = AtomicU32::new(0);
+
+    unsafe extern "C" fn stub_gen(n: GLsizei, out: *mut GLuint) {
+        if n > 0 && !out.is_null() {
+            // SAFETY: `Fbo::new` passes a pointer to one live `GLuint`.
+            unsafe { *out = 1 };
+        }
+    }
+    unsafe extern "C" fn stub_delete(_: GLsizei, _: *const GLuint) {}
+    unsafe extern "C" fn stub_bind(_: GLenum, _: GLuint) {}
+    unsafe extern "C" fn stub_tex_image_2d(
+        _: GLenum,
+        _: GLint,
+        _: GLint,
+        _: GLsizei,
+        _: GLsizei,
+        _: GLint,
+        _: GLenum,
+        _: GLenum,
+        _: *const c_void,
+    ) {
+    }
+    unsafe extern "C" fn stub_tex_parameter_i(_: GLenum, _: GLenum, _: GLint) {}
+    unsafe extern "C" fn stub_framebuffer_texture_2d(_: GLenum, _: GLenum, _: GLenum, _: GLuint, _: GLint) {}
+    unsafe extern "C" fn stub_check_framebuffer_status(_: GLenum) -> GLenum {
+        let build = FBO_BUILD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        if build == FBO_FAIL_AT.load(Ordering::SeqCst) {
+            0
+        } else {
+            GL_FRAMEBUFFER_COMPLETE
+        }
+    }
+    unsafe extern "C" fn stub_renderbuffer_storage(_: GLenum, _: GLenum, _: GLsizei, _: GLsizei) {}
+    unsafe extern "C" fn stub_framebuffer_renderbuffer(_: GLenum, _: GLenum, _: GLenum, _: GLuint) {}
+    unsafe extern "C" fn stub_clear_color(_: f32, _: f32, _: f32, _: f32) {}
+    unsafe extern "C" fn stub_clear(_: u32) {}
+    unsafe extern "C" fn stub_get_integer_v(_: GLenum, _: *mut GLint) {}
+    unsafe extern "C" fn stub_pixel_store_i(_: GLenum, _: GLint) {}
+    unsafe extern "C" fn stub_read_pixels(
+        _: GLint,
+        _: GLint,
+        _: GLsizei,
+        _: GLsizei,
+        _: GLenum,
+        _: GLenum,
+        _: *mut c_void,
+    ) {
+    }
+
+    unsafe extern "C" fn count_context_reset() {
+        CONTEXT_RESET_CALLS.fetch_add(1, Ordering::SeqCst);
+    }
+    unsafe extern "C" fn count_context_destroy() {
+        CONTEXT_DESTROY_CALLS.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Every OpenGL function `Fbo::new` calls, resolved to a stub: real enough to build and tear
+    /// an FBO down without a GPU, standing in for the platform's loader.
+    unsafe extern "C" fn fake_gl_loader(sym: *const std::ffi::c_char) -> ProcAddress {
+        // SAFETY: `sym` is NUL-terminated, the loader's contract.
+        let name = unsafe { CStr::from_ptr(sym) };
+        // SAFETY: each stub's signature below matches the OpenGL function of its name; `Gl::load`
+        // transmutes it back to that signature before ever calling it.
+        unsafe {
+            match name.to_bytes() {
+                b"glGenTextures" | b"glGenFramebuffers" | b"glGenRenderbuffers" => {
+                    Some(std::mem::transmute::<
+                        unsafe extern "C" fn(GLsizei, *mut GLuint),
+                        unsafe extern "C" fn(),
+                    >(stub_gen))
+                }
+                b"glDeleteTextures" | b"glDeleteFramebuffers" | b"glDeleteRenderbuffers" => {
+                    Some(std::mem::transmute::<
+                        unsafe extern "C" fn(GLsizei, *const GLuint),
+                        unsafe extern "C" fn(),
+                    >(stub_delete))
+                }
+                b"glBindTexture" | b"glBindFramebuffer" | b"glBindRenderbuffer" | b"glBindBuffer" => {
+                    Some(std::mem::transmute::<
+                        unsafe extern "C" fn(GLenum, GLuint),
+                        unsafe extern "C" fn(),
+                    >(stub_bind))
+                }
+                b"glTexImage2D" => Some(std::mem::transmute::<
+                    unsafe extern "C" fn(
+                        GLenum,
+                        GLint,
+                        GLint,
+                        GLsizei,
+                        GLsizei,
+                        GLint,
+                        GLenum,
+                        GLenum,
+                        *const c_void,
+                    ) -> (),
+                    unsafe extern "C" fn(),
+                >(stub_tex_image_2d)),
+                b"glTexParameteri" => Some(std::mem::transmute::<
+                    unsafe extern "C" fn(GLenum, GLenum, GLint),
+                    unsafe extern "C" fn(),
+                >(stub_tex_parameter_i)),
+                b"glFramebufferTexture2D" => Some(std::mem::transmute::<
+                    unsafe extern "C" fn(GLenum, GLenum, GLenum, GLuint, GLint),
+                    unsafe extern "C" fn(),
+                >(stub_framebuffer_texture_2d)),
+                b"glCheckFramebufferStatus" => Some(std::mem::transmute::<
+                    unsafe extern "C" fn(GLenum) -> GLenum,
+                    unsafe extern "C" fn(),
+                >(stub_check_framebuffer_status)),
+                b"glRenderbufferStorage" => Some(std::mem::transmute::<
+                    unsafe extern "C" fn(GLenum, GLenum, GLsizei, GLsizei),
+                    unsafe extern "C" fn(),
+                >(stub_renderbuffer_storage)),
+                b"glFramebufferRenderbuffer" => Some(std::mem::transmute::<
+                    unsafe extern "C" fn(GLenum, GLenum, GLenum, GLuint),
+                    unsafe extern "C" fn(),
+                >(stub_framebuffer_renderbuffer)),
+                b"glClearColor" => Some(std::mem::transmute::<
+                    unsafe extern "C" fn(f32, f32, f32, f32),
+                    unsafe extern "C" fn(),
+                >(stub_clear_color)),
+                b"glClear" => Some(std::mem::transmute::<
+                    unsafe extern "C" fn(u32),
+                    unsafe extern "C" fn(),
+                >(stub_clear)),
+                b"glGetIntegerv" => Some(std::mem::transmute::<
+                    unsafe extern "C" fn(GLenum, *mut GLint),
+                    unsafe extern "C" fn(),
+                >(stub_get_integer_v)),
+                b"glPixelStorei" => Some(std::mem::transmute::<
+                    unsafe extern "C" fn(GLenum, GLint),
+                    unsafe extern "C" fn(),
+                >(stub_pixel_store_i)),
+                b"glReadPixels" => Some(std::mem::transmute::<
+                    unsafe extern "C" fn(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, *mut c_void),
+                    unsafe extern "C" fn(),
+                >(stub_read_pixels)),
+                _ => None,
+            }
+        }
+    }
+
+    /// A host whose context resolves every OpenGL function `Fbo::new` needs, through
+    /// [`fake_gl_loader`].
+    struct FakeGlHost;
+
+    impl GlHost for FakeGlHost {
+        fn create_context(&mut self, _: GlRequest) -> Result<(), String> {
+            Ok(())
+        }
+        fn make_core_current(&mut self) {}
+        fn make_frontend_current(&mut self) {}
+        fn loader(&self) -> HwGetProcAddressFn {
+            fake_gl_loader
+        }
+        fn destroy_context(&mut self) {}
+    }
+
+    #[test]
+    fn resize_destroys_and_resets_the_context_once_even_when_the_new_fbo_fails() {
+        let _serial = crate::libretro::tests::serial();
+        FBO_BUILD_COUNT.store(0, Ordering::SeqCst);
+        FBO_FAIL_AT.store(2, Ordering::SeqCst);
+        CONTEXT_RESET_CALLS.store(0, Ordering::SeqCst);
+        CONTEXT_DESTROY_CALLS.store(0, Ordering::SeqCst);
+        let mut state = callbacks::State::new(c"/sys".into(), c"/save".into());
+        state.gl_host = Some(Box::new(FakeGlHost));
+        callbacks::install(state);
+        let request = HwRequest {
+            gl: GlRequest {
+                core_profile: true,
+                major: 3,
+                minor: 3,
+            },
+            depth: false,
+            stencil: false,
+            bottom_left_origin: true,
+            context_reset: Some(count_context_reset),
+            context_destroy: Some(count_context_destroy),
+        };
+        let mut hw = Hw::start(request, 480, 272, || panic!("the first FBO build succeeds"))
+            .expect("the first FBO build succeeds");
+        assert_eq!(
+            CONTEXT_RESET_CALLS.load(Ordering::SeqCst),
+            1,
+            "start resets the context once"
+        );
+        hw.resize((960, 544));
+        callbacks::remove();
+        callbacks::set_loader(None);
+        assert_eq!(
+            CONTEXT_DESTROY_CALLS.load(Ordering::SeqCst),
+            1,
+            "resize destroys the context exactly once"
+        );
+        assert_eq!(
+            CONTEXT_RESET_CALLS.load(Ordering::SeqCst),
+            2,
+            "resize resets the context exactly once, even though the new FBO failed"
         );
     }
 
