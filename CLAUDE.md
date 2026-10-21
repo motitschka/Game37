@@ -32,3 +32,6 @@ for every new screen.
 - Real-Core OpenGL tests check the picture as the renderer shows it, not only the read-back bytes.
 - Never commit game files, BIOS, keys or secrets (NFR-6). Test fixtures are empty or tiny dummy files
   created by the tests themselves.
+- The SteamGridDB API key never reaches a log, message or `Debug` output: keep it in `config::ApiKey`
+  (its `Debug` is redacted), and report a `secrets.toml` parse error with `e.message()`, never the
+  `toml` error itself, whose `Display` quotes the offending line.
