@@ -74,9 +74,11 @@ shot m4-ds "$root/cfg.toml" "nexttab,right,right,right,right,right,right,right,c
     --frames 300
 shot m4-psp "$root/cfg.toml" "nexttab,left,left,left,confirm,confirm,confirm" --frames 900
 shot m4-ps1-no-bios "$root/cfg.toml" "nexttab,left,left,left,left,left,confirm,confirm,confirm"
-# M5: the Details Page, the Options Menu, the Favorite replace picker (six Favorites asked for)
+# M5: the Details Page, the Options Menu, the Favorite replace picker (six Favorites asked for), the
+# Options Menu's slot picker for the SNES Game (m3-pause-saved filled its slot 1)
 shot m5-details "$root/cfg.toml" "nexttab,right,right,confirm,confirm"
 shot m5-options "$root/cfg.toml" "down,down,options"
 shot m5-favorite-replace "$root/cfg.toml" "down,down$(printf ',options,confirm,right%.0s' {1..5}),options,confirm,down"
+shot m5-load-state "$root/cfg.toml" "nexttab,right,right,confirm,confirm,options,down,confirm"
 
 echo "screenshots in $out"
