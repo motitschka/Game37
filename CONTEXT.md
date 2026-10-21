@@ -147,5 +147,5 @@ The screen for one Game's Categories, opened from the Details Page.
 _Avoid_: Splits menu, speedrun settings
 
 **Timer Window**:
-The separate window that shows the timer during a Run on an External System.
+The separate window that shows the timer during every Run, embedded or external.
 _Avoid_: Overlay, popup

@@ -1,3 +1,0 @@
-# External Runs show the timer in a separate window, not an overlay
-
-During a Run on an Embedded System, the timer is drawn in Game37's own window. External Systems run in another app's window, and GNOME on Wayland lets no app draw over another app's fullscreen window or keep its own window above it. So External Runs show the timer in a separate Timer Window instead, for a second screen or beside a windowed emulator. Split input there relies on controller events, which SDL can read while Game37 is in the background. Keyboard keys need the desktop's global shortcuts portal, so they may not work there.

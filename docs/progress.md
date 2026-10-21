@@ -177,5 +177,5 @@ before starting:
 M6 follows: Settings, search, window modes, First-run Setup, README.
 
 M7, the speedrun timer, comes after v1: own Splits per Game in LiveSplit `.lss` files, a timer beside
-embedded games, and a separate Timer Window for External Systems (FR-RUN-1–13, ADRs 0012 and 0013).
+embedded games, and a separate Timer Window for every Run (FR-RUN-1–14, ADRs 0012 and 0013).
 It needs M6's on-screen keyboard and Settings.

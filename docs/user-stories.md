@@ -240,9 +240,10 @@ Built in milestone 7, after v1.
 **US-41 Time a run.** As a speedrunner on a retro System, I want a timer beside the game that I split with one button.
 - Starting a Run boots the Game fresh. My first Split press starts the timer, and the last one finishes the Run.
 - Split, Undo, Skip and Reset work from the keyboard. With a controller, Split is one button and the rest are in the Pause Menu.
-- The timer keeps running while the Pause Menu is open, and I can hide it.
+- The timer keeps running while the Pause Menu is open, and I can hide it in the game.
+- The separate Timer Window opens too, so I can keep the timer on a second screen.
 - My normal In-game Saves are untouched by a Run.
-- *Covers FR-RUN-4, FR-RUN-5, FR-RUN-9, FR-RUN-10, FR-RUN-11*
+- *Covers FR-RUN-4, FR-RUN-5, FR-RUN-9, FR-RUN-10, FR-RUN-11, FR-RUN-12*
 
 **US-42 Know where I stand.** As a speedrunner, I want to see during a Run whether I'm ahead or behind.
 - Each Split shows its difference from my Personal Best, in green when ahead and red when behind, and gold for a new Best Segment.
@@ -263,4 +264,4 @@ Built in milestone 7, after v1.
 **US-45 Time newer consoles too.** As a speedrunner on an External System, I want the same timer while the Standalone Emulator runs.
 - Starting a Run opens the emulator and a separate Timer Window, which I can put on a second screen.
 - My controller's Split button works while the emulator has focus.
-- *Covers FR-RUN-12, FR-RUN-13*
+- *Covers FR-RUN-9, FR-RUN-13, FR-RUN-14*

@@ -131,15 +131,17 @@ Testing uses free, legal homebrew games and test ROMs, never commercial game fil
 - Categories stored as LiveSplit `.lss` files under `~/Games/splits/<system>/`, picked up live. Data Game37 doesn't use (game time, autosplitter settings) survives a rewrite.
 - Real-time timer with Split, Undo split, Skip split and Reset. Keyboard defaults are LiveSplit's numpad keys, and the controller splits with Share/Capture. All can be changed in Settings → Speedrun controls.
 - Comparison against Personal Best or Sum of Best, Best Segments, attempt count and Run history.
-- Embedded Runs: fresh boot without the Resume State, splits panel beside or over the picture, Pause Menu run actions, and separate In-game Saves under `~/Games/saves/<system>/speedrun/`.
-- External Runs: the Timer Window, and controller split input while the emulator has focus.
+- The Timer Window for every Run, remembering its position and size.
+- Embedded Runs: fresh boot without the Resume State, an in-game splits panel beside or over the picture, game keys that still work while the Timer Window has focus, Pause Menu run actions, and separate In-game Saves under `~/Games/saves/<system>/speedrun/`.
+- External Runs: controller split input while the emulator has focus.
 - Verify whether GNOME's global shortcuts portal delivers keyboard split keys while an emulator has focus. If it doesn't, External Runs split with the controller only, and the Timer Window says so.
 
 **Delivers:** US-40, US-41, US-42, US-43, US-44, US-45
-**Requirements:** FR-RUN-1–13
+**Requirements:** FR-RUN-1–14
 
 **Done when**
 - On a homebrew test game, a Category with 3 Splits is created and two Runs are finished, one with a controller alone and one with a keyboard alone. The faster Run is the Personal Best, the Best Segments and Sum of Best are right, and the attempt count includes a reset Run.
 - A `.lss` file made in LiveSplit One appears as a Category with its Personal Best. A file Game37 wrote opens in LiveSplit One with the same times.
+- An embedded Run shows the timer both in the game and in the Timer Window, and the game still takes keyboard input while the Timer Window has focus.
 - In-game Saves from normal play are unchanged after a Run.
 - An External Run opens the Timer Window, and the controller Split button works while the emulator has focus.

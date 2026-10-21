@@ -157,11 +157,12 @@ Built in milestone 7, after v1.
 - **FR-RUN-6** The timer shows the Category's Splits, each with its time and its difference from the comparison: green when ahead, red when behind, gold for a new Best Segment. Below them are the running time, the Personal Best and the Sum of Best. The comparison can be switched between Personal Best and Sum of Best.
 - **FR-RUN-7** When a Run finishes faster than the Personal Best, it becomes the new Personal Best. Any Segment faster than its Best Segment becomes the new Best Segment, even in a Run that is later reset.
 - **FR-RUN-8** Run history lists every finished Run of a Category with its date and final time, newest first, with the Personal Best marked.
-- **FR-RUN-9** On an Embedded System, starting a Run boots the Game from power-on, skipping its Resume State. The splits panel is drawn in Game37's window: beside the picture where the picture leaves room, otherwise over a corner. Runs count towards Playtime.
-- **FR-RUN-10** During an embedded Run the Pause Menu also offers Undo split, Skip split, Reset, Restart run (Reset plus a reboot from power-on), and Hide or Show timer. Loading a Save State or quitting to the library during a Run resets it.
-- **FR-RUN-11** In-game Saves written during an embedded Run go to `<Games Root>/saves/<system>/speedrun/` instead of the normal place, so a Run never overwrites normal progress. They are kept between Runs.
-- **FR-RUN-12** On an External System, starting a Run starts the Standalone Emulator like Play and opens the Timer Window: a separate, resizable window with the same splits panel, whose position and size are remembered. It can't stay above a fullscreen emulator on Wayland, so it suits a second screen or a windowed emulator. The Run is reset if the emulator exits before the Run finishes.
-- **FR-RUN-13** During an external Run, the controller Split button works while the emulator has focus. The emulator may react to that button too. Keyboard split keys work there only if the desktop's global shortcuts portal delivers them. If it doesn't, the Timer Window says that External Runs split with the controller.
+- **FR-RUN-9** Every Run, embedded or external, opens the Timer Window: a separate, resizable window showing the splits panel, whose position and size are remembered. It closes when the Run's Game stops. On Wayland it can't stay above a fullscreen game, so it suits a second screen or a windowed game.
+- **FR-RUN-10** On an Embedded System, starting a Run boots the Game from power-on, skipping its Resume State. The splits panel is also drawn in Game37's own window: beside the picture where the picture leaves room, otherwise over a corner. Keys pressed while the Timer Window has focus still reach the game. Runs count towards Playtime.
+- **FR-RUN-11** During an embedded Run the Pause Menu also offers Undo split, Skip split, Reset, Restart run (Reset plus a reboot from power-on), and Hide or Show the in-game splits panel. The Timer Window stays open either way. Loading a Save State or quitting to the library during a Run resets it.
+- **FR-RUN-12** In-game Saves written during an embedded Run go to `<Games Root>/saves/<system>/speedrun/` instead of the normal place, so a Run never overwrites normal progress. They are kept between Runs.
+- **FR-RUN-13** On an External System, starting a Run starts the Standalone Emulator like Play, and Game37's main window minimises as usual while the Timer Window stays open. The Run is reset if the emulator exits before the Run finishes.
+- **FR-RUN-14** During an external Run, the controller Split button works while the emulator has focus. The emulator may react to that button too. Keyboard split keys work there only if the desktop's global shortcuts portal delivers them. If it doesn't, the Timer Window says that External Runs split with the controller.
 
 ## Non-functional requirements
 
@@ -181,4 +182,4 @@ See [milestones.md](milestones.md) for the build order and what each milestone d
 ## Open questions
 
 - **melonDS DS core:** whether it is published on the libretro build server needs verifying in milestone 4.
-- **Global split keys:** whether GNOME's global shortcuts portal delivers keyboard split keys to Game37 while a Standalone Emulator has focus needs verifying in milestone 7 (FR-RUN-13).
+- **Global split keys:** whether GNOME's global shortcuts portal delivers keyboard split keys to Game37 while a Standalone Emulator has focus needs verifying in milestone 7 (FR-RUN-14).

@@ -1,0 +1,3 @@
+# Every Run opens a separate Timer Window
+
+Every Run, embedded or external, shows its timer in a separate Timer Window, which the owner can keep on a second screen. On an Embedded System the timer is also drawn in Game37's own window, because GNOME on Wayland lets no app keep a window above a fullscreen one, so on a single screen the Timer Window would be hidden behind the game. External Systems run in another app's window that Game37 can't draw over, so there the Timer Window is the only timer. Split input during an external Run relies on controller events, which SDL can read while Game37 is in the background. Keyboard keys need the desktop's global shortcuts portal, so they may not work there.
