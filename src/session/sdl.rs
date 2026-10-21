@@ -580,28 +580,37 @@ pub fn end(nav: &mut Nav, ctx: &mut Ctx) {
 
 /// A file time as the Pause Menu shows it, in local time (see [`states::when_label`]).
 fn when_label(time: std::time::SystemTime) -> String {
-    use sdl3::sys::time::{SDL_DateTime, SDL_GetCurrentTime, SDL_TimeToDateTime};
-    let local = |ns: i64| {
-        let mut dt = SDL_DateTime::default();
-        // SAFETY: only writes to the local passed in.
-        unsafe { SDL_TimeToDateTime(ns, &mut dt, true) }.then_some(states::Local {
-            year: dt.year,
-            month: dt.month as u32,
-            day: dt.day as u32,
-            hour: dt.hour as u32,
-            minute: dt.minute as u32,
-        })
-    };
     let then = time
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos() as i64);
-    let mut now = 0;
-    // SAFETY: only writes to the local passed in.
-    let now = unsafe { SDL_GetCurrentTime(&mut now) }.then_some(now);
-    match (local(then), now.and_then(local)) {
+    match (local_time(then), now_local()) {
         (Some(then), Some(now)) => states::when_label(then, now),
         _ => String::new(),
     }
+}
+
+/// A time in nanoseconds since the Unix epoch as a local date and time.
+pub fn local_time(ns: i64) -> Option<states::Local> {
+    use sdl3::sys::time::{SDL_DateTime, SDL_TimeToDateTime};
+    let mut dt = SDL_DateTime::default();
+    // SAFETY: only writes to the local passed in.
+    unsafe { SDL_TimeToDateTime(ns, &mut dt, true) }.then_some(states::Local {
+        year: dt.year,
+        month: dt.month as u32,
+        day: dt.day as u32,
+        hour: dt.hour as u32,
+        minute: dt.minute as u32,
+    })
+}
+
+/// The current local date and time.
+pub fn now_local() -> Option<states::Local> {
+    use sdl3::sys::time::SDL_GetCurrentTime;
+    let mut now = 0;
+    // SAFETY: only writes to the local passed in.
+    unsafe { SDL_GetCurrentTime(&mut now) }
+        .then_some(now)
+        .and_then(local_time)
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 //! The screens, and which ones Game37 starts on (FR-CFG-1).
 
 mod carousel;
+pub mod details;
 pub mod download_core;
 pub mod game_grid;
 pub mod home;

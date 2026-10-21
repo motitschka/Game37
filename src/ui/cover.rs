@@ -79,7 +79,7 @@ pub fn focus_ring(gfx: &mut Gfx<'_>, r: Rect, radius: f32) {
 }
 
 /// The dark end of a placeholder gradient.
-fn shade(c: Colour) -> Colour {
+pub fn shade(c: Colour) -> Colour {
     let f = |v: u8| (v as f32 * SHADE).round() as u8;
     Colour {
         r: f(c.r),

@@ -330,6 +330,12 @@ impl Library {
         Ok(sorted(games, |g| order.key(g), None))
     }
 
+    /// One visible Game by id, e.g. for its Details Page to re-read; `None` once it is hidden or
+    /// gone from its folder.
+    pub fn game(&self, id: i64) -> Result<Option<GameRow>, DbError> {
+        Ok(self.fetch("id = ?1", [id])?.pop().map(|g| g.row))
+    }
+
     /// Visible Games per System id. A System with no visible Games is absent from the map.
     pub fn system_counts(&self) -> Result<HashMap<String, usize>, DbError> {
         let sql = format!("SELECT system, COUNT(*) FROM games WHERE {VISIBLE} GROUP BY system");
@@ -758,6 +764,22 @@ mod tests {
             titles(&lib.system_games("snes", SortOrder::AZ).unwrap()),
             ["Hidden", "Shown"]
         );
+    }
+
+    #[test]
+    fn a_game_is_found_by_id_with_its_record_until_hidden() {
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_system("snes", &games("snes", &["Alpha", "Beta"]), 100)
+            .unwrap();
+        let id = id_of(&lib, "snes", "Beta");
+        lib.record_play(id, 300, 90).unwrap();
+
+        let game = lib.game(id).unwrap().expect("Beta is visible");
+        assert_eq!((game.title.as_str(), game.playtime_secs), ("Beta", 90));
+        assert_eq!(game.last_played, Some(300));
+        assert_eq!(lib.game(id + 100).unwrap(), None, "no such Game");
+        lib.set_hidden(id, true).unwrap();
+        assert_eq!(lib.game(id).unwrap(), None, "a Hidden Game");
     }
 
     #[test]

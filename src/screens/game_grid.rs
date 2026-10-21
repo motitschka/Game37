@@ -3,9 +3,9 @@
 
 use std::time::{Duration, Instant};
 
+use super::details::DetailsPage;
 use crate::ctx::Ctx;
 use crate::emulators::Emulator;
-use crate::launch;
 use crate::library::db::{DbError, GameRow, Library, SortOrder};
 use crate::systems::System;
 use crate::ui::chrome;
@@ -152,8 +152,6 @@ pub struct GameGrid {
     notice_hits: Option<(Rect, Rect)>,
     /// Transient feedback on a notice button after it's pressed, and until when (US-39).
     feedback: Option<(NoticeFocus, &'static str, Instant)>,
-    /// Whether the focused Game is one Confirm launches, as of the last draw, for the hints.
-    focus_playable: bool,
 }
 
 impl GameGrid {
@@ -173,14 +171,13 @@ impl GameGrid {
             notice_focus: None,
             notice_hits: None,
             feedback: None,
-            focus_playable: false,
         }
     }
 
-    /// Confirm on the focused Game launches it until the Details Page exists.
+    /// Confirm on the focused Game opens its Details Page (FR-DET-1).
     fn confirm(&self, ctx: &mut Ctx) -> Transition {
         match self.games.get(self.focus) {
-            Some(game) => launch::confirm_game(game, ctx),
+            Some(game) => Transition::Push(Box::new(DetailsPage::new(game.clone(), ctx))),
             None => Transition::None,
         }
     }
@@ -523,10 +520,6 @@ impl Screen for GameGrid {
     fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
         self.reload_if_changed(ctx);
         self.sync_notice(ctx);
-        self.focus_playable = self
-            .games
-            .get(self.focus)
-            .is_some_and(|g| launch::playable(g, ctx));
         let mut title_x = M;
         if let Some(extra) = &self.extra {
             chrome::background_tinted(gfx, extra.tint, 0.35);
@@ -635,8 +628,8 @@ impl Screen for GameGrid {
             ],
             None => {
                 let mut hints = Vec::new();
-                if self.focus_playable {
-                    hints.push(Hint::new(&[Action::Confirm], "Play"));
+                if !self.games.is_empty() {
+                    hints.push(Hint::new(&[Action::Confirm], "Details"));
                 }
                 if self.extra.is_some() && !self.games.is_empty() {
                     hints.push(Hint::new(&[Action::Sort], "Sort"));
@@ -827,6 +820,35 @@ mod tests {
             grid.focus, 0,
             "the stale click was ignored, not focusing a gone item"
         );
+    }
+
+    #[test]
+    fn confirm_or_a_click_on_a_grid_game_opens_its_details_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = dir.path().to_owned();
+        // An installed Standalone Emulator's Game, which Confirm used to launch directly.
+        ctx.library.sync_system("ps2", &[found_ps2(0)], 0).unwrap();
+        let mut grid =
+            GameGrid::new("PlayStation 2", ps2_source()).sortable(Colour::hex(0), "hint".into(), ps2());
+        grid.handle(Input::Action(Action::Down), &mut ctx); // initial load
+        assert_eq!(grid.hints()[0], Hint::new(&[Action::Confirm], "Details"));
+
+        grid.hits = vec![(Rect::new(0.0, 0.0, 50.0, 50.0), 0)];
+        for input in [
+            Input::Action(Action::Confirm),
+            Input::Pointer(Pointer::Click { x: 10.0, y: 10.0 }),
+        ] {
+            let Transition::Push(page) = grid.handle(input, &mut ctx) else {
+                panic!("{input:?} should open the Details Page");
+            };
+            assert_eq!(page.title(), "B000");
+            assert!(page.hints().contains(&Hint::new(&[Action::Options], "Options")));
+            assert!(
+                ctx.play.is_none() && ctx.launch.is_none(),
+                "{input:?} doesn't play"
+            );
+        }
     }
 
     #[test]

@@ -3,9 +3,9 @@
 
 use std::path::Path;
 
+use super::details::DetailsPage;
 use super::game_grid::GameGrid;
 use crate::ctx::Ctx;
-use crate::launch;
 use crate::library::db::{GameRow, SHELF_SIZE, Shelf};
 use crate::systems;
 use crate::ui::chrome;
@@ -140,8 +140,6 @@ pub struct Home {
     hscroll: [f32; SHELVES],
     vscroll: f32,
     hits: Vec<(Rect, Target)>,
-    /// Whether the focused item is a Game Confirm launches, as of the last draw, for the hints.
-    focus_playable: bool,
 }
 
 impl Default for Home {
@@ -167,7 +165,6 @@ impl Home {
             hscroll: [0.0; SHELVES],
             vscroll: 0.0,
             hits: Vec::new(),
-            focus_playable: false,
         }
     }
 
@@ -241,8 +238,7 @@ impl Home {
     fn confirm(&self, ctx: &mut Ctx) -> Transition {
         let row = &self.shelves[self.focus.shelf];
         match item_at(row.games.len(), self.focus.col()) {
-            // Launches directly until the Details Page exists.
-            Item::Game(i) => launch::confirm_game(&row.games[i], ctx),
+            Item::Game(i) => Transition::Push(Box::new(DetailsPage::new(row.games[i].clone(), ctx))),
             Item::SeeAll => {
                 let shelf = row.shelf;
                 Transition::Push(Box::new(GameGrid::new(
@@ -466,11 +462,6 @@ impl Screen for Home {
         }
         gfx.clip(None);
         self.hits = clip_hits(&self.hits, Rect::new(0.0, VIEW_TOP, W, VIEW_H));
-        let row = &self.shelves[self.focus.shelf];
-        self.focus_playable = match item_at(row.games.len(), self.focus.col()) {
-            Item::Game(i) => launch::playable(&row.games[i], ctx),
-            _ => false,
-        };
     }
 
     fn hints(&self) -> Vec<Hint> {
@@ -478,7 +469,7 @@ impl Screen for Home {
         let mut hints = Vec::new();
         match item_at(row.games.len(), self.focus.col()) {
             Item::SeeAll => hints.push(Hint::new(&[Action::Confirm], "See all")),
-            Item::Game(_) if self.focus_playable => hints.push(Hint::new(&[Action::Confirm], "Play")),
+            Item::Game(_) => hints.push(Hint::new(&[Action::Confirm], "Details")),
             _ => {}
         }
         hints.push(Hint::new(&[Action::PrevTab, Action::NextTab], "Switch view"));
@@ -649,6 +640,41 @@ mod tests {
             home.focus.cols[recently_added], 3,
             "the stale click was ignored; focus stays where the reload's own refocus clamped it"
         );
+    }
+
+    #[test]
+    fn confirm_or_a_click_on_a_shelf_game_opens_its_details_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = dir.path().to_owned();
+        // An installed Standalone Emulator's Game, which Confirm used to launch directly.
+        let zelda = FoundGame {
+            system: "gc",
+            rel_path: "gc/Zelda.iso".into(),
+            title: "Zelda".into(),
+        };
+        ctx.library.sync_system("gc", &[zelda], 0).unwrap();
+        let mut home = Home::new();
+        home.handle(Input::Action(Action::Down), &mut ctx); // initial load
+        let recently_added = 2; // Shelf::ALL's index for Shelf::RecentlyAdded
+        home.focus.shelf = recently_added;
+        assert_eq!(home.hints()[0], Hint::new(&[Action::Confirm], "Details"));
+
+        home.hits = vec![(Rect::new(0.0, 0.0, 50.0, 50.0), Target::Item(recently_added, 0))];
+        for input in [
+            Input::Action(Action::Confirm),
+            Input::Pointer(Pointer::Click { x: 10.0, y: 10.0 }),
+        ] {
+            let Transition::Push(page) = home.handle(input, &mut ctx) else {
+                panic!("{input:?} should open the Details Page");
+            };
+            assert_eq!(page.title(), "Zelda");
+            assert!(page.hints().contains(&Hint::new(&[Action::Options], "Options")));
+            assert!(
+                ctx.play.is_none() && ctx.launch.is_none(),
+                "{input:?} doesn't play"
+            );
+        }
     }
 
     #[test]
