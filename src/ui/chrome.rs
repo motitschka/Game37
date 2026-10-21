@@ -23,7 +23,7 @@ const GLYPH_LABEL: TextStyle = TextStyle::new(14, Weight::Bold, TEXT);
 const GLYPH_LETTER: TextStyle = TextStyle::new(16, Weight::Bold, TEXT);
 
 /// Face-button letters are drawn round, everything else as a key cap.
-fn is_round(label: &str) -> bool {
+pub fn is_round(label: &str) -> bool {
     matches!(label, "A" | "B" | "X" | "Y")
 }
 

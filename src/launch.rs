@@ -32,7 +32,7 @@ pub const FAILED_TITLE: &str = "Couldn't start the game";
 const NOT_PLAYABLE_TITLE: &str = "Not playable yet";
 const BIOS_MISSING_TITLE: &str = "PlayStation BIOS missing";
 
-/// What Confirm on a Game does (until the Details Page exists): asks to play it when its System's
+/// What Play on a Game's Details Page does (FR-DET-1): asks to play it when its System's
 /// Core or Standalone Emulator is installed, downloads an Embedded System's Core first when it
 /// isn't (FR-EMB-2, US-23), checks for a required BIOS (FR-EMB-12), else explains why it can't be
 /// played.
@@ -110,16 +110,6 @@ fn later_update(system: &System) -> String {
         "Playing {} games inside Game37 comes in a later update.",
         system.name
     )
-}
-
-/// Whether Confirm on `game` plays it (FR-CAR-9), for the "Play" hint.
-pub fn playable(game: &GameRow, ctx: &Ctx) -> bool {
-    systems::by_id(&game.system).is_some_and(|s| match s.kind {
-        Kind::Embedded => cores::for_system(s).is_some_and(|c| {
-            cores::is_installed(&ctx.data_dir, c) && cores::has_required_bios(&ctx.games_root, c)
-        }),
-        Kind::External => emulators::for_system(s).is_some() && ctx.emulators.missing(s).is_none(),
-    })
 }
 
 /// The command that starts `file` in `emulator`, granting it read access to the Games Root,
@@ -737,13 +727,11 @@ mod tests {
     fn confirm_asks_for_a_launch_only_when_the_emulator_is_installed() {
         let mut w = world("exit 0");
         let game = w.game.clone();
-        assert!(playable(&game, &w.ctx));
         assert!(matches!(confirm_game(&game, &mut w.ctx), Transition::None));
         assert_eq!(w.ctx.launch.take().map(|g| g.id), Some(game.id));
         assert!(w.ctx.play.is_none());
 
         w.ctx.emulators = crate::emulators::Emulators::from_installed(Vec::<String>::new());
-        assert!(!playable(&game, &w.ctx));
         assert!(matches!(confirm_game(&game, &mut w.ctx), Transition::Push(_)));
         assert!(w.ctx.launch.is_none());
     }
@@ -761,7 +749,6 @@ mod tests {
         w.ctx.data_dir = w._dir.path().join("data");
         touch(&w.ctx.data_dir.join("cores/bsnes_libretro.so"));
         let snes = game_of(&w, "snes");
-        assert!(playable(&snes, &w.ctx));
         assert!(matches!(confirm_game(&snes, &mut w.ctx), Transition::None));
         assert_eq!(w.ctx.play.take().map(|g| g.system), Some("snes".to_owned()));
         assert!(w.ctx.launch.is_none());
@@ -775,7 +762,6 @@ mod tests {
         // Never touches the network: this only checks that Confirm starts a download.
         w.ctx.start_download = Box::new(cores::testing::spawn_failing);
         let gba = game_of(&w, "gba");
-        assert!(!playable(&gba, &w.ctx));
         assert!(matches!(confirm_game(&gba, &mut w.ctx), Transition::Push(_)));
         assert!(w.ctx.play.is_none() && w.ctx.launch.is_none());
     }
@@ -819,19 +805,6 @@ mod tests {
     }
 
     #[test]
-    fn playable_is_false_for_an_embedded_game_with_an_installed_core_but_no_bios() {
-        let mut w = world("exit 0");
-        w.ctx.data_dir = w._dir.path().join("data");
-        touch(&w.ctx.data_dir.join("cores/mednafen_psx_hw_libretro.so"));
-        let ps1 = game_of(&w, "ps1");
-        assert!(!playable(&ps1, &w.ctx), "no BIOS yet");
-
-        fs::create_dir_all(w.ctx.games_root.join("bios")).unwrap();
-        fs::write(w.ctx.games_root.join("bios/SCPH5502.bin"), b"bios data").unwrap();
-        assert!(playable(&ps1, &w.ctx), "BIOS now in place");
-    }
-
-    #[test]
     fn confirm_on_psp_with_nothing_installed_starts_the_assets_step() {
         let mut w = world("exit 0");
         w.ctx.data_dir = w._dir.path().join("data");
@@ -850,7 +823,6 @@ mod tests {
         touch(&w.ctx.data_dir.join("cores/ppsspp_libretro.so"));
         fs::create_dir_all(cores::assets_dir(&w.ctx.data_dir)).unwrap();
         let psp = game_of(&w, "psp");
-        assert!(playable(&psp, &w.ctx));
         assert!(matches!(confirm_game(&psp, &mut w.ctx), Transition::None));
         assert_eq!(w.ctx.play.take().map(|g| g.system), Some("psp".to_owned()));
     }
@@ -873,7 +845,6 @@ mod tests {
         w.ctx.data_dir = w._dir.path().join("data");
         touch(&w.ctx.data_dir.join("cores/melondsds_libretro.so"));
         let nds = game_of(&w, "nds");
-        assert!(playable(&nds, &w.ctx));
         assert!(matches!(confirm_game(&nds, &mut w.ctx), Transition::None));
         assert_eq!(w.ctx.play.take().map(|g| g.system), Some("nds".to_owned()));
     }

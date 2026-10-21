@@ -176,11 +176,16 @@ fn days(year: i32, month: u32, day: u32) -> i64 {
     era * 146097 + doe - 719468
 }
 
+/// How many calendar days before `now` `then` was: 0 the same day, 1 the day before.
+pub fn days_ago(then: Local, now: Local) -> i64 {
+    days(now.year, now.month, now.day) - days(then.year, then.month, then.day)
+}
+
 /// When a slot was saved, relative to `now`: "Today, 21:14", "Yesterday, 18:02", else
 /// "19.10.2026, 09:30".
 pub fn when_label(then: Local, now: Local) -> String {
     let time = format!("{:02}:{:02}", then.hour, then.minute);
-    match days(now.year, now.month, now.day) - days(then.year, then.month, then.day) {
+    match days_ago(then, now) {
         0 => format!("Today, {time}"),
         1 => format!("Yesterday, {time}"),
         _ => format!("{:02}.{:02}.{}, {time}", then.day, then.month, then.year),
