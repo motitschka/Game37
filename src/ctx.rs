@@ -10,6 +10,21 @@ use crate::library::scan;
 use crate::systems::SYSTEMS;
 use crate::ui::input::{ButtonStyle, InputKind};
 
+/// A request to play a Game of an Embedded System: from its Resume State, as every launch does
+/// (FR-EMB-6), or from the Save State in `slot` (1 to 3) the player chose (FR-DET-4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Play {
+    pub game: GameRow,
+    pub slot: Option<usize>,
+}
+
+impl Play {
+    /// Plays `game` from its Resume State, if it has one.
+    pub fn resume(game: GameRow) -> Play {
+        Play { game, slot: None }
+    }
+}
+
 pub struct Ctx {
     pub library: Library,
     pub games_root: PathBuf,
@@ -38,7 +53,7 @@ pub struct Ctx {
     pub launch: Option<GameRow>,
     /// A Game of an Embedded System a screen asked to play; `app.rs` takes it and starts it on
     /// its Core.
-    pub play: Option<GameRow>,
+    pub play: Option<Play>,
     /// Starts downloading a Core (FR-EMB-2): `Download::start` in production; tests and
     /// screenshot mode's offline cases swap it so they never hit the network.
     pub start_download: Box<dyn Fn(&'static CoreInfo, PathBuf) -> Download>,

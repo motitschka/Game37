@@ -3,8 +3,7 @@
 //! yet. Done starts the Game; Failed turns the screen into the usual message modal.
 
 use crate::cores::{self, CoreInfo, Download, DownloadState};
-use crate::ctx::Ctx;
-use crate::library::db::GameRow;
+use crate::ctx::{Ctx, Play};
 use crate::screens::message::{self, Message, PANEL_W};
 use crate::ui::Rect;
 use crate::ui::cover::focus_ring;
@@ -52,7 +51,8 @@ enum Step {
 }
 
 pub struct DownloadCore {
-    game: GameRow,
+    /// What to play once the Core is in, slot and all.
+    play: Play,
     core: &'static CoreInfo,
     step: Step,
     /// Whether this screen runs an assets step (always before the Core step): only
@@ -68,18 +68,18 @@ pub struct DownloadCore {
 impl DownloadCore {
     /// Downloads just `core`'s library: every Core except PPSSPP, and PPSSPP once its assets are
     /// already there.
-    pub fn new(game: GameRow, core: &'static CoreInfo, download: Download) -> DownloadCore {
-        DownloadCore::with_step(game, core, Step::Core(download), false)
+    pub fn new(play: Play, core: &'static CoreInfo, download: Download) -> DownloadCore {
+        DownloadCore::with_step(play, core, Step::Core(download), false)
     }
 
     /// Downloads `core`'s assets first, then its library (FR-EMB-1): PPSSPP only.
-    pub fn new_with_assets(game: GameRow, core: &'static CoreInfo, assets: Download) -> DownloadCore {
-        DownloadCore::with_step(game, core, Step::Assets(assets), true)
+    pub fn new_with_assets(play: Play, core: &'static CoreInfo, assets: Download) -> DownloadCore {
+        DownloadCore::with_step(play, core, Step::Assets(assets), true)
     }
 
-    fn with_step(game: GameRow, core: &'static CoreInfo, step: Step, assets_step: bool) -> DownloadCore {
+    fn with_step(play: Play, core: &'static CoreInfo, step: Step, assets_step: bool) -> DownloadCore {
         DownloadCore {
-            game,
+            play,
             core,
             step,
             assets_step,
@@ -141,7 +141,7 @@ impl Screen for DownloadCore {
             DownloadState::Done(_) => match &self.step {
                 Step::Assets(_) if cores::installed_path(&ctx.data_dir, self.core).is_file() => {
                     // The Core was already installed; only its assets were missing.
-                    ctx.play = Some(self.game.clone());
+                    ctx.play = Some(self.play.clone());
                     Transition::Pop
                 }
                 Step::Assets(_) => {
@@ -154,7 +154,7 @@ impl Screen for DownloadCore {
                     Transition::None
                 }
                 Step::Core(_) => {
-                    ctx.play = Some(self.game.clone());
+                    ctx.play = Some(self.play.clone());
                     Transition::Pop
                 }
             },
@@ -241,9 +241,9 @@ mod tests {
     use crate::cores::PPSSPP;
     use crate::cores::SAMEBOY;
     use crate::cores::testing::{assets_zip, core_zip, spawn, spawn_assets, spawn_failing};
-    use crate::launch::confirm_game;
+    use crate::launch::{confirm_game, confirm_play};
     use crate::library::FoundGame;
-    use crate::library::db::SortOrder;
+    use crate::library::db::{GameRow, SortOrder};
     use std::fs;
     use std::thread;
     use std::time::{Duration, Instant};
@@ -305,13 +305,38 @@ mod tests {
         ctx.data_dir = dir.path().to_owned();
         let g = game(&mut ctx);
         let download = spawn(&SAMEBOY, ctx.data_dir.clone(), core_zip(&SAMEBOY), None);
-        let mut screen = DownloadCore::new(g.clone(), &SAMEBOY, download);
+        let mut screen = DownloadCore::new(Play::resume(g.clone()), &SAMEBOY, download);
         wait_for(&mut screen, |s| match s.tick(&mut ctx) {
             Transition::Pop => Some(()),
             Transition::None => None,
             _ => panic!("unexpected transition"),
         });
-        assert_eq!(ctx.play.as_ref().map(|g| g.id), Some(g.id));
+        assert_eq!(ctx.play.as_ref().map(|p| p.game.id), Some(g.id));
+    }
+
+    /// Loading a Save State from the Options Menu (FR-DET-4) before the Core was ever downloaded
+    /// still starts from the chosen slot once the download is done.
+    #[test]
+    fn a_launch_from_a_slot_keeps_its_slot_through_the_core_download() {
+        let mut ctx = Ctx::empty();
+        let dir = tempfile::tempdir().unwrap();
+        ctx.data_dir = dir.path().to_owned();
+        let g = game(&mut ctx);
+        ctx.start_download = Box::new(|core, data_dir| spawn(core, data_dir, core_zip(core), None));
+        let play = Play {
+            game: g,
+            slot: Some(2),
+        };
+        let Transition::Push(mut screen) = confirm_play(play.clone(), &mut ctx) else {
+            panic!("the Core download should start");
+        };
+        assert!(ctx.play.is_none(), "nothing plays before the Core is in");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !matches!(screen.tick(&mut ctx), Transition::Pop) {
+            assert!(Instant::now() < deadline, "timed out waiting for the download");
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(ctx.play, Some(play), "the Game, from slot 2");
     }
 
     #[test]
@@ -321,7 +346,7 @@ mod tests {
         ctx.data_dir = dir.path().to_owned();
         let g = game(&mut ctx);
         let download = spawn_failing(&SAMEBOY, ctx.data_dir.clone());
-        let mut screen = DownloadCore::new(g, &SAMEBOY, download);
+        let mut screen = DownloadCore::new(Play::resume(g), &SAMEBOY, download);
         wait_for(&mut screen, |s| {
             s.tick(&mut ctx);
             s.failed.is_some().then_some(())
@@ -350,7 +375,7 @@ mod tests {
             favorite: false,
         };
         let download = spawn(&PPSSPP, dir.path().to_owned(), core_zip(&PPSSPP), None);
-        let screen = DownloadCore::new(g, &PPSSPP, download);
+        let screen = DownloadCore::new(Play::resume(g), &PPSSPP, download);
         let label = screen.label();
         assert!(!label.contains("2 of 2"), "{label}");
     }
@@ -372,13 +397,13 @@ mod tests {
             assets_zip(&[("PPSSPP/flash0/font/a.pgf", b"font data")]),
             None,
         );
-        let mut screen = DownloadCore::new_with_assets(g.clone(), &PPSSPP, assets);
+        let mut screen = DownloadCore::new_with_assets(Play::resume(g.clone()), &PPSSPP, assets);
         wait_for(&mut screen, |s| match s.tick(&mut ctx) {
             Transition::Pop => Some(()),
             Transition::None => None,
             _ => panic!("unexpected transition"),
         });
-        assert_eq!(ctx.play.as_ref().map(|g| g.id), Some(g.id));
+        assert_eq!(ctx.play.as_ref().map(|p| p.game.id), Some(g.id));
     }
 
     #[test]
@@ -388,7 +413,7 @@ mod tests {
         ctx.data_dir = dir.path().to_owned();
         let g = game(&mut ctx);
         let download = spawn_failing(&SAMEBOY, ctx.data_dir.clone());
-        let mut screen = DownloadCore::new(g, &SAMEBOY, download);
+        let mut screen = DownloadCore::new(Play::resume(g), &SAMEBOY, download);
         assert!(matches!(
             screen.handle(Input::Action(Action::Back), &mut ctx),
             Transition::Pop

@@ -595,7 +595,7 @@ mod tests {
             act(&mut page, &mut ctx, Action::Confirm),
             Transition::None
         ));
-        assert_eq!(ctx.play.take().map(|g| g.id), Some(game.id));
+        assert_eq!(ctx.play.take().map(|p| p.game.id), Some(game.id));
         assert!(ctx.launch.is_none());
     }
 
