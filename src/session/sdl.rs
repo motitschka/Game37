@@ -130,6 +130,19 @@ impl GameFrames for Gfx<'_> {
     }
 }
 
+/// Lets held arrow keys tilt port 0's left stick fully, ahead of a pad's own stick, on Cores that
+/// read it as analog only (FR-UI-1); see [`input::keyboard_stick`].
+fn apply_keyboard_stick(
+    input: &mut crate::libretro::InputState,
+    down: impl Fn(Scancode) -> bool,
+    stick_dpad: bool,
+) {
+    let (kx, ky) = input::keyboard_stick(&down, stick_dpad);
+    if (kx, ky) != (0, 0) {
+        input.set_stick(0, Stick::Left, kx, ky);
+    }
+}
+
 /// Reads this frame's [`PadState`] from an open SDL gamepad. The thin SDL adapter: `PadState`
 /// itself is pure and tested in `session::input`.
 pub fn pad_state(gamepad: &Gamepad) -> PadState {
@@ -296,12 +309,7 @@ impl Session {
         if paused {
             return true;
         }
-        // Arrow keys tilt the left stick fully on Cores that read it as analog only (FR-UI-1),
-        // ahead of a pad's own stick on port 1.
-        let (kx, ky) = input::keyboard_stick(&down, self.stick_dpad);
-        if (kx, ky) != (0, 0) {
-            input.set_stick(0, Stick::Left, kx, ky);
-        }
+        apply_keyboard_stick(&mut input, &down, self.stick_dpad);
         self.held.mask(&mut input);
         self.follow_av_info();
         if self.touch_screen {
@@ -696,6 +704,31 @@ mod tests {
         );
         store_resume(&path, Err::<Vec<u8>, _>("again, with nothing to remove"));
         assert!(!path.exists());
+    }
+
+    /// Held arrow keys reach port 0's left stick only on a stick-mode System (N64, PSP), as
+    /// `tick` wires `apply_keyboard_stick` in.
+    #[test]
+    fn held_arrow_keys_reach_port_0s_left_stick_only_on_stick_mode_systems() {
+        use crate::libretro::InputState;
+
+        let left_held = |k: Scancode| k == Scancode::Left;
+
+        let mut input = InputState::default();
+        apply_keyboard_stick(&mut input, left_held, false);
+        assert_eq!(
+            input.stick(0, Stick::Left),
+            (-0x7fff, 0),
+            "a stick-mode System (N64, PSP) gets the held Left on port 0's left stick"
+        );
+
+        let mut input = InputState::default();
+        apply_keyboard_stick(&mut input, left_held, true);
+        assert_eq!(
+            input.stick(0, Stick::Left),
+            (0, 0),
+            "a d-pad System leaves the stick centred: its own d-pad press is enough"
+        );
     }
 
     /// New frames go nowhere.
