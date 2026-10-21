@@ -226,3 +226,41 @@ Two people use Game37:
 **US-37 Build it myself.** As a new player, I want clear build instructions.
 - The README explains the dependencies and `cargo build --release`.
 - *Covers NFR-7*
+
+## Epic 11: Speedrunning
+
+Built in milestone 7, after v1.
+
+**US-40 Set up my splits.** As a speedrunner, I want to enter my own Splits for each Game I run, so the timer follows my route.
+- Details Page → Speedrun → new Category asks for a name, and the Splits editor adds, renames, reorders and removes Splits.
+- A Game can have several Categories, e.g. Any% and 100%, each with its own Personal Best.
+- I can do all of it with a controller alone, or with mouse and keyboard alone.
+- *Covers FR-RUN-1, FR-RUN-2*
+
+**US-41 Time a run.** As a speedrunner on a retro System, I want a timer beside the game that I split with one button.
+- Starting a Run boots the Game fresh. My first Split press starts the timer, and the last one finishes the Run.
+- Split, Undo, Skip and Reset work from the keyboard. With a controller, Split is one button and the rest are in the Pause Menu.
+- The timer keeps running while the Pause Menu is open, and I can hide it.
+- My normal In-game Saves are untouched by a Run.
+- *Covers FR-RUN-4, FR-RUN-5, FR-RUN-9, FR-RUN-10, FR-RUN-11*
+
+**US-42 Know where I stand.** As a speedrunner, I want to see during a Run whether I'm ahead or behind.
+- Each Split shows its difference from my Personal Best, in green when ahead and red when behind, and gold for a new Best Segment.
+- I can compare against my Sum of Best instead.
+- A faster finished Run becomes my new Personal Best automatically.
+- *Covers FR-RUN-6, FR-RUN-7*
+
+**US-43 Keep my history.** As a speedrunner, I want my attempts and finished Runs kept, so I can see my progress.
+- The Speedrun Page shows each Category's attempt count and Personal Best.
+- Run history lists every finished Run with its date and time.
+- *Covers FR-RUN-1, FR-RUN-8*
+
+**US-44 Use my LiveSplit splits.** As a speedrunner who already uses LiveSplit, I want to bring my splits in and take them out.
+- A `.lss` file copied into the Game's folder under `~/Games/splits/` appears as a Category, with its Personal Best and Best Segments.
+- The files Game37 writes open in LiveSplit and LiveSplit One with the same times.
+- *Covers FR-RUN-3*
+
+**US-45 Time newer consoles too.** As a speedrunner on an External System, I want the same timer while the Standalone Emulator runs.
+- Starting a Run opens the emulator and a separate Timer Window, which I can put on a second screen.
+- My controller's Split button works while the emulator has focus.
+- *Covers FR-RUN-12, FR-RUN-13*

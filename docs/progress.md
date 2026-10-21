@@ -16,6 +16,7 @@ way, and what's still open.
 | M4 OpenGL hardware rendering | Done, reviewed, regression-checked | `m4-opengl` | Yes |
 | M5 Artwork, Details Page, Options Menu | Not started | | |
 | M6 Settings, search, First-run Setup | Not started | | |
+| M7 Speedrun timer (after v1) | Specified 2026-10-21, not started | | |
 
 Each milestone branch builds on the previous one. `main` has everything through M4, merged on
 2026-10-20. Start M5 from `main`, on a new branch `m5-…`.
@@ -174,3 +175,7 @@ before starting:
 - **Smoke shots:** add shots for each new screen to `scripts/smoke-screens.sh`.
 
 M6 follows: Settings, search, window modes, First-run Setup, README.
+
+M7, the speedrun timer, comes after v1: own Splits per Game in LiveSplit `.lss` files, a timer beside
+embedded games, and a separate Timer Window for External Systems (FR-RUN-1–13, ADRs 0012 and 0013).
+It needs M6's on-screen keyboard and Settings.

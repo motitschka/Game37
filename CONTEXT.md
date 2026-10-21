@@ -115,3 +115,37 @@ _Avoid_: Wizard, onboarding
 **Config**:
 The player's settings file outside the repo (`~/.config/game37/config.toml`); its existence means setup is done.
 _Avoid_: Profile, preferences
+
+## Speedrunning
+
+**Category**:
+One way of speedrunning a Game (e.g. Any%, 100%): a named, ordered list of Splits with its own Personal Best and history, stored as one LiveSplit file.
+_Avoid_: Route, splits file
+
+**Split**:
+A named point in a Category where the runner presses Split to record the time.
+_Avoid_: Checkpoint, lap
+
+**Segment**:
+The part of a Run between two Splits, or from the start to the first Split.
+_Avoid_: Section, leg
+
+**Run**:
+One timed go at a Category, from the first Split press until it finishes on the last Split or is reset.
+_Avoid_: Try, speedrun (for a single Run)
+
+**Personal Best**:
+A Category's fastest finished Run; its Split times are the default comparison.
+_Avoid_: Record, high score
+
+**Best Segment**:
+The fastest time ever recorded for one Segment of a Category. The Best Segments add up to the Sum of Best.
+_Avoid_: Gold split (in code and docs)
+
+**Speedrun Page**:
+The screen for one Game's Categories, opened from the Details Page.
+_Avoid_: Splits menu, speedrun settings
+
+**Timer Window**:
+The separate window that shows the timer during a Run on an External System.
+_Avoid_: Overlay, popup

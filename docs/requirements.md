@@ -1,6 +1,6 @@
 # Game37 Requirements
 
-Requirements for v1. Terms follow [CONTEXT.md](../CONTEXT.md). Decisions behind them are in [adr/](adr/). IDs are referenced from [user-stories.md](user-stories.md).
+Requirements for v1, plus the speedrun timer (FR-RUN), which follows v1 in milestone 7. Terms follow [CONTEXT.md](../CONTEXT.md). Decisions behind them are in [adr/](adr/). IDs are referenced from [user-stories.md](user-stories.md).
 
 ## Systems
 
@@ -142,6 +142,27 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
   5. Download Cores for the chosen Embedded Systems.
   6. Optionally enter the API key.
 
+### Speedrun timer
+
+Built in milestone 7, after v1.
+
+- **FR-RUN-1** The Details Page has a Speedrun action next to Play. It opens the Game's Speedrun Page, which lists the Game's Categories, each with its Personal Best and attempt count. From there the player starts a Run, edits Splits, adds, renames or deletes a Category, and views Run history.
+- **FR-RUN-2** A Category is a named, ordered list of Splits (e.g. "Any%"). A Game can have any number of Categories. The Splits editor adds, renames, reorders and removes Splits. A controller player types names with the on-screen keyboard (FR-SRCH-2). Editing Splits never discards finished Runs, and a new Split has no times until a Run records one.
+- **FR-RUN-3** Each Category is a LiveSplit `.lss` file in `<Games Root>/splits/<system>/<Game>/`, where `<Game>` is the Game's path inside its System folder, without the file extension. A `.lss` file placed there appears as a Category without a restart, and the files Game37 writes open in LiveSplit and LiveSplit One. Game37 uses only real time, but keeps game times and any other LiveSplit data when it rewrites a file.
+- **FR-RUN-4** Timing is real time, shown to hundredths of a second. The first press of Split starts the timer, each further press records the current Split, and the press on the last Split finishes the Run. The timer keeps running while the Pause Menu is open. Every Run whose timer started counts as an attempt.
+- **FR-RUN-5** Split controls are Split, Undo split, Skip split and Reset. Reset stops the timer and sets it back to zero, ready for the next Run.
+  - Keyboard: LiveSplit's defaults, Numpad 1 (Split), Numpad 8 (Undo), Numpad 2 (Skip) and Numpad 3 (Reset).
+  - Controller: Split is the pad's Share/Capture button where it has one. Undo, Skip and Reset are in the Pause Menu.
+  - Settings → Speedrun controls changes the keys and the controller Split button. During a Run, the controller Split button is not passed to an embedded game.
+- **FR-RUN-6** The timer shows the Category's Splits, each with its time and its difference from the comparison: green when ahead, red when behind, gold for a new Best Segment. Below them are the running time, the Personal Best and the Sum of Best. The comparison can be switched between Personal Best and Sum of Best.
+- **FR-RUN-7** When a Run finishes faster than the Personal Best, it becomes the new Personal Best. Any Segment faster than its Best Segment becomes the new Best Segment, even in a Run that is later reset.
+- **FR-RUN-8** Run history lists every finished Run of a Category with its date and final time, newest first, with the Personal Best marked.
+- **FR-RUN-9** On an Embedded System, starting a Run boots the Game from power-on, skipping its Resume State. The splits panel is drawn in Game37's window: beside the picture where the picture leaves room, otherwise over a corner. Runs count towards Playtime.
+- **FR-RUN-10** During an embedded Run the Pause Menu also offers Undo split, Skip split, Reset, Restart run (Reset plus a reboot from power-on), and Hide or Show timer. Loading a Save State or quitting to the library during a Run resets it.
+- **FR-RUN-11** In-game Saves written during an embedded Run go to `<Games Root>/saves/<system>/speedrun/` instead of the normal place, so a Run never overwrites normal progress. They are kept between Runs.
+- **FR-RUN-12** On an External System, starting a Run starts the Standalone Emulator like Play and opens the Timer Window: a separate, resizable window with the same splits panel, whose position and size are remembered. It can't stay above a fullscreen emulator on Wayland, so it suits a second screen or a windowed emulator. The Run is reset if the emulator exits before the Run finishes.
+- **FR-RUN-13** During an external Run, the controller Split button works while the emulator has focus. The emulator may react to that button too. Keyboard split keys work there only if the desktop's global shortcuts portal delivers them. If it doesn't, the Timer Window says that External Runs split with the controller.
+
 ## Non-functional requirements
 
 - **NFR-1 Platform:** Linux x86_64 (developed on Arch, GNOME, Wayland). Other platforms are out of scope.
@@ -160,3 +181,4 @@ See [milestones.md](milestones.md) for the build order and what each milestone d
 ## Open questions
 
 - **melonDS DS core:** whether it is published on the libretro build server needs verifying in milestone 4.
+- **Global split keys:** whether GNOME's global shortcuts portal delivers keyboard split keys to Game37 while a Standalone Emulator has focus needs verifying in milestone 7 (FR-RUN-13).
