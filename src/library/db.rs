@@ -399,6 +399,22 @@ impl Library {
         Ok(())
     }
 
+    /// What Game `id` records about its Artwork (FR-LIB-7), in the form `artwork.rs` writes it, or
+    /// `None` if nothing is recorded yet.
+    pub fn artwork(&self, id: i64) -> Result<Option<String>, DbError> {
+        let value = self
+            .conn
+            .query_row("SELECT artwork FROM games WHERE id = ?1", [id], |r| r.get(0))
+            .optional()?;
+        Ok(value.flatten())
+    }
+
+    pub fn set_artwork(&self, id: i64, record: &str) -> Result<(), DbError> {
+        self.conn
+            .execute("UPDATE games SET artwork = ?2 WHERE id = ?1", params![id, record])?;
+        Ok(())
+    }
+
     /// The global Console Page sort order; A–Z until changed.
     pub fn sort_order(&self) -> Result<SortOrder, DbError> {
         Ok(self
@@ -889,6 +905,23 @@ mod tests {
         );
         assert!(rows[0].favorite);
         assert!(!lib.sync_system("snes", &games("snes", &["Alpha"]), 200).unwrap());
+    }
+
+    #[test]
+    fn artwork_record_persists_across_reopening() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.db");
+        let id = {
+            let mut lib = Library::open(&path).unwrap();
+            lib.sync_system("snes", &games("snes", &["Alpha"]), 100).unwrap();
+            let id = id_of(&lib, "snes", "Alpha");
+            assert_eq!(lib.artwork(id).unwrap(), None);
+            lib.set_artwork(id, "{\"game\":null}").unwrap();
+            id
+        };
+        let lib = Library::open(&path).unwrap();
+        assert_eq!(lib.artwork(id).unwrap().as_deref(), Some("{\"game\":null}"));
+        assert_eq!(lib.artwork(id + 1).unwrap(), None);
     }
 
     #[test]

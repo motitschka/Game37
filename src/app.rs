@@ -13,6 +13,7 @@ use sdl3::render::{WindowCanvas, create_renderer};
 use sdl3::sys::render::SDL_RendererLogicalPresentation;
 use sdl3::{GamepadSubsystem, VideoSubsystem};
 
+use crate::artwork::Artwork;
 use crate::cli::{Options, Screenshot};
 use crate::config;
 use crate::ctx::{self, Ctx};
@@ -60,6 +61,12 @@ pub fn run(options: Options) -> Result<(), String> {
             ctx.animate = true;
             if has_library {
                 ctx.emulators = Emulators::detect();
+                // Without a key (or with an unreadable secrets.toml) Artwork is the cache only.
+                let key = config::load_api_key(&path).unwrap_or_else(|e| {
+                    eprintln!("game37: {e}");
+                    None
+                });
+                ctx.artwork = Artwork::start(ctx.data_dir.join("artwork"), key);
             }
             let nav = screens::start(loaded, &path, &ctx);
             let watcher = has_library.then(|| LibraryWatcher::start(ctx.games_root.clone()));
@@ -160,6 +167,8 @@ fn interactive(
         if nav.tick(&mut ctx) == Flow::Quit {
             break 'frames;
         }
+        // Artwork that finished loading in the background (NFR-3).
+        ctx.artwork.poll(&ctx.library);
         if let Some(game) = ctx.play.take() {
             let refresh = if vsync { gfx.refresh_rate() } else { None };
             sdl::start(&game, &mut nav, &ctx, gfx.gl_context(), audio.as_ref(), refresh);
