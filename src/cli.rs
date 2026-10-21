@@ -7,7 +7,8 @@ use crate::systems::{self, Kind};
 use crate::ui::input::{Action, Input, Pointer};
 
 pub const USAGE: &str = "usage: game37 [--config <path>] [--data-dir <path>] \
-[--screenshot <out.bmp> [--actions <a,b,...>] [--missing-emulators <system ids>] [--frames <n>]]";
+[--screenshot <out.bmp> [--actions <a,b,...>] [--missing-emulators <system ids>] [--frames <n>] \
+[--artwork]]";
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Options {
@@ -30,6 +31,10 @@ pub struct Screenshot {
     /// Frames drawn after the steps, at least 1 (`--frames`): a running Game advances one frame
     /// per step and per frame here.
     pub frames: u32,
+    /// `--artwork`: show Artwork as the app does, cached under the data dir and fetched with the
+    /// key in `secrets.toml` next to the Config, waiting for it before each frame. Without it every
+    /// Game shows placeholder art and nothing is read or fetched.
+    pub artwork: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -68,6 +73,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
     let mut actions = None;
     let mut missing_emulators = None;
     let mut frames = None;
+    let mut artwork = false;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or_else(|| format!("{arg} needs a value"));
@@ -78,6 +84,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
             "--actions" => actions = Some(value()?),
             "--missing-emulators" => missing_emulators = Some(value()?),
             "--frames" => frames = Some(value()?),
+            "--artwork" => artwork = true,
             _ => return Err(format!("unknown argument {arg:?}")),
         }
     }
@@ -86,6 +93,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
             ("--actions", actions.is_some()),
             ("--missing-emulators", missing_emulators.is_some()),
             ("--frames", frames.is_some()),
+            ("--artwork", artwork),
         ];
         if let Some((flag, _)) = given.iter().find(|(_, given)| *given) {
             return Err(format!("{flag} only works with --screenshot"));
@@ -104,6 +112,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
                 .filter(|&n| n >= 1)
                 .ok_or_else(|| format!("bad --frames {n:?}: expected a whole number from 1"))?,
         },
+        artwork,
     });
     Ok(options)
 }
@@ -224,6 +233,17 @@ mod tests {
         let err = parse(args("--frames 2")).unwrap_err();
         assert!(err.contains("--screenshot"), "{err}");
         assert!(USAGE.contains("[--frames <n>]"));
+    }
+
+    #[test]
+    fn artwork_is_off_unless_asked_for_and_only_works_with_screenshot() {
+        let shot = |a: &str| parse(args(a)).unwrap().screenshot.unwrap();
+        assert!(!shot("--screenshot o.bmp").artwork);
+        assert!(shot("--screenshot o.bmp --artwork --frames 2").artwork);
+        assert!(shot("--artwork --screenshot o.bmp").artwork);
+        let err = parse(args("--artwork")).unwrap_err();
+        assert!(err.contains("--artwork") && err.contains("--screenshot"), "{err}");
+        assert!(USAGE.contains("[--artwork]"));
     }
 
     #[test]

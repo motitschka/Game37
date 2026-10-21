@@ -13,6 +13,7 @@ use walkdir::WalkDir;
 
 use super::home::tilde;
 use super::options::OptionsMenu;
+use crate::artwork::Art;
 use crate::cores;
 use crate::ctx::Ctx;
 use crate::emulators::{self, Emulator};
@@ -336,14 +337,20 @@ impl DetailsPage {
     }
 }
 
-/// The placeholder hero: a gradient in the System's colour with soft shapes, darkened towards
-/// the text on the left and the bottom.
-fn draw_hero(gfx: &mut Gfx<'_>, colour: Colour) {
+/// The hero behind the page (FR-DET-2): the Game's hero Artwork `art` filling the screen, or while
+/// there is none a gradient in the System's colour with soft shapes. Either is darkened towards the
+/// text on the left and the bottom.
+fn draw_hero(gfx: &mut Gfx<'_>, colour: Colour, art: &Art) {
     let screen = Rect::new(0.0, 0.0, W, H);
-    gfx.fill_round_rect_gradient(screen, 0.0, colour, cover::shade(colour), (1.0, 1.0));
-    gfx.fill_circle(1500.0, 330.0, 420.0, WHITE.alpha(0.08));
-    gfx.fill_circle(1500.0, 330.0, 230.0, WHITE.alpha(0.08));
-    gfx.fill_circle(1150.0, 900.0, 300.0, BLACK.alpha(0.15));
+    match art {
+        Art::Ready(picture) => gfx.draw_picture(picture, screen, 0.0),
+        Art::Loading | Art::Placeholder => {
+            gfx.fill_round_rect_gradient(screen, 0.0, colour, cover::shade(colour), (1.0, 1.0));
+            gfx.fill_circle(1500.0, 330.0, 420.0, WHITE.alpha(0.08));
+            gfx.fill_circle(1500.0, 330.0, 230.0, WHITE.alpha(0.08));
+            gfx.fill_circle(1150.0, 900.0, 300.0, BLACK.alpha(0.15));
+        }
+    }
     let mid = 0.55 * W;
     gfx.fill_round_rect_gradient(
         Rect::new(0.0, 0.0, mid, H),
@@ -459,8 +466,9 @@ impl Screen for DetailsPage {
         self.sync_missing(ctx);
         self.poll_size();
         let colour = Colour::hex(self.system.map_or(0x5B6477, |s| s.colour));
-        draw_hero(gfx, colour);
-        cover::draw(gfx, COVER, &self.game, false, false);
+        draw_hero(gfx, colour, &ctx.artwork.hero(&ctx.library, &self.game));
+        let art = ctx.artwork.cover(&ctx.library, &self.game);
+        cover::draw(gfx, COVER, &self.game, &art, false, false);
 
         let pill_style = TextStyle::new(14, Weight::Bold, TEXT);
         let short = self.system.map_or("?", |s| s.short);

@@ -225,7 +225,7 @@ impl OptionsMenu {
         }
     }
 
-    fn draw_replace(&mut self, gfx: &mut Gfx<'_>) {
+    fn draw_replace(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
         self.pick_hits.clear();
         let heading = TextStyle::new(24, Weight::ExtraBold, TEXT);
         gfx.text(PANEL_X + 48.0, 238.0, "Favorites are full", heading, Align::Left);
@@ -242,6 +242,7 @@ impl OptionsMenu {
                 gfx,
                 Rect::new(PANEL_X + 48.0, y + 8.0, 56.0, 84.0),
                 game,
+                &ctx.artwork.cover(&ctx.library, game),
                 false,
                 false,
             );
@@ -342,7 +343,7 @@ impl Screen for OptionsMenu {
         Transition::None
     }
 
-    fn draw(&mut self, gfx: &mut Gfx<'_>, _: &Ctx) {
+    fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
         gfx.fill_rect(Rect::new(0.0, 0.0, W, H), Colour::hex(0x000000).alpha(0.62));
         gfx.fill_rect(Rect::new(PANEL_X, 0.0, PANEL_W, H), SURFACE);
         gfx.fill_rect(Rect::new(PANEL_X, 0.0, 1.0, H), LINE);
@@ -350,6 +351,7 @@ impl Screen for OptionsMenu {
             gfx,
             Rect::new(PANEL_X + 48.0, 64.0, 96.0, 144.0),
             &self.game,
+            &ctx.artwork.cover(&ctx.library, &self.game),
             false,
             false,
         );
@@ -365,7 +367,7 @@ impl Screen for OptionsMenu {
             }
             View::Replace => {
                 self.item_hits.clear();
-                self.draw_replace(gfx);
+                self.draw_replace(gfx, ctx);
             }
         }
     }
