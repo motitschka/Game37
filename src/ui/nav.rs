@@ -43,6 +43,12 @@ pub trait Screen {
     fn busy(&self) -> bool {
         false
     }
+    /// Whether it has a text field active, while it is the top screen: the app then turns on the
+    /// system's text input, and keys type into the field as [`Input::Text`] instead of acting
+    /// (FR-UI-1).
+    fn text_input(&self) -> bool {
+        false
+    }
     /// The Pause Menu, if it is one.
     fn pause_menu(&mut self) -> Option<&mut PauseMenu> {
         None

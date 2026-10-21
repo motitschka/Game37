@@ -12,7 +12,8 @@ use sdl3::joystick::JoystickId;
 use sdl3::keyboard::Keycode;
 
 use super::input::{
-    Action, ButtonStyle, Input, InputKind, Repeat, button_action, key_action, stick_direction,
+    Action, ButtonStyle, Input, InputKind, Repeat, TextInput, button_action, key_action, stick_direction,
+    text_key,
 };
 
 /// Below this fraction of full deflection, an engaged stick direction releases. It engages at
@@ -118,6 +119,8 @@ fn stick_holds(dir: Action, fx: f32, fy: f32) -> bool {
 pub struct Controls {
     pub kind: InputKind,
     pub style: ButtonStyle,
+    /// Whether a text field is active: keys then type rather than act (see [`text_key`]).
+    pub text: bool,
     /// Held directions, oldest press first; the last one drives the repeat.
     held: Vec<(Source, Action)>,
     sticks: HashMap<JoystickId, Stick>,
@@ -129,6 +132,7 @@ impl Controls {
         Controls {
             kind,
             style: ButtonStyle::default(),
+            text: false,
             held: Vec::new(),
             sticks: HashMap::new(),
             repeat: Repeat::default(),
@@ -138,7 +142,21 @@ impl Controls {
     /// Handles an event that happened at `at` milliseconds, pushing the inputs it makes to `out`.
     pub fn handle(&mut self, at: u64, event: ControlEvent, out: &mut Vec<Input>) {
         match event {
+            // Held Backspace erases at the operating system's key repeat.
+            ControlEvent::KeyDown { key, repeat: true } if self.text => {
+                if let Some(erase @ Input::Text(_)) = text_key(key) {
+                    out.push(erase);
+                }
+            }
             ControlEvent::KeyDown { repeat: true, .. } => {}
+            ControlEvent::KeyDown { key, repeat: false } if self.text => {
+                self.kind = InputKind::Keyboard;
+                match text_key(key) {
+                    Some(Input::Action(action)) => self.press(Source::Keyboard, action, at, out),
+                    Some(input) => out.push(input),
+                    None => {}
+                }
+            }
             ControlEvent::KeyDown { key, repeat: false } => {
                 self.kind = InputKind::Keyboard;
                 if let Some(action) = key_action(key) {
@@ -188,6 +206,15 @@ impl Controls {
                     stick.dir = None;
                 }
             }
+        }
+    }
+
+    /// Text the keyboard typed (SDL's text input event), as one input per character; nothing unless
+    /// a text field is active.
+    pub fn typed(&mut self, text: &str, out: &mut Vec<Input>) {
+        if self.text {
+            self.kind = InputKind::Keyboard;
+            out.extend(text.chars().map(|c| Input::Text(TextInput::Char(c))));
         }
     }
 
@@ -324,6 +351,53 @@ mod tests {
     fn stick_flicked_across_releases_then_presses_the_other_way() {
         let events = [(0, stick(StickAxis::X, 0.8)), (100, stick(StickAxis::X, -0.8))];
         assert_eq!(run(&events, 449), [(0, Action::Right), (100, Action::Left)]);
+    }
+
+    #[test]
+    fn in_a_text_field_qefs_and_space_type_text_and_act_on_nothing() {
+        let mut controls = Controls::new(InputKind::Controller);
+        controls.text = true;
+        let mut out = Vec::new();
+        for key in [Keycode::Q, Keycode::E, Keycode::F, Keycode::S, Keycode::Space] {
+            controls.handle(0, key_down(key), &mut out);
+            controls.handle(1, key_up(key), &mut out);
+        }
+        assert_eq!(out, [], "no tab switch, Options, Sort or Confirm");
+        assert_eq!(controls.kind, InputKind::Keyboard);
+        controls.typed("qefs ", &mut out);
+        let typed: String = out
+            .iter()
+            .map(|i| match i {
+                Input::Text(TextInput::Char(c)) => *c,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(typed, "qefs ");
+
+        out.clear();
+        controls.handle(2, key_down(Keycode::Backspace), &mut out);
+        let repeat = ControlEvent::KeyDown {
+            key: Keycode::Backspace,
+            repeat: true,
+        };
+        controls.handle(3, repeat, &mut out);
+        controls.handle(4, key_down(Keycode::Return), &mut out);
+        let erase = Input::Text(TextInput::Backspace);
+        assert_eq!(
+            out,
+            [erase, erase, Input::Action(Action::Start)],
+            "held Backspace repeats"
+        );
+
+        controls.text = false;
+        out.clear();
+        controls.typed("q", &mut out);
+        controls.handle(5, key_down(Keycode::Q), &mut out);
+        assert_eq!(
+            out,
+            [Input::Action(Action::PrevTab)],
+            "outside a text field keys act again"
+        );
     }
 
     #[test]
