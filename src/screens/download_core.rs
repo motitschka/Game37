@@ -2,7 +2,7 @@
 //! modal progress screen pushed by `launch::confirm_game` when the Game's Core isn't installed
 //! yet. Done starts the Game; Failed turns the screen into the usual message modal.
 
-use crate::cores::{CoreInfo, Download, DownloadState};
+use crate::cores::{self, CoreInfo, Download, DownloadState};
 use crate::ctx::Ctx;
 use crate::library::db::GameRow;
 use crate::screens::message::{self, Message, PANEL_W};
@@ -139,6 +139,11 @@ impl Screen for DownloadCore {
         };
         match state {
             DownloadState::Done(_) => match &self.step {
+                Step::Assets(_) if cores::installed_path(&ctx.data_dir, self.core).is_file() => {
+                    // The Core was already installed; only its assets were missing.
+                    ctx.play = Some(self.game.clone());
+                    Transition::Pop
+                }
                 Step::Assets(_) => {
                     let download = (ctx.start_download)(self.core, ctx.data_dir.clone());
                     self.step = Step::Core(download);
@@ -235,10 +240,11 @@ mod tests {
     use super::*;
     use crate::cores::PPSSPP;
     use crate::cores::SAMEBOY;
-    use crate::cores::testing::{core_zip, spawn, spawn_failing};
+    use crate::cores::testing::{assets_zip, core_zip, spawn, spawn_assets, spawn_failing};
     use crate::launch::confirm_game;
     use crate::library::FoundGame;
     use crate::library::db::SortOrder;
+    use std::fs;
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -347,6 +353,32 @@ mod tests {
         let screen = DownloadCore::new(g, &PPSSPP, download);
         let label = screen.label();
         assert!(!label.contains("2 of 2"), "{label}");
+    }
+
+    /// With PPSSPP's Core already installed and only its assets missing, finishing the assets
+    /// step plays straight away instead of downloading the Core again.
+    #[test]
+    fn assets_finishing_with_the_core_already_installed_skips_the_core_download() {
+        let mut ctx = Ctx::empty();
+        let dir = tempfile::tempdir().unwrap();
+        ctx.data_dir = dir.path().to_owned();
+        let g = game(&mut ctx);
+        let core_path = crate::cores::installed_path(&ctx.data_dir, &PPSSPP);
+        fs::create_dir_all(core_path.parent().unwrap()).unwrap();
+        fs::write(&core_path, b"already installed").unwrap();
+        ctx.start_download = Box::new(|_, _| panic!("the Core is already installed"));
+        let assets = spawn_assets(
+            ctx.data_dir.clone(),
+            assets_zip(&[("PPSSPP/flash0/font/a.pgf", b"font data")]),
+            None,
+        );
+        let mut screen = DownloadCore::new_with_assets(g.clone(), &PPSSPP, assets);
+        wait_for(&mut screen, |s| match s.tick(&mut ctx) {
+            Transition::Pop => Some(()),
+            Transition::None => None,
+            _ => panic!("unexpected transition"),
+        });
+        assert_eq!(ctx.play.as_ref().map(|g| g.id), Some(g.id));
     }
 
     #[test]
