@@ -748,7 +748,9 @@ mod tests {
         let Transition::Push(mut menu) = home.handle(Input::Action(Action::Options), &mut ctx) else {
             panic!("Y should open the Options Menu");
         };
-        menu.handle(Input::Action(Action::Down), &mut ctx); // past the actions not built yet
+        // Past the actions not built yet, and Rename, to Hide.
+        menu.handle(Input::Action(Action::Down), &mut ctx);
+        menu.handle(Input::Action(Action::Down), &mut ctx);
         assert!(matches!(
             menu.handle(Input::Action(Action::Confirm), &mut ctx),
             Transition::Pop

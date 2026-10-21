@@ -391,6 +391,14 @@ impl Library {
     }
 
     /// Sets the player's title for a Game; `None` restores the cleaned title.
+    /// Game `id`'s cleaned-up title from its file or folder name, which a rename overrides.
+    pub fn cleaned_title(&self, id: i64) -> Result<Option<String>, DbError> {
+        Ok(self
+            .conn
+            .query_row("SELECT title FROM games WHERE id = ?1", [id], |r| r.get(0))
+            .optional()?)
+    }
+
     pub fn rename(&self, id: i64, title: Option<String>) -> Result<(), DbError> {
         self.conn.execute(
             "UPDATE games SET renamed_title = ?2 WHERE id = ?1",
