@@ -75,4 +75,4 @@ states/
 /.claude/worktrees/
 
 # Local test data: Cores and homebrew test ROMs, never committed
-/.testdata/
+/.testdata
