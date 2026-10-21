@@ -373,31 +373,13 @@ impl Session {
         format!("{} · {} played", self.system.name, playtime_label(secs))
     }
 
-    /// Slot `n`'s time and screenshot, `None` when it is empty.
-    fn slot_info(&self, n: usize) -> Option<SlotInfo> {
-        let modified = fs::metadata(self.states.slot(n))
-            .and_then(|m| m.modified())
-            .ok()?;
-        let thumb = states::read_png(&self.states.thumb(n))
-            .map_err(|e| {
-                if e.kind() != std::io::ErrorKind::NotFound {
-                    eprintln!("game37: can't read {}: {e}", self.states.thumb(n).display());
-                }
-            })
-            .ok();
-        Some(SlotInfo {
-            when: when_label(modified),
-            thumb,
-        })
-    }
-
     /// Writes slot `n`'s Save State and a screenshot of the current frame (FR-EMB-5).
     fn save_slot(&mut self, n: usize) -> Result<SlotInfo, String> {
         let state = self.core.serialize().map_err(|e| e.to_string())?;
         let png = states::encode_png(&states::frame_rgb(self.core.frame()));
         states::write_slot(&self.states.slot(n), &state, &self.states.thumb(n), png)
             .map_err(|e| e.to_string())?;
-        self.slot_info(n).ok_or_else(|| "the slot is gone".to_owned())
+        slot_info(&self.states, n).ok_or_else(|| "the slot is gone".to_owned())
     }
 
     fn load_slot(&mut self, n: usize) -> Result<(), String> {
@@ -569,8 +551,7 @@ pub fn tick(
 /// What the pause trigger does: opens the Pause Menu over the session (FR-EMB-3).
 pub fn on_pause(nav: &mut Nav) {
     let Some(session) = running(nav) else { return };
-    let slots = (1..=SLOTS).map(|n| session.slot_info(n)).collect();
-    let menu = PauseMenu::new(&session.title, session.meta(), slots);
+    let menu = PauseMenu::new(&session.title, session.meta(), slot_infos(&session.states));
     nav.push(Box::new(menu));
 }
 
@@ -584,6 +565,28 @@ pub fn end(nav: &mut Nav, ctx: &mut Ctx) {
         }
         nav.pop();
     }
+}
+
+/// Slot `n`'s time and screenshot from `states`, `None` when it is empty. Read outside a session
+/// too, by the Options Menu's slot picker.
+pub fn slot_info(states: &StatePaths, n: usize) -> Option<SlotInfo> {
+    let modified = fs::metadata(states.slot(n)).and_then(|m| m.modified()).ok()?;
+    let thumb = states::read_png(&states.thumb(n))
+        .map_err(|e| {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("game37: can't read {}: {e}", states.thumb(n).display());
+            }
+        })
+        .ok();
+    Some(SlotInfo {
+        when: when_label(modified),
+        thumb,
+    })
+}
+
+/// Every slot's [`slot_info`], slot 1 first.
+pub fn slot_infos(states: &StatePaths) -> Vec<Option<SlotInfo>> {
+    (1..=SLOTS).map(|n| slot_info(states, n)).collect()
 }
 
 /// A file time as the Pause Menu shows it, in local time (see [`states::when_label`]).
@@ -698,6 +701,29 @@ mod tests {
         assert!(states.join("240p Test Suite (World).resume.state").exists());
         let mut session = Session::start(&game, &ctx, None, None, None).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(run(&mut session, 2), next, "the relaunch continues where it quit");
+    }
+
+    /// What the Pause Menu and the Options Menu's slot picker show, read without a session.
+    #[test]
+    fn slot_infos_read_the_filled_slots_with_their_screenshot_and_time() {
+        let dir = TempDir::new().unwrap();
+        let states = StatePaths::new(dir.path(), "snes", Path::new("snes/T.sfc"));
+        assert_eq!(slot_infos(&states), [None, None, None]);
+        let thumb = states::Rgb {
+            width: 2,
+            height: 1,
+            data: vec![255, 0, 0, 0, 0, 255],
+        };
+        let png = states::encode_png(&thumb);
+        states::write_slot(&states.slot(2), b"state", &states.thumb(2), png).unwrap();
+        let infos = slot_infos(&states);
+        assert_eq!(
+            (infos.len(), infos[0].is_none(), infos[2].is_none()),
+            (SLOTS, true, true)
+        );
+        let slot2 = infos[1].as_ref().expect("slot 2 is filled");
+        assert_eq!(slot2.thumb.as_ref(), Some(&thumb));
+        assert!(slot2.when.starts_with("Today, "), "{}", slot2.when);
     }
 
     #[test]
