@@ -74,9 +74,13 @@ shot m4-ds "$root/cfg.toml" "nexttab,right,right,right,right,right,right,right,c
     --frames 300
 shot m4-psp "$root/cfg.toml" "nexttab,left,left,left,confirm,confirm,confirm" --frames 900
 shot m4-ps1-no-bios "$root/cfg.toml" "nexttab,left,left,left,left,left,confirm,confirm,confirm"
-# M5: the Details Page, the Options Menu, the Favorite replace picker (six Favorites asked for)
+# M5: the Details Page, the Options Menu, the Favorite replace picker (six Favorites asked for),
+# renaming
 shot m5-details "$root/cfg.toml" "nexttab,right,right,confirm,confirm"
 shot m5-options "$root/cfg.toml" "down,down,options"
 shot m5-favorite-replace "$root/cfg.toml" "down,down$(printf ',options,confirm,right%.0s' {1..5}),options,confirm,down"
+# Rename with the on-screen keyboard: erase the Display Title, then Shift, m, k and a space
+shot m5-rename "$root/cfg.toml" \
+    "down,down,options,down,confirm$(printf ',options%.0s' {1..40}),down,down,confirm,$(printf 'right,%.0s' {1..7})confirm,up,left,confirm,sort,up"
 
 echo "screenshots in $out"
