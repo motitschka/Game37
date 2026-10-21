@@ -568,6 +568,77 @@ mod tests {
         );
     }
 
+    /// A host whose context is made, with one OpenGL function (`glGenTextures`) resolvable; the
+    /// rest, including the next one `Gl::load` asks for, missing.
+    struct OneFunction;
+
+    unsafe extern "C" fn stub_fn() {}
+
+    unsafe extern "C" fn one_function(sym: *const std::ffi::c_char) -> ProcAddress {
+        // SAFETY: the loader's contract (`HwGetProcAddressFn`) promises a NUL-terminated name.
+        let name = unsafe { CStr::from_ptr(sym) };
+        if name.to_bytes() == b"glGenTextures" {
+            Some(stub_fn)
+        } else {
+            None
+        }
+    }
+
+    impl GlHost for OneFunction {
+        fn create_context(&mut self, _: GlRequest) -> Result<(), String> {
+            Ok(())
+        }
+        fn make_core_current(&mut self) {}
+        fn make_frontend_current(&mut self) {}
+        fn loader(&self) -> HwGetProcAddressFn {
+            one_function
+        }
+        fn destroy_context(&mut self) {}
+    }
+
+    #[test]
+    fn the_loader_is_cleared_after_a_failed_start() {
+        let _serial = crate::libretro::tests::serial();
+        let mut state = callbacks::State::new(c"/sys".into(), c"/save".into());
+        state.gl_host = Some(Box::new(OneFunction));
+        callbacks::install(state);
+        let request = HwRequest {
+            gl: GlRequest {
+                core_profile: true,
+                major: 3,
+                minor: 3,
+            },
+            depth: false,
+            stencil: false,
+            bottom_left_origin: true,
+            context_reset: None,
+            context_destroy: None,
+        };
+        // SAFETY: a NUL-terminated name.
+        assert!(
+            unsafe { callbacks::get_proc_address(c"glGenTextures".as_ptr()) }.is_none(),
+            "no loader installed before start"
+        );
+        let resolved_while_running = Rc::new(RefCell::new(false));
+        let resolved = resolved_while_running.clone();
+        let started = Hw::start(request, 480, 272, move || {
+            // SAFETY: as above; this runs before `set_loader(None)`, so the loader is still live.
+            let addr = unsafe { callbacks::get_proc_address(c"glGenTextures".as_ptr()) };
+            *resolved.borrow_mut() = addr.is_some();
+        });
+        callbacks::remove();
+        assert!(started.is_err());
+        assert!(
+            *resolved_while_running.borrow(),
+            "glGenTextures resolved while the Core was shutting down"
+        );
+        // SAFETY: as above.
+        assert!(
+            unsafe { callbacks::get_proc_address(c"glGenTextures".as_ptr()) }.is_none(),
+            "the loader is cleared after the failed start"
+        );
+    }
+
     #[test]
     fn requests_name_their_profile() {
         let core = GlRequest {
