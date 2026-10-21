@@ -699,6 +699,41 @@ mod tests {
     }
 
     #[test]
+    fn options_y_or_a_right_click_on_a_shelf_game_opens_its_options_menu() {
+        let mut ctx = Ctx::empty();
+        let games: Vec<_> = (0..3).map(found).collect();
+        ctx.library.sync_system("snes", &games, 0).unwrap();
+        let mut home = Home::new();
+        home.handle(Input::Action(Action::Down), &mut ctx); // initial load
+        let recently_added = 2; // Shelf::ALL's index for Shelf::RecentlyAdded
+        home.focus.shelf = recently_added;
+        let title = |home: &Home, col: usize| home.shelves[recently_added].games[col].title.clone();
+        assert!(home.hints().contains(&Hint::new(&[Action::Options], "Options")));
+
+        let Transition::Push(menu) = home.handle(Input::Action(Action::Options), &mut ctx) else {
+            panic!("Y should open the Options Menu");
+        };
+        assert!(menu.is_modal());
+        assert_eq!(menu.title(), title(&home, 0));
+
+        home.hits = vec![(Rect::new(0.0, 0.0, 50.0, 50.0), Target::Item(recently_added, 2))];
+        let Transition::Push(menu) =
+            home.handle(Input::Pointer(Pointer::RightClick { x: 10.0, y: 10.0 }), &mut ctx)
+        else {
+            panic!("a right-click should open the Options Menu");
+        };
+        assert_eq!(menu.title(), title(&home, 2), "for the Game right-clicked");
+        assert_eq!(home.focus.col(), 2, "which takes focus");
+
+        home.focus.cols[recently_added] = 3; // See all
+        assert!(matches!(
+            home.handle(Input::Action(Action::Options), &mut ctx),
+            Transition::None
+        ));
+        assert!(ctx.play.is_none() && ctx.launch.is_none());
+    }
+
+    #[test]
     fn a_hit_rect_above_the_view_is_clipped_so_a_click_there_misses() {
         let view = Rect::new(0.0, VIEW_TOP, W, VIEW_H);
         // A cover scrolled so most of it sits above the top bar; only its bottom sliver is

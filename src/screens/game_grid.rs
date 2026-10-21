@@ -870,6 +870,48 @@ mod tests {
     }
 
     #[test]
+    fn options_y_or_a_right_click_on_a_grid_game_opens_its_options_menu() {
+        let mut ctx = Ctx::empty();
+        let games: Vec<_> = (0..3).map(found).collect();
+        ctx.library.sync_system("snes", &games, 0).unwrap();
+        let mut grid =
+            GameGrid::new("SNES", console_source()).sortable(Colour::hex(0), "hint".into(), snes());
+        grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+        assert!(grid.hints().contains(&Hint::new(&[Action::Options], "Options")));
+
+        let Transition::Push(menu) = grid.handle(Input::Action(Action::Options), &mut ctx) else {
+            panic!("Y should open the Options Menu");
+        };
+        assert!(menu.is_modal());
+        assert_eq!(menu.title(), "B000");
+
+        grid.hits = vec![(Rect::new(0.0, 0.0, 50.0, 50.0), 2)];
+        let Transition::Push(menu) =
+            grid.handle(Input::Pointer(Pointer::RightClick { x: 10.0, y: 10.0 }), &mut ctx)
+        else {
+            panic!("a right-click should open the Options Menu");
+        };
+        assert_eq!(menu.title(), "B002", "for the Game right-clicked");
+        assert_eq!(grid.focus, 2, "which takes focus");
+        assert!(matches!(
+            grid.handle(Input::Pointer(Pointer::RightClick { x: 99.0, y: 99.0 }), &mut ctx),
+            Transition::None
+        ));
+    }
+
+    #[test]
+    fn options_on_an_empty_grid_opens_nothing() {
+        let mut ctx = Ctx::empty();
+        let mut grid =
+            GameGrid::new("SNES", console_source()).sortable(Colour::hex(0), "hint".into(), snes());
+        assert!(matches!(
+            grid.handle(Input::Action(Action::Options), &mut ctx),
+            Transition::None
+        ));
+        assert!(!grid.hints().contains(&Hint::new(&[Action::Options], "Options")));
+    }
+
+    #[test]
     fn step_focus_moves_between_the_notice_buttons_and_the_grid() {
         use NoticeFocus::{Check, Copy};
         assert_eq!(step_focus(Some(Copy), 0, Action::Right, 20, 8), (Some(Check), 0));
