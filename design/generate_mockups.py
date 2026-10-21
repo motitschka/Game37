@@ -23,6 +23,9 @@ C = {
     "dim": "#5B6477",
     "accent": "#8B7BFF",
     "star": "#FFC84A",
+    "ahead": "#3DDC84",  # Split delta: ahead of the comparison
+    "behind": "#FF5C6C",  # Split delta: behind the comparison
+    "best": "#FFD23F",  # Split delta: new Best Segment
 }
 
 PALETTE = [
@@ -85,8 +88,9 @@ def tw(s, size, weight=400):
 
 
 class Svg:
-    def __init__(self, name, title):
+    def __init__(self, name, title, w=W, h=H):
         self.name, self.title, self.defs, self.body, self.n = name, title, [], [], 0
+        self.w, self.h = w, h
 
     def add(self, *parts):
         self.body.extend(parts)
@@ -111,7 +115,8 @@ class Svg:
 
     def save(self):
         OUT.mkdir(parents=True, exist_ok=True)
-        svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">'
+        w, h = self.w, self.h
+        svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">'
                f'<title>{escape(self.title)}</title><defs>{"".join(self.defs)}</defs>{"".join(self.body)}</svg>')
         (OUT / f"{self.name}.svg").write_text(svg)
 
@@ -597,9 +602,288 @@ def screen_ds():
     sv.save()
 
 
+# ---------- speedrun timer (M7) ----------
+
+def cs(t):
+    """'m:ss.cc' or 'h:mm:ss.cc' to hundredths of a second."""
+    *hm, sec = t.split(":")
+    mins = sum(int(v) * 60 ** (len(hm) - 1 - i) for i, v in enumerate(hm))
+    return mins * 6000 + round(float(sec) * 100)
+
+
+def fmt(c):
+    h, rest = divmod(c, 360000)
+    m, rest = divmod(rest, 6000)
+    s, cc = divmod(rest, 100)
+    return f"{h}:{m:02}:{s:02}.{cc:02}" if h else f"{m}:{s:02}.{cc:02}"
+
+
+def fmt_delta(d):
+    m, rest = divmod(abs(d), 6000)
+    s, cc = divmod(rest, 100)
+    return ("−" if d < 0 else "+") + (f"{m}:{s:02}.{cc:02}" if m else f"{s}.{cc:02}")
+
+
+def cumulative(segs):
+    out, total = [], 0
+    for seg in segs:
+        total += seg
+        out.append(total)
+    return out
+
+
+SMW = FAVS[0]
+SPLITS = ["Yoshi's Island", "Donut Plains", "Vanilla Dome", "Twin Bridges", "Forest of Illusion",
+          "Chocolate Island", "Valley of Bowser", "Bowser"]
+PB_SEGS = [cs(t) for t in ["2:48.12", "3:17.21", "3:36.47", "2:40.25", "2:48.59", "3:36.65", "3:15.62", "2:28.56"]]
+BEST_SEGS = [cs(t) for t in ["2:45.90", "3:12.48", "3:31.07", "2:38.66", "2:44.13", "3:30.82", "3:11.40", "2:26.95"]]
+RUN_SEGS = [cs(t) for t in ["2:50.04", "3:08.77", "3:39.10", "2:47.30"]]  # a Run partway, now on Split 5
+CATEGORIES = [("Any%", "24:31.47", 143), ("96 Exit", None, 3), ("11 Exit", "10:52.30", 61)]
+HISTORY = [("20 Oct 2026", "24:58.30"), ("19 Oct 2026", "24:31.47"), ("19 Oct 2026", "25:12.08"),
+           ("17 Oct 2026", "24:47.91"), ("14 Oct 2026", "25:40.66"), ("12 Oct 2026", "25:03.15"),
+           ("9 Oct 2026", "26:11.42"), ("5 Oct 2026", "26:58.70"), ("3 Oct 2026", "27:35.19")]
+
+
+def speedrun_header(sv, crumb, eyebrow, title, sub):
+    background(sv, glow=SYS["snes"][3], glow_opacity=0.35)
+    logo(sv)
+    sv.add(text(M + 150, 70, crumb, 20, 500, fill=C["muted"]), text(W - M, 76, "21:42", 24, 600, anchor="end"))
+    cover(sv, M, 136, 92, 138, SMW, show_sys=False)
+    x = M + 124
+    sv.add(text(x, 168, eyebrow, 15, 700, fill=C["accent"], ls=3), text(x - 2, 224, title, 48, 800),
+           text(x, 260, sub, 20, 500, fill=C["muted"]))
+
+
+def action_pill(sv, x, y, label, pad=None, primary=False, icon=None):
+    """A Details Page style action button, 64 high; returns its width."""
+    h, cy = 64, y + 32
+    lead = 46 if pad else (tw(icon, 22, 600) + 12 if icon else 0)
+    w = 28 + lead + tw(label, 22) + 28
+    if primary:
+        sv.add(rect(x, y, w, h, "#FFFFFF", rx=32), circle(x + 44, cy, 16, C["bg"]),
+               text(x + 44, cy + 6, pad, 16, 800, fill="#FFFFFF", anchor="middle"),
+               text(x + 28 + lead, cy + 8, label, 22, 800, fill=C["bg"]))
+        return w
+    sv.add(rect(x, y, w, h, C["surface"], rx=32, stroke=C["line"], sw=2, opacity=0.85))
+    if pad:
+        glyph(sv, x + 28, cy, pad)
+    elif icon:
+        sv.add(text(x + 28, cy + 8, icon, 22, 600, fill=C["muted"]))
+    sv.add(text(x + 28 + lead, cy + 8, label, 22, 700))
+    return w
+
+
+def screen_speedrun_page():
+    sv = Svg("11-speedrun-page", "Speedrun Page")
+    speedrun_header(sv, f"SNES   ›   {SMW['title']}   ›   Speedrun", "SPEEDRUN", SMW["title"],
+                    f"SNES  ·  {len(CATEGORIES)} Categories")
+    x = M
+    for label, pad, primary, icon in [("Start run", "A", True, None), ("Edit splits", "X", False, None),
+                                      ("New category", "Y", False, None), ("Rename", None, False, "✎"),
+                                      ("Delete", None, False, "✕")]:
+        x += action_pill(sv, x, 304, label, pad, primary, icon) + 16
+    # Categories
+    sv.add(text(M, 428, "CATEGORIES", 14, 700, fill=C["muted"], ls=1.5))
+    for i, (name, pb, attempts) in enumerate(CATEGORIES):
+        y = 448 + i * 108
+        if i == 0:
+            sv.add(rect(M - 24, y, 544, 96, C["surface2"], rx=14), rect(M - 24, y + 22, 5, 52, C["accent"], rx=2),
+                   text(M + 496, y + 58, "›", 26, 600, fill=C["muted"], anchor="end"))
+        sub = f"Personal Best {pb}" if pb else "No Personal Best yet"
+        sv.add(text(M, y + 44, name, 26, 700 if i == 0 else 600),
+               text(M, y + 76, f"{sub}  ·  {attempts} attempts", 18, 500, fill=C["muted"]))
+    # the focused Category
+    px, py, pw, ph = M + 560, 400, W - 2 * M - 560, 590
+    sv.add(rect(px, py, pw, ph, C["surface"], rx=18, opacity=0.75))
+    sv.add(text(px + 32, py + 56, "Any%", 30, 800),
+           text(px + pw - 32, py + 56, f"143 attempts  ·  {len(HISTORY)} finished Runs", 18, 500, fill=C["muted"],
+                anchor="end"))
+    c_pb, c_best, r = px + 520, px + 712, px + 712
+    sv.add(text(px + 32, py + 104, "SPLIT", 13, 700, fill=C["muted"], ls=1.5),
+           text(c_pb, py + 104, "PERSONAL BEST", 13, 700, fill=C["muted"], ls=1.5, anchor="end"),
+           text(c_best, py + 104, "BEST SEGMENT", 13, 700, fill=C["muted"], ls=1.5, anchor="end"))
+    for i, (name, t) in enumerate(zip(SPLITS, cumulative(PB_SEGS))):
+        y = py + 118 + i * 46
+        sv.add(rect(px + 32, y, r - px - 32, 1, C["line"]),
+               text(px + 32, y + 31, str(i + 1), 18, 500, fill=C["dim"]), text(px + 66, y + 31, name, 20, 500),
+               text(c_pb, y + 31, fmt(t), 20, 600, anchor="end"),
+               text(c_best, y + 31, fmt(BEST_SEGS[i]), 20, 500, fill=C["muted"], anchor="end"))
+    y = py + 118 + 8 * 46
+    sv.add(rect(px + 32, y, r - px - 32, 2, C["line"]),
+           text(px + 32, y + 40, "Sum of Best", 20, 700),
+           text(c_best, y + 40, fmt(sum(BEST_SEGS)), 20, 700, anchor="end"))
+    # Run history
+    hx = px + 768
+    hr = px + pw - 32
+    sv.add(rect(hx - 28, py + 84, 1, ph - 116, C["line"]),
+           text(hx, py + 104, "RUN HISTORY", 13, 700, fill=C["muted"], ls=1.5))
+    for i, (date, t) in enumerate(HISTORY):
+        y = py + 118 + i * 46
+        is_pb = t == CATEGORIES[0][1]
+        if is_pb:
+            sv.add(rect(hx - 12, y + 2, hr - hx + 24, 42, C["accent"], rx=10, opacity=0.16))
+        sv.add(text(hx, y + 31, date, 18, 500, fill=C["text"] if is_pb else C["muted"]),
+               text(hr, y + 31, t, 20, 700 if is_pb else 600, anchor="end"))
+        if is_pb:
+            sv.add(rect(hx + 124, y + 12, 112, 22, C["accent"], rx=11),
+                   text(hx + 180, y + 28, "PERSONAL BEST", 11, 800, anchor="middle", ls=1))
+    hintbar(sv, [(["A"], "Start run"), (["B"], "Back"), (["X"], "Edit splits"), (["Y"], "New category")])
+    sv.save()
+
+
+def screen_splits_editor():
+    sv = Svg("12-splits-editor", "Splits editor")
+    speedrun_header(sv, f"SNES   ›   {SMW['title']}   ›   Speedrun   ›   Any%", "EDIT SPLITS", "Any%",
+                    f"{SMW['title']}  ·  {len(SPLITS)} Splits")
+    lx, lw, focus = M, 1040, 2
+    c_pb, c_best = lx + 820, lx + 1000
+    sv.add(text(lx + 70, 336, "SPLIT", 13, 700, fill=C["muted"], ls=1.5),
+           text(c_pb, 336, "PERSONAL BEST", 13, 700, fill=C["muted"], ls=1.5, anchor="end"),
+           text(c_best, 336, "BEST SEGMENT", 13, 700, fill=C["muted"], ls=1.5, anchor="end"))
+    for i, (name, t) in enumerate(zip(SPLITS, cumulative(PB_SEGS))):
+        y = 352 + i * 70
+        if i == focus:
+            sv.add(rect(lx - 24, y, lw + 24, 60, C["surface2"], rx=14), rect(lx - 24, y + 12, 5, 36, C["accent"], rx=2),
+                   text(lx + 94 + tw(name, 24), y + 37, "▲", 16, 600, fill=C["muted"], anchor="middle"),
+                   text(lx + 122 + tw(name, 24), y + 37, "▼", 16, 600, fill=C["muted"], anchor="middle"))
+        else:
+            sv.add(rect(lx - 24, y, lw + 24, 60, C["surface"], rx=14, opacity=0.6))
+        sv.add(text(lx + 20, y + 38, str(i + 1), 20, 600, fill=C["dim"], anchor="middle"),
+               text(lx + 70, y + 39, name, 24, 700 if i == focus else 500),
+               text(c_pb, y + 38, fmt(t), 20, 500, fill=C["muted"], anchor="end"),
+               text(c_best, y + 38, fmt(BEST_SEGS[i]), 20, 500, fill=C["muted"], anchor="end"))
+    y = 352 + len(SPLITS) * 70
+    sv.add(rect(lx - 24, y, lw + 24, 60, "none", rx=14, stroke=C["line"], sw=2, dash="10 8"),
+           text(lx + 70, y + 39, "+  Add split", 22, 600, fill=C["muted"]))
+    # notes beside the list
+    nx = lx + lw + 64
+    sv.add(text(nx, 336, "GOOD TO KNOW", 13, 700, fill=C["muted"], ls=1.5))
+    notes = [("Finished Runs are kept.", "Editing Splits never discards a finished Run."),
+             ("New Splits start empty.", "A new Split has no times until a Run records one."),
+             ("Shared with LiveSplit.", "This Category is a LiveSplit file in")]
+    for i, (head, body) in enumerate(notes):
+        y = 352 + i * 132
+        sv.add(rect(nx, y, W - M - nx, 116, C["surface"], rx=14, opacity=0.75),
+               text(nx + 24, y + 44, head, 20, 700), text(nx + 24, y + 76, body, 17, 500, fill=C["muted"]))
+    sv.add(text(nx + 24, 352 + 2 * 132 + 102, "~/Games/splits/snes/Super Mario World (USA)/", 15, 400,
+                fill=C["muted"], font=MONO))
+    hintbar(sv, [(["A"], "Rename"), (["B"], "Back"), (["X"], "Add split"), (["Y"], "Remove"),
+                 (["L1", "R1"], "Move up / down")])
+    sv.save()
+
+
+def splits_panel(sv, x, y, w, row_h, timer, controls=True):
+    """The splits panel shared by the in-game view and the Timer Window, for the Run in RUN_SEGS."""
+    r = x + w - 24
+    sv.add(text(x + 24, y + 38, SMW["title"], 22, 800), text(x + 24, y + 66, "Any%", 18, 600, fill=C["muted"]),
+           text(r, y + 66, "Attempt 144", 16, 500, fill=C["muted"], anchor="end"),
+           rect(x + 24, y + 88, w - 48, 1, C["line"]))
+    top, cur = y + 96, len(RUN_SEGS)
+    pb, run = cumulative(PB_SEGS), cumulative(RUN_SEGS)
+    for i, name in enumerate(SPLITS):
+        ty = top + i * row_h
+        base = ty + row_h / 2 + 7
+        if i == cur:
+            sv.add(rect(x + 12, ty + 3, w - 24, row_h - 6, C["surface2"], rx=10),
+                   rect(x + 12, ty + row_h / 2 - 12, 4, 24, C["accent"], rx=2))
+        sv.add(text(x + 28, base, name, 20, 700 if i == cur else 500, fill=C["text"] if i <= cur else C["muted"]))
+        if i < cur:
+            d = run[i] - pb[i]
+            col = C["best"] if RUN_SEGS[i] < BEST_SEGS[i] else C["ahead"] if d < 0 else C["behind"]
+            sv.add(text(x + w - 150, base, fmt_delta(d), 18, 700, fill=col, anchor="end"),
+                   text(r, base, fmt(run[i]), 20, 600, anchor="end"))
+        else:
+            sv.add(text(r, base, fmt(pb[i]), 20, 500, fill=C["muted"], anchor="end"))
+    t = top + len(SPLITS) * row_h + 8
+    main, hundredths = timer.rsplit(".", 1)
+    sv.add(rect(x + 24, t, w - 48, 1, C["line"]),
+           f'<text x="{r:.1f}" y="{t + 92:.1f}" font-family="{FONT}" font-size="80" font-weight="800"'
+           f' fill="{C["text"]}" text-anchor="end">{main}<tspan font-size="46">.{hundredths}</tspan></text>')
+    sob = sum(min(b, RUN_SEGS[i]) if i < cur else b for i, b in enumerate(BEST_SEGS))
+    for k, (label, val) in enumerate([("Personal Best", pb[-1]), ("Sum of Best", sob)]):
+        sv.add(text(x + 24, t + 138 + k * 32, label, 18, 500, fill=C["muted"]),
+               text(r, t + 138 + k * 32, fmt(val), 18, 700, anchor="end"))
+    sv.add(text(x + 24, t + 212, "COMPARE AGAINST", 12, 700, fill=C["muted"], ls=1.5))
+    half = (w - 48) / 2
+    sv.add(rect(x + 24, t + 224, w - 48, 40, C["surface2"], rx=20),
+           rect(x + 28, t + 228, half - 4, 32, C["accent"], rx=16),
+           text(x + 24 + half / 2, t + 250, "Personal Best", 16, 700, anchor="middle"),
+           text(x + 24 + half * 1.5, t + 250, "Sum of Best", 16, 500, fill=C["muted"], anchor="middle"))
+    if controls:
+        gx = x + 24
+        gx += glyph(sv, gx, t + 300, "Share") + 10
+        sv.add(text(gx, t + 306, "or", 16, 500, fill=C["dim"]))
+        gx += tw("or", 16) + 10
+        gx += glyph(sv, gx, t + 300, "Numpad 1") + 14
+        sv.add(text(gx, t + 306, "Split", 16, 500, fill=C["muted"]))
+
+
+def run_view(sv, timer):
+    """An embedded Run on a 4:3 System: picture at the left edge, splits panel in the 480 px it leaves."""
+    sv.add(rect(0, 0, W, H, "#000000"))
+    scene(sv, 0, 0, 1440, 1080)
+    sv.add(rect(1440, 0, 480, H, C["surface"]), rect(1440, 0, 1, H, C["line"]))
+    splits_panel(sv, 1440, 48, 480, 64, timer)
+
+
+def screen_speedrun_embedded():
+    sv = Svg("13-speedrun-embedded", "Embedded Run with splits panel")
+    run_view(sv, "13:58.42")
+    sv.save()
+
+
+def screen_pause_run():
+    sv = Svg("14-pause-menu-run", "Pause Menu during a Run")
+    run_view(sv, "14:06.15")
+    dim(sv, 0.6, w=1440)
+    sv.add(rect(0, 0, 600, H, C["surface"], opacity=0.94), rect(600, 0, 1, H, C["line"]))
+    sv.add(text(M, 150, "PAUSED", 15, 700, fill=C["accent"], ls=3), text(M, 206, SMW["title"], 40, 800),
+           text(M, 244, "SNES  ·  Any%  ·  Attempt 144", 19, 500, fill=C["muted"]))
+    groups = [[("Resume", None)],
+              [("Undo split", "Numpad 8"), ("Skip split", "Numpad 2"), ("Reset", "Numpad 3"),
+               ("Restart run", None), ("Hide timer", None)],
+              [("Save state", None), ("Load state", "Resets the Run"), ("Quit to library", "Resets the Run")]]
+    y, focus = 286, "Undo split"
+    for g, items in enumerate(groups):
+        if g:
+            sv.add(rect(M, y + 8, 408, 1, C["line"]))
+            y += 18
+        for label, extra in items:
+            if label == focus:
+                sv.add(rect(M - 24, y, 456, 60, C["surface2"], rx=14), rect(M - 24, y + 12, 5, 36, C["accent"], rx=2))
+            sv.add(text(M, y + 39, label, 24, 700 if label == focus else 500))
+            arrow = label in ("Save state", "Load state")
+            if extra:
+                sv.add(text(M + (380 if arrow else 408), y + 38, extra, 16, 500, fill=C["dim"], anchor="end"))
+            if arrow:
+                sv.add(text(M + 408, y + 39, "›", 26, 600, fill=C["muted"], anchor="end"))
+            y += 64
+    sv.add(text(M, 934, "The timer keeps running while paused.", 16, 500, fill=C["muted"]),
+           text(M, 962, "Opens with Guide, Select + Start, or Esc", 16, 500, fill=C["dim"]))
+    hintbar(sv, [(["A"], "Choose"), (["B"], "Resume")])
+    sv.save()
+
+
+def screen_timer_window():
+    ww, wh, bar = 480, 840, 40
+    sv = Svg("15-timer-window", "Timer Window", ww, wh)
+    sv.add(rect(0.5, 0.5, ww - 1, wh - 1, C["surface"], rx=12, stroke=C["line"], sw=1),
+           rect(0.5, 0.5, ww - 1, bar, C["surface2"], rx=12), rect(0.5, bar - 12, ww - 1, 12, C["surface2"]),
+           rect(0.5, bar, ww - 1, 1, C["line"]),
+           text(ww / 2, 26, "Game37 Timer", 15, 600, fill=C["muted"], anchor="middle"),
+           circle(ww - 22, 20, 11, C["line"]),
+           f'<path d="M{ww - 26},16 l8,8 M{ww - 18},16 l-8,8" stroke="{C["text"]}" stroke-width="1.8"'
+           f' stroke-linecap="round"/>')
+    splits_panel(sv, 0, bar, ww, 44, "13:58.42")
+    sv.add(f'<path d="M{ww - 8},{wh - 20} l-12,12 M{ww - 8},{wh - 13} l-5,5" stroke="{C["dim"]}"'
+           f' stroke-width="1.8" stroke-linecap="round"/>')
+    sv.save()
+
+
 if __name__ == "__main__":
     for fn in [screen_home, screen_home_empty, screen_carousel, screen_console_page, screen_details,
                screen_options, screen_pause, screen_ds, screen_console_missing_emulator,
-               screen_details_missing_emulator]:
+               screen_details_missing_emulator, screen_speedrun_page, screen_splits_editor,
+               screen_speedrun_embedded, screen_pause_run, screen_timer_window]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))
