@@ -4,6 +4,7 @@ pub mod config;
 pub mod cores;
 pub mod ctx;
 pub mod emulators;
+pub mod file_manager;
 pub mod launch;
 pub mod library;
 pub mod libretro;

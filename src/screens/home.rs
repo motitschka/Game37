@@ -5,6 +5,7 @@ use std::path::Path;
 
 use super::details::DetailsPage;
 use super::game_grid::GameGrid;
+use super::options::OptionsMenu;
 use crate::ctx::Ctx;
 use crate::library::db::{GameRow, SHELF_SIZE, Shelf};
 use crate::systems;
@@ -250,6 +251,15 @@ impl Home {
         }
     }
 
+    /// Y or a right-click on a Game opens its Options Menu (FR-DET-3).
+    fn options(&self) -> Transition {
+        let row = &self.shelves[self.focus.shelf];
+        match item_at(row.games.len(), self.focus.col()) {
+            Item::Game(i) => Transition::Push(Box::new(OptionsMenu::new(row.games[i].clone()))),
+            _ => Transition::None,
+        }
+    }
+
     fn draw_filled(&mut self, gfx: &mut Gfx<'_>, i: usize, base: f32) {
         let focused_shelf = self.focus.shelf == i;
         let col = self.focus.cols[i];
@@ -402,6 +412,7 @@ impl Screen for Home {
         self.reload_if_changed(ctx);
         match input {
             Input::Action(Action::Confirm) => return self.confirm(ctx),
+            Input::Action(Action::Options) => return self.options(),
             Input::Action(dir) if dir.is_direction() => {
                 if self.focus.step(dir, self.counts()) {
                     self.reveal(self.focus.shelf);
@@ -426,6 +437,13 @@ impl Screen for Home {
                 }
                 None => {}
             },
+            Input::Pointer(Pointer::RightClick { x, y }) => {
+                if let Some(Target::Item(s, c)) = hit(&self.hits, x, y) {
+                    self.focus.shelf = s;
+                    self.focus.cols[s] = c.min(self.counts()[s].saturating_sub(1));
+                    return self.options();
+                }
+            }
             Input::Pointer(Pointer::Wheel { dy }) => {
                 self.vscroll = scroll::clamp(self.vscroll - dy * WHEEL_STEP, self.content_h(), VIEW_H);
             }
@@ -469,7 +487,10 @@ impl Screen for Home {
         let mut hints = Vec::new();
         match item_at(row.games.len(), self.focus.col()) {
             Item::SeeAll => hints.push(Hint::new(&[Action::Confirm], "See all")),
-            Item::Game(_) => hints.push(Hint::new(&[Action::Confirm], "Details")),
+            Item::Game(_) => {
+                hints.push(Hint::new(&[Action::Confirm], "Details"));
+                hints.push(Hint::new(&[Action::Options], "Options"));
+            }
             _ => {}
         }
         hints.push(Hint::new(&[Action::PrevTab, Action::NextTab], "Switch view"));

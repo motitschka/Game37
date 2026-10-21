@@ -4,6 +4,7 @@
 use std::time::{Duration, Instant};
 
 use super::details::DetailsPage;
+use super::options::OptionsMenu;
 use crate::ctx::Ctx;
 use crate::emulators::Emulator;
 use crate::library::db::{DbError, GameRow, Library, SortOrder};
@@ -178,6 +179,14 @@ impl GameGrid {
     fn confirm(&self, ctx: &mut Ctx) -> Transition {
         match self.games.get(self.focus) {
             Some(game) => Transition::Push(Box::new(DetailsPage::new(game.clone(), ctx))),
+            None => Transition::None,
+        }
+    }
+
+    /// Y or a right-click on a Game opens its Options Menu (FR-DET-3).
+    fn options(&self) -> Transition {
+        match self.games.get(self.focus) {
+            Some(game) => Transition::Push(Box::new(OptionsMenu::new(game.clone()))),
             None => Transition::None,
         }
     }
@@ -494,6 +503,14 @@ impl Screen for GameGrid {
                 self.notice_focus = self.notice_button_at(x, y);
             }
             Input::Action(Action::Confirm) => return self.confirm(ctx),
+            Input::Action(Action::Options) if self.notice_focus.is_none() => return self.options(),
+            Input::Pointer(Pointer::RightClick { x, y }) => {
+                if let Some(i) = hit(&self.hits, x, y) {
+                    self.focus = i.min(self.games.len().saturating_sub(1));
+                    self.notice_focus = None;
+                    return self.options();
+                }
+            }
             Input::Pointer(Pointer::Move { x, y }) => {
                 if let Some(i) = hit(&self.hits, x, y) {
                     self.focus = i.min(self.games.len().saturating_sub(1));
@@ -630,6 +647,7 @@ impl Screen for GameGrid {
                 let mut hints = Vec::new();
                 if !self.games.is_empty() {
                     hints.push(Hint::new(&[Action::Confirm], "Details"));
+                    hints.push(Hint::new(&[Action::Options], "Options"));
                 }
                 if self.extra.is_some() && !self.games.is_empty() {
                     hints.push(Hint::new(&[Action::Sort], "Sort"));

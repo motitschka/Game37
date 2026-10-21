@@ -30,6 +30,9 @@ pub struct Ctx {
     /// Text a screen wants put on the system clipboard (FR-CAR-9): the screen layer has no SDL
     /// handle, so it leaves the request here for the app's event loop to carry out.
     pub clipboard_request: Option<String>,
+    /// A Game's file or folder a screen wants shown in the file manager (US-16); `app.rs` takes it
+    /// and carries it out, so no screen or test starts a process.
+    pub show_file_request: Option<PathBuf>,
     /// A Game a screen asked to play; `app.rs` takes it and starts its Standalone Emulator.
     pub launch: Option<GameRow>,
     /// A Game of an Embedded System a screen asked to play; `app.rs` takes it and starts it on
@@ -56,6 +59,7 @@ impl Ctx {
             emulators: Emulators::all_installed(),
             detect_emulators: Box::new(Emulators::detect),
             clipboard_request: None,
+            show_file_request: None,
             launch: None,
             play: None,
             start_download: Box::new(Download::start),

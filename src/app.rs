@@ -186,6 +186,9 @@ fn interactive(
             }
         }
         copy_clipboard_request(&mut ctx, &video);
+        if let Some(path) = ctx.show_file_request.take() {
+            crate::file_manager::show(&path);
+        }
         if let Some(session) = sdl::running(&mut nav) {
             session.set_shown(shown);
         }
@@ -271,6 +274,8 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
                 break 'steps;
             }
             copy_clipboard_request(&mut ctx, &video);
+            // Screenshot mode never opens the file manager.
+            ctx.show_file_request = None;
             if let Some(game) = ctx.launch.take() {
                 launcher.start(&game, &mut nav, &ctx);
             }
