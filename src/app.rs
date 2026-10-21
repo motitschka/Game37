@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::ffi::CStr;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use sdl3::event::{Event, WindowEvent};
@@ -52,6 +53,9 @@ pub fn run(options: Options) -> Result<(), String> {
                 ctx.scan_all(ctx::now()).map_err(|e| e.to_string())?;
             }
             ctx.simulate_emulators(shot.missing_emulators.clone());
+            if has_library && shot.artwork {
+                ctx.artwork = artwork(&path, &ctx.data_dir);
+            }
             let nav = screens::start(loaded, &path, &ctx);
             // Never starts a process: a launch shows the Playing screen for good.
             let launcher = Launcher::new(Box::new(NeverExits::default()), log_dir);
@@ -61,12 +65,7 @@ pub fn run(options: Options) -> Result<(), String> {
             ctx.animate = true;
             if has_library {
                 ctx.emulators = Emulators::detect();
-                // Without a key (or with an unreadable secrets.toml) Artwork is the cache only.
-                let key = config::load_api_key(&path).unwrap_or_else(|e| {
-                    eprintln!("game37: {e}");
-                    None
-                });
-                ctx.artwork = Artwork::start(ctx.data_dir.join("artwork"), key);
+                ctx.artwork = artwork(&path, &ctx.data_dir);
             }
             let nav = screens::start(loaded, &path, &ctx);
             let watcher = has_library.then(|| LibraryWatcher::start(ctx.games_root.clone()));
@@ -74,6 +73,16 @@ pub fn run(options: Options) -> Result<(), String> {
             interactive(nav, ctx, watcher, launcher)
         }
     }
+}
+
+/// Artwork cached under `data_dir`, fetched with the key in `secrets.toml` next to the Config at
+/// `config_path`. Without a key (or with an unreadable secrets.toml) it is the cache only.
+fn artwork(config_path: &Path, data_dir: &Path) -> Artwork {
+    let key = config::load_api_key(config_path).unwrap_or_else(|e| {
+        eprintln!("game37: {e}");
+        None
+    });
+    Artwork::start(data_dir.join("artwork"), key)
 }
 
 /// A window with an SDL_Renderer on the named backend, presenting logical 1920×1080 letterboxed.
@@ -257,7 +266,7 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
         pointer: None,
     };
     let clock = clock();
-    let mut hits = draw(&mut gfx, &mut nav, &ctx, &view, &clock);
+    let mut hits = draw_settled(&mut gfx, &mut nav, &ctx, &view, &clock);
     gfx.present();
     'steps: for step in shot.steps {
         let mut esc = false;
@@ -323,7 +332,7 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
                 }
             }
             ctx.input_kind = view.kind;
-            hits = draw(&mut gfx, &mut nav, &ctx, &view, &clock);
+            hits = draw_settled(&mut gfx, &mut nav, &ctx, &view, &clock);
             gfx.present();
         }
     }
@@ -337,7 +346,7 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
             Mouse::default(),
             |_| false,
         );
-        draw(&mut gfx, &mut nav, &ctx, &view, &clock);
+        draw_settled(&mut gfx, &mut nav, &ctx, &view, &clock);
         if frame < shot.frames {
             gfx.present();
         }
@@ -345,6 +354,23 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
     let saved = gfx.save_bmp(&shot.out);
     sdl::end(&mut nav, &mut ctx);
     saved
+}
+
+/// Draws a screenshot frame. Artwork the frame asks for (`--artwork`) loads in the background:
+/// wait for it and draw the frame again once it has arrived, so the screenshot is deterministic,
+/// with a cap in case it never does. Without `--artwork` nothing is ever loading.
+fn draw_settled(gfx: &mut Gfx<'_>, nav: &mut Nav, ctx: &Ctx, view: &View, clock: &str) -> Hits {
+    let mut hits = draw(gfx, nav, ctx, view, clock);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while ctx.artwork.busy() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(1));
+        ctx.artwork.poll(&ctx.library);
+        // Drawing again may ask for more, which the loop then waits for too.
+        if !ctx.artwork.busy() {
+            hits = draw(gfx, nav, ctx, view, clock);
+        }
+    }
+    hits
 }
 
 /// The display refresh rate screenshot mode pretends to have: each step and frame is 1/60 s.
