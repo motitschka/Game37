@@ -179,3 +179,7 @@ M6 follows: Settings, search, window modes, First-run Setup, README.
 M7, the speedrun timer, comes after v1: own Splits per Game in LiveSplit `.lss` files, a timer beside
 embedded games, and a separate Timer Window for every Run (FR-RUN-1–14, ADRs 0012 and 0013).
 It needs M6's on-screen keyboard and Settings.
+
+The README was written in full on 2026-10-21, ahead of M6. M6 still owes it: rewrite "Setting up"
+for First-run Setup, and describe Settings and search. Since then Game37 is GPL-3.0-or-later
+(`LICENSE`, ADR 0014).
