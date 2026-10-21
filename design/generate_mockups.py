@@ -638,7 +638,7 @@ SPLITS = ["Yoshi's Island", "Donut Plains", "Vanilla Dome", "Twin Bridges", "For
 PB_SEGS = [cs(t) for t in ["2:48.12", "3:17.21", "3:36.47", "2:40.25", "2:48.59", "3:36.65", "3:15.62", "2:28.56"]]
 BEST_SEGS = [cs(t) for t in ["2:45.90", "3:12.48", "3:31.07", "2:38.66", "2:44.13", "3:30.82", "3:11.40", "2:26.95"]]
 RUN_SEGS = [cs(t) for t in ["2:50.04", "3:08.77", "3:39.10", "2:47.30"]]  # a Run partway, now on Split 5
-CATEGORIES = [("Any%", "24:31.47", 143), ("96 Exit", None, 3), ("11 Exit", "10:52.30", 61)]
+CATEGORIES = [("11 Exit", "24:31.47", 143), ("96 Exit", None, 3), ("0 Exit", "1:02.84", 61)]
 HISTORY = [("20 Oct 2026", "24:58.30"), ("19 Oct 2026", "24:31.47"), ("19 Oct 2026", "25:12.08"),
            ("17 Oct 2026", "24:47.91"), ("14 Oct 2026", "25:40.66"), ("12 Oct 2026", "25:03.15"),
            ("9 Oct 2026", "26:11.42"), ("5 Oct 2026", "26:58.70"), ("3 Oct 2026", "27:35.19")]
@@ -679,8 +679,8 @@ def screen_speedrun_page():
                     f"SNES  ·  {len(CATEGORIES)} Categories")
     x = M
     for label, pad, primary, icon in [("Start run", "A", True, None), ("Edit splits", "X", False, None),
-                                      ("New category", "Y", False, None), ("Rename", None, False, "✎"),
-                                      ("Delete", None, False, "✕")]:
+                                      ("New category", "Y", False, None), ("Rename", None, False, None),
+                                      ("Delete", None, False, None)]:
         x += action_pill(sv, x, 304, label, pad, primary, icon) + 16
     # Categories
     sv.add(text(M, 428, "CATEGORIES", 14, 700, fill=C["muted"], ls=1.5))
@@ -695,7 +695,7 @@ def screen_speedrun_page():
     # the focused Category
     px, py, pw, ph = M + 560, 400, W - 2 * M - 560, 590
     sv.add(rect(px, py, pw, ph, C["surface"], rx=18, opacity=0.75))
-    sv.add(text(px + 32, py + 56, "Any%", 30, 800),
+    sv.add(text(px + 32, py + 56, "11 Exit", 30, 800),
            text(px + pw - 32, py + 56, f"143 attempts  ·  {len(HISTORY)} finished Runs", 18, 500, fill=C["muted"],
                 anchor="end"))
     c_pb, c_best, r = px + 520, px + 712, px + 712
@@ -733,7 +733,7 @@ def screen_speedrun_page():
 
 def screen_splits_editor():
     sv = Svg("12-splits-editor", "Splits editor")
-    speedrun_header(sv, f"SNES   ›   {SMW['title']}   ›   Speedrun   ›   Any%", "EDIT SPLITS", "Any%",
+    speedrun_header(sv, f"SNES   ›   {SMW['title']}   ›   Speedrun   ›   11 Exit", "EDIT SPLITS", "11 Exit",
                     f"{SMW['title']}  ·  {len(SPLITS)} Splits")
     lx, lw, focus = M, 1040, 2
     c_pb, c_best = lx + 820, lx + 1000
@@ -775,7 +775,7 @@ def screen_splits_editor():
 def splits_panel(sv, x, y, w, row_h, timer, controls=True):
     """The splits panel shared by the in-game view and the Timer Window, for the Run in RUN_SEGS."""
     r = x + w - 24
-    sv.add(text(x + 24, y + 38, SMW["title"], 22, 800), text(x + 24, y + 66, "Any%", 18, 600, fill=C["muted"]),
+    sv.add(text(x + 24, y + 38, SMW["title"], 22, 800), text(x + 24, y + 66, "11 Exit", 18, 600, fill=C["muted"]),
            text(r, y + 66, "Attempt 144", 16, 500, fill=C["muted"], anchor="end"),
            rect(x + 24, y + 88, w - 48, 1, C["line"]))
     top, cur = y + 96, len(RUN_SEGS)
@@ -838,7 +838,7 @@ def screen_pause_run():
     dim(sv, 0.6, w=1440)
     sv.add(rect(0, 0, 600, H, C["surface"], opacity=0.94), rect(600, 0, 1, H, C["line"]))
     sv.add(text(M, 150, "PAUSED", 15, 700, fill=C["accent"], ls=3), text(M, 206, SMW["title"], 40, 800),
-           text(M, 244, "SNES  ·  Any%  ·  Attempt 144", 19, 500, fill=C["muted"]))
+           text(M, 244, "SNES  ·  11 Exit  ·  Attempt 144", 19, 500, fill=C["muted"]))
     groups = [[("Resume", None)],
               [("Undo split", "Numpad 8"), ("Skip split", "Numpad 2"), ("Reset", "Numpad 3"),
                ("Restart run", None), ("Hide timer", None)],
