@@ -451,7 +451,7 @@ def screen_console_missing_emulator():
     sv.save()
 
 
-def details_page(name, title, g, sysid, emulator, stats, path, favorite=False, missing=False):
+def details_page(name, title, g, sysid, emulator, stats, path, favorite=False, missing=False, speedrun=False):
     sv = Svg(name, title)
     c1, c2 = PALETTE[g["pal"]]
     sv.add(rect(0, 0, W, H, sv.lin([(0, c1), (1, c2)], 0, 0, 1, 1)))
@@ -487,14 +487,23 @@ def details_page(name, title, g, sysid, emulator, stats, path, favorite=False, m
         sv.add(rect(x, 604, 270, 76, "#FFFFFF", rx=38))
         sv.add(circle(x + 52, 642, 17, C["bg"]), text(x + 52, 648, "A", 17, 800, fill="#FFFFFF", anchor="middle"),
                text(x + 86, 652, "Play", 28, 800, fill=C["bg"]))
-    sv.add(rect(x + 290, 604, 236, 76, C["surface"], rx=38, stroke=C["line"], sw=2, opacity=0.85))
-    glyph(sv, x + 322, 642, "Y")
-    sv.add(text(x + 368, 651, "Options", 24, 700))
+    ox = x + 290
+    if speedrun:
+        # M7: the Speedrun action sits between Play and Options (FR-RUN-1).
+        sv.add(rect(ox, 604, 260, 76, C["surface"], rx=38, stroke=C["line"], sw=2, opacity=0.85))
+        glyph(sv, ox + 32, 642, "X")
+        sv.add(text(ox + 78, 651, "Speedrun", 24, 700))
+        ox += 280
+    sv.add(rect(ox, 604, 236, 76, C["surface"], rx=38, stroke=C["line"], sw=2, opacity=0.85))
+    glyph(sv, ox + 32, 642, "Y")
+    sv.add(text(ox + 78, 651, "Options", 24, 700))
     if missing:
         sv.add(circle(x + 14, 731, 14, WARN), text(x + 14, 738, "!", 18, 800, fill=C["bg"], anchor="middle"),
                text(x + 40, 738, f"{emulator} isn't installed, so Play is off. The install command is on the "
                                  f"{SYS[sysid][1]} page.", 19, 500, fill=WARN))
         hintbar(sv, [(["B"], "Back"), (["Y"], "Options")])
+    elif speedrun:
+        hintbar(sv, [(["A"], "Play"), (["B"], "Back"), (["X"], "Speedrun"), (["Y"], "Options")])
     else:
         hintbar(sv, [(["A"], "Play"), (["B"], "Back"), (["Y"], "Options")])
     sv.save()
@@ -510,6 +519,12 @@ def screen_details_missing_emulator():
     details_page("10-details-emulator-missing", "Details Page (emulator missing)", WIIU[0], "wiiu", "Cemu",
                  [("PLAYTIME", "—"), ("LAST PLAYED", "Never"), ("ADDED", "17 Oct 2026"), ("SIZE", "22.4 GB")],
                  "~/Games/wiiu/Xenoblade Chronicles X/", missing=True)
+
+
+def screen_details_speedrun():
+    details_page("16-details-speedrun", "Details Page (Speedrun)", SMW, "snes", "Game37 · bsnes core",
+                 [("PLAYTIME", SMW["hours"]), ("LAST PLAYED", "Today"), ("SAVE STATES", "2 of 3"), ("SIZE", "512 KB")],
+                 "~/Games/snes/Super Mario World (USA).sfc", favorite=True, speedrun=True)
 
 
 def screen_options():
@@ -884,6 +899,6 @@ if __name__ == "__main__":
     for fn in [screen_home, screen_home_empty, screen_carousel, screen_console_page, screen_details,
                screen_options, screen_pause, screen_ds, screen_console_missing_emulator,
                screen_details_missing_emulator, screen_speedrun_page, screen_splits_editor,
-               screen_speedrun_embedded, screen_pause_run, screen_timer_window]:
+               screen_speedrun_embedded, screen_pause_run, screen_timer_window, screen_details_speedrun]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))
