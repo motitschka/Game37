@@ -55,6 +55,10 @@ pub struct DownloadCore {
     game: GameRow,
     core: &'static CoreInfo,
     step: Step,
+    /// Whether this screen runs an assets step (always before the Core step): only
+    /// [`DownloadCore::new_with_assets`] sets it, so the label counts steps this screen actually
+    /// runs rather than going by [`CoreInfo::system_in_data_dir`] alone.
+    assets_step: bool,
     progress: DownloadState,
     /// Set once the download fails; from then on this screen draws and behaves like `Message`.
     failed: Option<Message>,
@@ -62,21 +66,23 @@ pub struct DownloadCore {
 }
 
 impl DownloadCore {
-    /// Downloads just `core`'s library: every Core except PPSSPP.
+    /// Downloads just `core`'s library: every Core except PPSSPP, and PPSSPP once its assets are
+    /// already there.
     pub fn new(game: GameRow, core: &'static CoreInfo, download: Download) -> DownloadCore {
-        DownloadCore::with_step(game, core, Step::Core(download))
+        DownloadCore::with_step(game, core, Step::Core(download), false)
     }
 
     /// Downloads `core`'s assets first, then its library (FR-EMB-1): PPSSPP only.
     pub fn new_with_assets(game: GameRow, core: &'static CoreInfo, assets: Download) -> DownloadCore {
-        DownloadCore::with_step(game, core, Step::Assets(assets))
+        DownloadCore::with_step(game, core, Step::Assets(assets), true)
     }
 
-    fn with_step(game: GameRow, core: &'static CoreInfo, step: Step) -> DownloadCore {
+    fn with_step(game: GameRow, core: &'static CoreInfo, step: Step, assets_step: bool) -> DownloadCore {
         DownloadCore {
             game,
             core,
             step,
+            assets_step,
             progress: DownloadState::Running {
                 received: 0,
                 total: None,
@@ -90,7 +96,7 @@ impl DownloadCore {
     fn label(&self) -> String {
         match &self.step {
             Step::Assets(_) => format!("Downloading the {} assets (1 of 2)", self.core.name),
-            Step::Core(_) if self.core.system_in_data_dir => {
+            Step::Core(_) if self.assets_step => {
                 format!("Downloading the {} Core (2 of 2)", self.core.name)
             }
             Step::Core(_) => format!("Downloading the {} Core", self.core.name),
@@ -227,6 +233,7 @@ impl Screen for DownloadCore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cores::PPSSPP;
     use crate::cores::SAMEBOY;
     use crate::cores::testing::{core_zip, spawn, spawn_failing};
     use crate::launch::confirm_game;
@@ -319,6 +326,27 @@ mod tests {
             msg.body,
             "Couldn't download the SameBoy Core. Check your internet connection."
         );
+    }
+
+    /// A Core-only download (PPSSPP with its assets already present) never says "(2 of 2)": that
+    /// counted `system_in_data_dir`, true of PPSSPP regardless of whether an assets step runs.
+    #[test]
+    fn a_core_only_download_of_ppsspp_never_says_2_of_2() {
+        let dir = tempfile::tempdir().unwrap();
+        let g = GameRow {
+            id: 1,
+            system: "psp".into(),
+            rel_path: "psp/Game.iso".into(),
+            title: "Game".into(),
+            date_added: 0,
+            last_played: None,
+            playtime_secs: 0,
+            favorite: false,
+        };
+        let download = spawn(&PPSSPP, dir.path().to_owned(), core_zip(&PPSSPP), None);
+        let screen = DownloadCore::new(g, &PPSSPP, download);
+        let label = screen.label();
+        assert!(!label.contains("2 of 2"), "{label}");
     }
 
     #[test]
