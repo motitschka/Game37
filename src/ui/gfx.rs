@@ -12,6 +12,7 @@ use sdl3::video::{WindowContext, WindowFlags};
 use super::Rect;
 use super::text::{Fonts, Weight};
 use super::theme::Colour;
+use crate::artwork::Picture;
 use crate::libretro;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +96,94 @@ impl<K: Eq + Hash, V> FrameCache<K, V> {
     }
 }
 
+/// A picture texture not drawn for this many frames is dropped: it is made again, from the
+/// Artwork already in memory, when next drawn.
+const PICTURE_FRAMES: u64 = 300;
+/// How many bytes of picture textures are kept at most, about 130 covers or 16 heroes. Beyond it,
+/// the least recently drawn are dropped first; those drawn this frame are always kept.
+const PICTURE_BUDGET: usize = 128 * 1024 * 1024;
+
+/// Textures for decoded Artwork, keyed by [`Picture::id`], bounded by [`PICTURE_FRAMES`] and
+/// [`PICTURE_BUDGET`] so browsing thousands of Games doesn't grow GPU memory without limit.
+struct PictureCache<V> {
+    /// Each value with its size in bytes and the frame it was last drawn in.
+    entries: HashMap<u64, (V, usize, u64)>,
+    bytes: usize,
+    frame: u64,
+}
+
+impl<V> PictureCache<V> {
+    fn new() -> PictureCache<V> {
+        PictureCache {
+            entries: HashMap::new(),
+            bytes: 0,
+            frame: 0,
+        }
+    }
+
+    /// The value for `id`, made with `make` if it isn't cached, marked as drawn this frame. Making
+    /// one first drops the least recently drawn values, not drawn this frame, until `bytes` more
+    /// fit the budget.
+    fn get_or_insert_with(&mut self, id: u64, bytes: usize, make: impl FnOnce() -> V) -> &mut V {
+        let frame = self.frame;
+        if !self.entries.contains_key(&id) {
+            while self.bytes + bytes > PICTURE_BUDGET {
+                let oldest = self
+                    .entries
+                    .iter()
+                    .filter(|(_, (_, _, used))| *used < frame)
+                    .min_by_key(|(_, (_, _, used))| *used)
+                    .map(|(id, _)| *id);
+                let Some(oldest) = oldest else { break };
+                self.remove(oldest);
+            }
+            self.entries.insert(id, (make(), bytes, frame));
+            self.bytes += bytes;
+        }
+        let entry = self.entries.get_mut(&id).expect("inserted above");
+        entry.2 = frame;
+        &mut entry.0
+    }
+
+    fn remove(&mut self, id: u64) {
+        if let Some((_, bytes, _)) = self.entries.remove(&id) {
+            self.bytes -= bytes;
+        }
+    }
+
+    /// Ends a frame, dropping the values not drawn for [`PICTURE_FRAMES`] frames.
+    fn end_frame(&mut self) {
+        self.frame += 1;
+        let frame = self.frame;
+        let mut dropped = 0;
+        self.entries.retain(|_, (_, bytes, used)| {
+            let keep = frame - *used < PICTURE_FRAMES;
+            if !keep {
+                dropped += *bytes;
+            }
+            keep
+        });
+        self.bytes -= dropped;
+    }
+}
+
+/// The part of a `src_w`×`src_h` picture that fills a `dst_w`×`dst_h` rect without stretching:
+/// the largest centred region with the rect's shape, as (x, y, w, h) in picture pixels. What lies
+/// outside it is cropped.
+pub fn crop_to_fill(src_w: f32, src_h: f32, dst_w: f32, dst_h: f32) -> (f32, f32, f32, f32) {
+    if src_w <= 0.0 || src_h <= 0.0 || dst_w <= 0.0 || dst_h <= 0.0 {
+        return (0.0, 0.0, src_w.max(0.0), src_h.max(0.0));
+    }
+    // Compare the shapes without dividing: is the picture wider than the rect?
+    if src_w * dst_h > dst_w * src_h {
+        let w = src_h * dst_w / dst_h;
+        ((src_w - w) / 2.0, 0.0, w, src_h)
+    } else {
+        let h = src_w * dst_h / dst_w;
+        (0.0, (src_h - h) / 2.0, src_w, h)
+    }
+}
+
 pub struct Gfx<'tc> {
     canvas: WindowCanvas,
     creator: &'tc TextureCreator<WindowContext>,
@@ -108,6 +197,8 @@ pub struct Gfx<'tc> {
     game: Option<GameTexture<'tc>>,
     /// Images screens set by key, such as Save State screenshots.
     images: HashMap<&'static str, Texture<'tc>>,
+    /// Artwork textures, or `None` where making one failed, so it isn't retried every frame.
+    pictures: PictureCache<Option<Texture<'tc>>>,
 }
 
 struct GameTexture<'tc> {
@@ -245,6 +336,7 @@ impl<'tc> Gfx<'tc> {
             widths: FrameCache::new(),
             game: None,
             images: HashMap::new(),
+            pictures: PictureCache::new(),
         }
     }
 
@@ -348,6 +440,68 @@ impl<'tc> Gfx<'tc> {
         };
         let _ = self.canvas.copy(texture, None, FRect::new(r.x, r.y, r.w, r.h));
         true
+    }
+
+    /// Draws Artwork filling `r` with corners of `radius`: scaled to cover `r` and cropped to it,
+    /// centred, never stretched. Its texture is made on first draw and kept while it is drawn.
+    pub fn draw_picture(&mut self, picture: &Picture, r: Rect, radius: f32) {
+        let creator = self.creator;
+        let texture = self
+            .pictures
+            .get_or_insert_with(picture.id, picture.rgba.len(), || {
+                let made = creator
+                    .create_texture_static(sdl3::pixels::PixelFormat::RGBA32, picture.width, picture.height)
+                    .map_err(|e| e.to_string())
+                    .and_then(|mut t| {
+                        t.update(None, &picture.rgba, picture.width as usize * 4)
+                            .map_err(|e| e.to_string())?;
+                        Ok(t)
+                    });
+                match made {
+                    Ok(mut texture) => {
+                        set_linear_scaling(&texture);
+                        texture.set_blend_mode(BlendMode::Blend);
+                        Some(texture)
+                    }
+                    Err(e) => {
+                        eprintln!("game37: can't make an Artwork texture: {e}");
+                        None
+                    }
+                }
+            });
+        let Some(texture) = texture else { return };
+        let (pw, ph) = (picture.width as f32, picture.height as f32);
+        let (cx, cy, cw, ch) = crop_to_fill(pw, ph, r.w, r.h);
+        // Each point's place in the texture, from its place in `r`; the soft edge just outside
+        // `r` samples the picture's own edge.
+        let uv = |p: FPoint| {
+            let u = (cx + (p.x - r.x) / r.w * cw) / pw;
+            let v = (cy + (p.y - r.y) / r.h * ch) / ph;
+            FPoint::new(u.clamp(0.0, 1.0), v.clamp(0.0, 1.0))
+        };
+        let textured = |p: FPoint, alpha: f32| Vertex {
+            position: p,
+            color: FColor {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: alpha,
+            },
+            tex_coord: uv(p),
+        };
+        let inner = rounded_outline(r.inset(FEATHER), radius - FEATHER);
+        let outer = rounded_outline(r.inset(-FEATHER), radius + FEATHER);
+        let n = inner.len();
+        let mut vertices: Vec<Vertex> = inner.iter().map(|&p| textured(p, 1.0)).collect();
+        vertices.extend(outer.iter().map(|&p| textured(p, 0.0)));
+        let mut indices = Vec::with_capacity(n * 9);
+        for i in 1..n - 1 {
+            indices.extend_from_slice(&[0, i as i32, i as i32 + 1]);
+        }
+        band_indices(n, n, 0, &mut indices);
+        let _ = self
+            .canvas
+            .render_geometry(&vertices, Some(&*texture), VertexIndices::from(&indices[..]));
     }
 
     /// The window's display refresh rate in Hz, if SDL knows it.
@@ -653,11 +807,12 @@ impl<'tc> Gfx<'tc> {
         lines
     }
 
-    /// Shows the frame and drops text not drawn for a while.
+    /// Shows the frame and drops text and Artwork not drawn for a while.
     pub fn present(&mut self) {
         self.canvas.present();
         self.texts.end_frame();
         self.widths.end_frame();
+        self.pictures.end_frame();
     }
 
     /// Writes the current frame (before `present`) as a BMP.
@@ -745,5 +900,110 @@ mod tests {
             cache.end_frame();
         }
         assert_eq!(tries, 1);
+    }
+
+    /// One cover's worth of bytes: a 400×600 RGBA picture.
+    const COVER_BYTES: usize = 400 * 600 * 4;
+
+    #[test]
+    fn a_picture_drawn_every_frame_keeps_its_texture() {
+        let mut cache = PictureCache::new();
+        let mut made = 0;
+        for _ in 0..3 * PICTURE_FRAMES {
+            cache.get_or_insert_with(7, COVER_BYTES, || made += 1);
+            cache.end_frame();
+        }
+        assert_eq!(made, 1);
+    }
+
+    #[test]
+    fn a_picture_not_drawn_for_300_frames_loses_its_texture() {
+        let mut cache = PictureCache::new();
+        cache.get_or_insert_with(7, COVER_BYTES, || ());
+        for _ in 0..PICTURE_FRAMES - 1 {
+            cache.end_frame();
+        }
+        assert!(cache.entries.contains_key(&7));
+        cache.end_frame();
+        assert!(!cache.entries.contains_key(&7));
+        assert_eq!(cache.bytes, 0);
+    }
+
+    #[test]
+    fn over_the_budget_the_least_recently_drawn_textures_go_first() {
+        let mut cache = PictureCache::new();
+        let fit = (PICTURE_BUDGET / COVER_BYTES) as u64;
+        // A Shelf scrolled past one cover a frame, the first cover drawn again on the way.
+        for id in 0..fit {
+            cache.get_or_insert_with(id, COVER_BYTES, || ());
+            if id > 0 {
+                cache.get_or_insert_with(0, COVER_BYTES, || ());
+            }
+            cache.end_frame();
+        }
+        cache.get_or_insert_with(fit, COVER_BYTES, || ());
+        assert!(cache.bytes <= PICTURE_BUDGET);
+        assert!(cache.entries.contains_key(&0), "drawn last frame");
+        assert!(!cache.entries.contains_key(&1), "the least recently drawn");
+        assert!(cache.entries.contains_key(&2));
+        assert!(cache.entries.contains_key(&fit));
+    }
+
+    #[test]
+    fn textures_drawn_this_frame_are_kept_over_the_budget() {
+        let mut cache = PictureCache::new();
+        let n = (PICTURE_BUDGET / COVER_BYTES) as u64 + 5;
+        for id in 0..n {
+            cache.get_or_insert_with(id, COVER_BYTES, || ());
+        }
+        assert_eq!(cache.entries.len() as u64, n);
+        cache.end_frame();
+        cache.get_or_insert_with(n, COVER_BYTES, || ());
+        assert!(cache.bytes <= PICTURE_BUDGET);
+    }
+
+    #[test]
+    fn a_failed_texture_is_not_made_again_every_frame() {
+        let mut cache: PictureCache<Option<()>> = PictureCache::new();
+        let mut tries = 0;
+        for _ in 0..10 {
+            cache.get_or_insert_with(7, COVER_BYTES, || {
+                tries += 1;
+                None
+            });
+            cache.end_frame();
+        }
+        assert_eq!(tries, 1);
+    }
+
+    #[test]
+    fn a_picture_of_the_rects_shape_is_not_cropped() {
+        assert_eq!(crop_to_fill(400.0, 600.0, 176.0, 264.0), (0.0, 0.0, 400.0, 600.0));
+    }
+
+    #[test]
+    fn a_wider_picture_is_cropped_at_both_sides() {
+        // A 342×482 cover in a 2:3 cover rect: 321.33 of its 342 columns, centred.
+        let (x, y, w, h) = crop_to_fill(342.0, 482.0, 176.0, 264.0);
+        assert!((w - 482.0 * 2.0 / 3.0).abs() < 1e-3, "{w}");
+        assert!((x - (342.0 - w) / 2.0).abs() < 1e-3, "{x}");
+        assert_eq!((y, h), (0.0, 482.0));
+    }
+
+    #[test]
+    fn a_taller_picture_is_cropped_at_top_and_bottom() {
+        let (x, y, w, h) = crop_to_fill(400.0, 800.0, 176.0, 264.0);
+        assert_eq!((x, w), (0.0, 400.0));
+        assert!((h - 600.0).abs() < 1e-3, "{h}");
+        assert!((y - 100.0).abs() < 1e-3, "{y}");
+    }
+
+    #[test]
+    fn a_hero_fills_the_screen_from_its_middle() {
+        // A 1920×620 hero behind the 1920×1080 Details Page: its full height, the middle 57%.
+        let (x, y, w, h) = crop_to_fill(1920.0, 620.0, 1920.0, 1080.0);
+        assert_eq!((y, h), (0.0, 620.0));
+        assert!((w - 620.0 * 16.0 / 9.0).abs() < 1e-2, "{w}");
+        assert!((x + w / 2.0 - 960.0).abs() < 1e-2, "{x}");
     }
 }
