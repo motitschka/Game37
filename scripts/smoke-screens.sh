@@ -57,20 +57,24 @@ shot m1-console-empty "$root/cfg.toml" "nexttab,left,left,confirm"
 # M2: missing-emulator badge and notice, launching, messages
 shot m2-carousel-missing "$root/cfg.toml" "nexttab,left,left,left,left,left,left,left" --missing-emulators wiiu
 shot m2-notice "$root/cfg.toml" "nexttab,left,left,left,left,left,left,left,confirm" --missing-emulators wiiu
-shot m2-not-playable "$root/cfg.toml" "nexttab,left,left,left,left,left,left,left,confirm,down,confirm" \
-    --missing-emulators wiiu
-shot m2-playing "$root/cfg.toml" "nexttab,right,right,right,right,right,right,confirm,confirm"
+shot m5-details-missing "$root/cfg.toml" \
+    "nexttab,left,left,left,left,left,left,left,confirm,down,confirm,left" --missing-emulators wiiu
+shot m2-playing "$root/cfg.toml" "nexttab,right,right,right,right,right,right,confirm,confirm,confirm"
 # M3: each Embedded System running, Pause Menu with a saved slot
-shot m3-nes "$root/cfg.toml" "nexttab,confirm,confirm" --frames 180
-shot m3-gb "$root/cfg.toml" "nexttab,right,confirm,confirm" --frames 600
-shot m3-snes "$root/cfg.toml" "nexttab,right,right,confirm,confirm" --frames 180
-shot m3-gbc "$root/cfg.toml" "nexttab,right,right,right,right,confirm,confirm" --frames 600
-shot m3-gba "$root/cfg.toml" "nexttab,right,right,right,right,right,confirm,confirm" --frames 240
-shot m3-pause-saved "$root/cfg.toml" "nexttab,right,right,confirm,confirm,wait:120,back,down,confirm,confirm"
+shot m3-nes "$root/cfg.toml" "nexttab,confirm,confirm,confirm" --frames 180
+shot m3-gb "$root/cfg.toml" "nexttab,right,confirm,confirm,confirm" --frames 600
+shot m3-snes "$root/cfg.toml" "nexttab,right,right,confirm,confirm,confirm" --frames 180
+shot m3-gbc "$root/cfg.toml" "nexttab,right,right,right,right,confirm,confirm,confirm" --frames 600
+shot m3-gba "$root/cfg.toml" "nexttab,right,right,right,right,right,confirm,confirm,confirm" --frames 240
+shot m3-pause-saved "$root/cfg.toml" \
+    "nexttab,right,right,confirm,confirm,confirm,wait:120,back,down,confirm,confirm,confirm"
 # M4: OpenGL Cores (N64, PSP), DS layout, PS1 without a BIOS
-shot m4-n64 "$root/cfg.toml" "nexttab,right,right,right,confirm,confirm" --frames 300
-shot m4-ds "$root/cfg.toml" "nexttab,right,right,right,right,right,right,right,confirm,confirm" --frames 300
-shot m4-psp "$root/cfg.toml" "nexttab,left,left,left,confirm,confirm" --frames 900
-shot m4-ps1-no-bios "$root/cfg.toml" "nexttab,left,left,left,left,left,confirm,confirm"
+shot m4-n64 "$root/cfg.toml" "nexttab,right,right,right,confirm,confirm,confirm" --frames 300
+shot m4-ds "$root/cfg.toml" "nexttab,right,right,right,right,right,right,right,confirm,confirm,confirm" \
+    --frames 300
+shot m4-psp "$root/cfg.toml" "nexttab,left,left,left,confirm,confirm,confirm" --frames 900
+shot m4-ps1-no-bios "$root/cfg.toml" "nexttab,left,left,left,left,left,confirm,confirm,confirm"
+# M5: the Details Page
+shot m5-details "$root/cfg.toml" "nexttab,right,right,confirm,confirm"
 
 echo "screenshots in $out"
