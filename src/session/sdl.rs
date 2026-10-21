@@ -23,9 +23,8 @@ use super::saves::{self, Tracker};
 use super::states::{self, SLOTS, StatePaths};
 use super::timing::{self, AUDIO_MAX, PlayTimer, Scheduler};
 use crate::cores::{self, CoreInfo, GlKind};
-use crate::ctx::{self, Ctx};
+use crate::ctx::{self, Ctx, Play};
 use crate::launch::{self, FAILED_TITLE};
-use crate::library::db::GameRow;
 use crate::libretro::{Core, CoreDirs, Frame, GlHost, Stick};
 use crate::screens::message::Message;
 use crate::screens::pause::{PauseMenu, Request, SlotInfo};
@@ -162,17 +161,19 @@ pub fn pad_state(gamepad: &Gamepad) -> PadState {
 }
 
 impl Session {
-    /// Loads `game` on its System's Core, on the OpenGL host its [`cores::GlKind`] needs (see
-    /// [`open_gl`]), beside the SDL renderer's own window and context `frontend` (`None` on
-    /// another renderer). `refresh` is the display's refresh rate when frames are synced to it
-    /// (vsync), else `None`. `Err` is the message to show.
+    /// Loads `play`'s Game on its System's Core, on the OpenGL host its [`cores::GlKind`] needs
+    /// (see [`open_gl`]), beside the SDL renderer's own window and context `frontend` (`None` on
+    /// another renderer), and puts it in the state [`start_state`] picks. `refresh` is the
+    /// display's refresh rate when frames are synced to it (vsync), else `None`. `Err` is the
+    /// message to show.
     pub fn start(
-        game: &GameRow,
+        play: &Play,
         ctx: &Ctx,
         frontend: Option<(Window, SDL_GLContext)>,
         audio: Option<&AudioSubsystem>,
         refresh: Option<f64>,
     ) -> Result<Session, String> {
+        let game = &play.game;
         let system = systems::by_id(&game.system).ok_or_else(|| format!("No System {:?}", game.system))?;
         let core_info =
             cores::for_system(system).ok_or_else(|| format!("{} has no Core yet.", system.name))?;
@@ -205,16 +206,17 @@ impl Session {
             (srm, tracker)
         });
         let states = StatePaths::new(root, system.id, Path::new(&game.rel_path));
-        // Continue where the player quit (FR-EMB-6). A state the Core can't read, e.g. after a
-        // Core update, starts the Game fresh.
-        match fs::read(states.resume()) {
+        // Continue where the player quit (FR-EMB-6), or from the Save State they chose. A state the
+        // Core can't read, e.g. after a Core update, starts the Game fresh.
+        let from = start_state(&states, play.slot);
+        match fs::read(&from) {
             Ok(state) => {
                 if let Err(e) = core.unserialize(&state) {
-                    eprintln!("game37: can't resume from {}: {e}", states.resume().display());
+                    eprintln!("game37: can't start from {}: {e}", from.display());
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => eprintln!("game37: can't read {}: {e}", states.resume().display()),
+            Err(e) => eprintln!("game37: can't read {}: {e}", from.display()),
         }
         let av = core.av_info();
         let audio = audio.and_then(|a| {
@@ -373,31 +375,13 @@ impl Session {
         format!("{} · {} played", self.system.name, playtime_label(secs))
     }
 
-    /// Slot `n`'s time and screenshot, `None` when it is empty.
-    fn slot_info(&self, n: usize) -> Option<SlotInfo> {
-        let modified = fs::metadata(self.states.slot(n))
-            .and_then(|m| m.modified())
-            .ok()?;
-        let thumb = states::read_png(&self.states.thumb(n))
-            .map_err(|e| {
-                if e.kind() != std::io::ErrorKind::NotFound {
-                    eprintln!("game37: can't read {}: {e}", self.states.thumb(n).display());
-                }
-            })
-            .ok();
-        Some(SlotInfo {
-            when: when_label(modified),
-            thumb,
-        })
-    }
-
     /// Writes slot `n`'s Save State and a screenshot of the current frame (FR-EMB-5).
     fn save_slot(&mut self, n: usize) -> Result<SlotInfo, String> {
         let state = self.core.serialize().map_err(|e| e.to_string())?;
         let png = states::encode_png(&states::frame_rgb(self.core.frame()));
         states::write_slot(&self.states.slot(n), &state, &self.states.thumb(n), png)
             .map_err(|e| e.to_string())?;
-        self.slot_info(n).ok_or_else(|| "the slot is gone".to_owned())
+        slot_info(&self.states, n).ok_or_else(|| "the slot is gone".to_owned())
     }
 
     fn load_slot(&mut self, n: usize) -> Result<(), String> {
@@ -495,17 +479,23 @@ fn open_gl(
     }
 }
 
-/// Starts `game` and pushes its session, or pushes the message saying why it couldn't start. Its
-/// Core's OpenGL host is chosen from `frontend` and the Core itself (see [`open_gl`]).
+/// The state a session starts from: the Save State in `slot` when the player chose one
+/// (FR-DET-4), else the Resume State (FR-EMB-6).
+fn start_state(states: &StatePaths, slot: Option<usize>) -> PathBuf {
+    slot.map_or_else(|| states.resume(), |n| states.slot(n))
+}
+
+/// Starts `play`'s Game and pushes its session, or pushes the message saying why it couldn't
+/// start. Its Core's OpenGL host is chosen from `frontend` and the Core itself (see [`open_gl`]).
 pub fn start(
-    game: &GameRow,
+    play: &Play,
     nav: &mut Nav,
     ctx: &Ctx,
     frontend: Option<(Window, SDL_GLContext)>,
     audio: Option<&AudioSubsystem>,
     refresh: Option<f64>,
 ) {
-    match Session::start(game, ctx, frontend, audio, refresh) {
+    match Session::start(play, ctx, frontend, audio, refresh) {
         Ok(session) => nav.push(Box::new(session)),
         Err(message) => nav.push(Box::new(Message::new(FAILED_TITLE, message))),
     }
@@ -569,8 +559,7 @@ pub fn tick(
 /// What the pause trigger does: opens the Pause Menu over the session (FR-EMB-3).
 pub fn on_pause(nav: &mut Nav) {
     let Some(session) = running(nav) else { return };
-    let slots = (1..=SLOTS).map(|n| session.slot_info(n)).collect();
-    let menu = PauseMenu::new(&session.title, session.meta(), slots);
+    let menu = PauseMenu::new(&session.title, session.meta(), slot_infos(&session.states));
     nav.push(Box::new(menu));
 }
 
@@ -584,6 +573,28 @@ pub fn end(nav: &mut Nav, ctx: &mut Ctx) {
         }
         nav.pop();
     }
+}
+
+/// Slot `n`'s time and screenshot from `states`, `None` when it is empty. Read outside a session
+/// too, by the Options Menu's slot picker.
+pub fn slot_info(states: &StatePaths, n: usize) -> Option<SlotInfo> {
+    let modified = fs::metadata(states.slot(n)).and_then(|m| m.modified()).ok()?;
+    let thumb = states::read_png(&states.thumb(n))
+        .map_err(|e| {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("game37: can't read {}: {e}", states.thumb(n).display());
+            }
+        })
+        .ok();
+    Some(SlotInfo {
+        when: when_label(modified),
+        thumb,
+    })
+}
+
+/// Every slot's [`slot_info`], slot 1 first.
+pub fn slot_infos(states: &StatePaths) -> Vec<Option<SlotInfo>> {
+    (1..=SLOTS).map(|n| slot_info(states, n)).collect()
 }
 
 /// A file time as the Pause Menu shows it, in local time (see [`states::when_label`]).
@@ -629,6 +640,7 @@ mod tests {
 
     use super::*;
     use crate::app::close;
+    use crate::library::db::GameRow;
     use crate::libretro::tests::serial;
     use crate::ui::input::Input;
 
@@ -649,8 +661,9 @@ mod tests {
         frame_hash(session)
     }
 
-    /// Save States and the Resume State on bsnes (FR-EMB-5, FR-EMB-6): loading slot 1 replays
-    /// the same frames, and a relaunch continues from the frame shown when the player quit.
+    /// Save States and the Resume State on bsnes (FR-EMB-5, FR-EMB-6, FR-DET-4): loading slot 1
+    /// replays the same frames, a relaunch continues from the frame shown when the player quit,
+    /// and a launch from slot 1 starts from slot 1 instead.
     #[test]
     #[ignore = "needs /home/matei/Game37/.testdata"]
     fn pause_slots_and_resume_state_round_trip_on_a_real_core() {
@@ -673,7 +686,8 @@ mod tests {
             favorite: false,
         };
 
-        let mut session = Session::start(&game, &ctx, None, None, None).unwrap_or_else(|e| panic!("{e}"));
+        let mut session = Session::start(&Play::resume(game.clone()), &ctx, None, None, None)
+            .unwrap_or_else(|e| panic!("{e}"));
         run(&mut session, 100);
         let info = session.save_slot(1).unwrap();
         assert!(info.thumb.is_some_and(|t| t.width > 0), "slot 1 has a screenshot");
@@ -688,16 +702,83 @@ mod tests {
             first,
             "loading slot 1 replays the same frames"
         );
+        // What slot 1 shows next, which a launch from slot 1 must show too. bsnes's first frame
+        // after restoring a state into a freshly loaded Core is a stale one, so compare the second.
+        session.load_slot(1).unwrap();
+        let from_slot = run(&mut session, 2);
 
+        // Down moves the Test Suite's menu cursor once its menu has settled, so the Resume State
+        // shows another picture.
         run(&mut session, 200);
+        let mut down = crate::libretro::InputState::default();
+        down.set(0, crate::libretro::Button::Down, true);
+        for _ in 0..6 {
+            session.core.run_frame(&down);
+        }
+        run(&mut session, 30);
         session.end(&mut ctx, 0);
-        // What the quit-time state shows next. bsnes's first frame after restoring a state into a
-        // freshly loaded Core is a stale one, so compare the second.
+        // What the quit-time state shows next.
         let next = run(&mut session, 2);
         drop(session);
+        assert_ne!(
+            next, from_slot,
+            "the Resume State and slot 1 show different frames"
+        );
         assert!(states.join("240p Test Suite (World).resume.state").exists());
-        let mut session = Session::start(&game, &ctx, None, None, None).unwrap_or_else(|e| panic!("{e}"));
+        let mut session = Session::start(&Play::resume(game.clone()), &ctx, None, None, None)
+            .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(run(&mut session, 2), next, "the relaunch continues where it quit");
+        drop(session);
+
+        // A launch from slot 1 (FR-DET-4) starts from it instead, and still writes the Resume
+        // State on quitting.
+        let from = Play {
+            game: game.clone(),
+            slot: Some(1),
+        };
+        let mut session = Session::start(&from, &ctx, None, None, None).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(run(&mut session, 2), from_slot, "the launch starts from slot 1");
+        session.end(&mut ctx, 0);
+        let after = run(&mut session, 2);
+        drop(session);
+        assert_ne!(after, next, "a new Resume State");
+        let mut session = Session::start(&Play::resume(game.clone()), &ctx, None, None, None)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            run(&mut session, 2),
+            after,
+            "the next launch continues from that play"
+        );
+    }
+
+    #[test]
+    fn a_session_starts_from_the_chosen_slot_else_from_the_resume_state() {
+        let states = StatePaths::new(Path::new("/g"), "snes", Path::new("snes/T.sfc"));
+        assert_eq!(start_state(&states, Some(2)), states.slot(2));
+        assert_eq!(start_state(&states, None), states.resume());
+    }
+
+    /// What the Pause Menu and the Options Menu's slot picker show, read without a session.
+    #[test]
+    fn slot_infos_read_the_filled_slots_with_their_screenshot_and_time() {
+        let dir = TempDir::new().unwrap();
+        let states = StatePaths::new(dir.path(), "snes", Path::new("snes/T.sfc"));
+        assert_eq!(slot_infos(&states), [None, None, None]);
+        let thumb = states::Rgb {
+            width: 2,
+            height: 1,
+            data: vec![255, 0, 0, 0, 0, 255],
+        };
+        let png = states::encode_png(&thumb);
+        states::write_slot(&states.slot(2), b"state", &states.thumb(2), png).unwrap();
+        let infos = slot_infos(&states);
+        assert_eq!(
+            (infos.len(), infos[0].is_none(), infos[2].is_none()),
+            (SLOTS, true, true)
+        );
+        let slot2 = infos[1].as_ref().expect("slot 2 is filled");
+        assert_eq!(slot2.thumb.as_ref(), Some(&thumb));
+        assert!(slot2.when.starts_with("Today, "), "{}", slot2.when);
     }
 
     #[test]
@@ -795,7 +876,7 @@ mod tests {
             nav.handle(Input::Action(action), &Hits::default(), ctx);
         };
 
-        start(&game, &mut nav, &ctx, None, None, None);
+        start(&Play::resume(game.clone()), &mut nav, &ctx, None, None, None);
         tick(&mut nav, &mut ctx, &enter);
         assert!(
             !start_held(&mut nav),
@@ -852,7 +933,7 @@ mod tests {
         // The next launch continues where it quit; closing the window while paused writes a new
         // Resume State and records the Playtime.
         let game = games(&ctx).remove(0);
-        start(&game, &mut nav, &ctx, None, None, None);
+        start(&Play::resume(game.clone()), &mut nav, &ctx, None, None, None);
         assert_eq!(run(running(&mut nav).unwrap(), 2), next, "the relaunch resumes");
         fs::remove_file(&resume).unwrap();
         tick(&mut nav, &mut ctx, &none);
@@ -975,8 +1056,8 @@ mod tests {
         let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
         let frontend = gfx.gl_context();
         assert!(frontend.is_some(), "the opengl renderer's context");
-        let mut session =
-            Session::start(&game, &ctx, frontend, None, Some(60.0)).unwrap_or_else(|e| panic!("{e}"));
+        let mut session = Session::start(&Play::resume(game.clone()), &ctx, frontend, None, Some(60.0))
+            .unwrap_or_else(|e| panic!("{e}"));
         for _ in 0..900 {
             assert!(!session.tick(&mut gfx, 1.0 / 60.0, &[], Mouse::default(), |_| false));
         }

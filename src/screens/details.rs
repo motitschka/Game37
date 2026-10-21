@@ -292,12 +292,12 @@ impl DetailsPage {
         match button {
             Button::Play if self.missing.is_none() => launch::confirm_game(&self.game, ctx),
             Button::Play => Transition::None,
-            Button::Options => self.options(),
+            Button::Options => self.options(ctx),
         }
     }
 
-    fn options(&self) -> Transition {
-        Transition::Push(Box::new(OptionsMenu::new(self.game.clone())))
+    fn options(&self, ctx: &Ctx) -> Transition {
+        Transition::Push(Box::new(OptionsMenu::new(self.game.clone(), &ctx.games_root)))
     }
 
     fn draw_play(&self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
@@ -427,7 +427,7 @@ impl Screen for DetailsPage {
         match input {
             Input::Action(Action::Back) => return Transition::Pop,
             Input::Action(Action::Options) | Input::Pointer(Pointer::RightClick { .. }) => {
-                return self.options();
+                return self.options(ctx);
             }
             Input::Action(Action::Left) if self.missing.is_none() => self.focus = Button::Play,
             Input::Action(Action::Right) => self.focus = Button::Options,
@@ -595,7 +595,7 @@ mod tests {
             act(&mut page, &mut ctx, Action::Confirm),
             Transition::None
         ));
-        assert_eq!(ctx.play.take().map(|g| g.id), Some(game.id));
+        assert_eq!(ctx.play.take().map(|p| p.game.id), Some(game.id));
         assert!(ctx.launch.is_none());
     }
 

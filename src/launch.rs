@@ -16,7 +16,7 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
 use crate::cores;
-use crate::ctx::Ctx;
+use crate::ctx::{Ctx, Play};
 use crate::emulators::{self, Emulator, PATH};
 use crate::library::db::GameRow;
 use crate::screens::download_core::DownloadCore;
@@ -35,9 +35,15 @@ const BIOS_MISSING_TITLE: &str = "PlayStation BIOS missing";
 /// What Play on a Game's Details Page does (FR-DET-1): asks to play it when its System's
 /// Core or Standalone Emulator is installed, downloads an Embedded System's Core first when it
 /// isn't (FR-EMB-2, US-23), checks for a required BIOS (FR-EMB-12), else explains why it can't be
-/// played.
+/// played. An Embedded Game continues from its Resume State (FR-EMB-6).
 pub fn confirm_game(game: &GameRow, ctx: &mut Ctx) -> Transition {
-    let Some(system) = systems::by_id(&game.system) else {
+    confirm_play(Play::resume(game.clone()), ctx)
+}
+
+/// [`confirm_game`] for `play`, which may start an Embedded Game from a Save State slot
+/// (FR-DET-4): the slot goes along through the BIOS check and a first Core download.
+pub fn confirm_play(play: Play, ctx: &mut Ctx) -> Transition {
+    let Some(system) = systems::by_id(&play.game.system) else {
         return Transition::None;
     };
     if system.kind == Kind::Embedded
@@ -52,15 +58,15 @@ pub fn confirm_game(game: &GameRow, ctx: &mut Ctx) -> Transition {
         if !cores::is_installed(&ctx.data_dir, core) {
             let screen = if core.system_in_data_dir && !cores::assets_dir(&ctx.data_dir).is_dir() {
                 let assets = (ctx.start_assets_download)(ctx.data_dir.clone());
-                DownloadCore::new_with_assets(game.clone(), core, assets)
+                DownloadCore::new_with_assets(play, core, assets)
             } else {
                 let download = (ctx.start_download)(core, ctx.data_dir.clone());
-                DownloadCore::new(game.clone(), core, download)
+                DownloadCore::new(play, core, download)
             };
             return Transition::Push(Box::new(screen));
         }
     }
-    match why_not_playable(game, ctx) {
+    match why_not_playable(play, ctx) {
         Some(message) => Transition::Push(Box::new(Message::new(NOT_PLAYABLE_TITLE, message))),
         None => Transition::None,
     }
@@ -76,16 +82,17 @@ fn missing_bios_message(games_root: &Path) -> String {
     )
 }
 
-/// Asks to play `game` (`Ctx::play` or `Ctx::launch`) and returns `None`, or returns why it can't
-/// be played. Called once an Embedded Game's Core, if it has one, is already installed and its
-/// required BIOS, if any, is in place.
-fn why_not_playable(game: &GameRow, ctx: &mut Ctx) -> Option<String> {
+/// Asks to play `play`'s Game (`Ctx::play` or `Ctx::launch`) and returns `None`, or returns why it
+/// can't be played. Called once an Embedded Game's Core, if it has one, is already installed and
+/// its required BIOS, if any, is in place.
+fn why_not_playable(play: Play, ctx: &mut Ctx) -> Option<String> {
+    let game = &play.game;
     let system = systems::by_id(&game.system)?;
     let message = match system.kind {
         Kind::Embedded => match cores::for_system(system) {
             None => later_update(system),
             Some(_) => {
-                ctx.play = Some(game.clone());
+                ctx.play = Some(play);
                 return None;
             }
         },
@@ -750,8 +757,22 @@ mod tests {
         touch(&w.ctx.data_dir.join("cores/bsnes_libretro.so"));
         let snes = game_of(&w, "snes");
         assert!(matches!(confirm_game(&snes, &mut w.ctx), Transition::None));
-        assert_eq!(w.ctx.play.take().map(|g| g.system), Some("snes".to_owned()));
+        assert_eq!(
+            w.ctx.play.take(),
+            Some(Play::resume(snes.clone())),
+            "from the Resume State"
+        );
         assert!(w.ctx.launch.is_none());
+
+        let from_slot = Play {
+            game: snes,
+            slot: Some(2),
+        };
+        assert!(matches!(
+            confirm_play(from_slot.clone(), &mut w.ctx),
+            Transition::None
+        ));
+        assert_eq!(w.ctx.play.take(), Some(from_slot), "from Save State slot 2");
     }
 
     #[test]
@@ -788,7 +809,7 @@ mod tests {
         fs::write(w.ctx.games_root.join("bios/SCPH5502.bin"), b"bios data").unwrap();
         let ps1 = game_of(&w, "ps1");
         assert!(matches!(confirm_game(&ps1, &mut w.ctx), Transition::None));
-        assert_eq!(w.ctx.play.take().map(|g| g.system), Some("ps1".to_owned()));
+        assert_eq!(w.ctx.play.take().map(|p| p.game.system), Some("ps1".to_owned()));
     }
 
     #[test]
@@ -824,7 +845,7 @@ mod tests {
         fs::create_dir_all(cores::assets_dir(&w.ctx.data_dir)).unwrap();
         let psp = game_of(&w, "psp");
         assert!(matches!(confirm_game(&psp, &mut w.ctx), Transition::None));
-        assert_eq!(w.ctx.play.take().map(|g| g.system), Some("psp".to_owned()));
+        assert_eq!(w.ctx.play.take().map(|p| p.game.system), Some("psp".to_owned()));
     }
 
     #[test]
@@ -846,7 +867,7 @@ mod tests {
         touch(&w.ctx.data_dir.join("cores/melondsds_libretro.so"));
         let nds = game_of(&w, "nds");
         assert!(matches!(confirm_game(&nds, &mut w.ctx), Transition::None));
-        assert_eq!(w.ctx.play.take().map(|g| g.system), Some("nds".to_owned()));
+        assert_eq!(w.ctx.play.take().map(|p| p.game.system), Some("nds".to_owned()));
     }
 
     #[test]
