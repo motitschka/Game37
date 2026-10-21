@@ -5,6 +5,7 @@ use std::path::Path;
 
 use super::details::DetailsPage;
 use super::game_grid::GameGrid;
+use super::options::OptionsMenu;
 use crate::ctx::Ctx;
 use crate::library::db::{GameRow, SHELF_SIZE, Shelf};
 use crate::systems;
@@ -250,6 +251,15 @@ impl Home {
         }
     }
 
+    /// Y or a right-click on a Game opens its Options Menu (FR-DET-3).
+    fn options(&self) -> Transition {
+        let row = &self.shelves[self.focus.shelf];
+        match item_at(row.games.len(), self.focus.col()) {
+            Item::Game(i) => Transition::Push(Box::new(OptionsMenu::new(row.games[i].clone()))),
+            _ => Transition::None,
+        }
+    }
+
     fn draw_filled(&mut self, gfx: &mut Gfx<'_>, i: usize, base: f32) {
         let focused_shelf = self.focus.shelf == i;
         let col = self.focus.cols[i];
@@ -402,6 +412,7 @@ impl Screen for Home {
         self.reload_if_changed(ctx);
         match input {
             Input::Action(Action::Confirm) => return self.confirm(ctx),
+            Input::Action(Action::Options) => return self.options(),
             Input::Action(dir) if dir.is_direction() => {
                 if self.focus.step(dir, self.counts()) {
                     self.reveal(self.focus.shelf);
@@ -426,6 +437,13 @@ impl Screen for Home {
                 }
                 None => {}
             },
+            Input::Pointer(Pointer::RightClick { x, y }) => {
+                if let Some(Target::Item(s, c)) = hit(&self.hits, x, y) {
+                    self.focus.shelf = s;
+                    self.focus.cols[s] = c.min(self.counts()[s].saturating_sub(1));
+                    return self.options();
+                }
+            }
             Input::Pointer(Pointer::Wheel { dy }) => {
                 self.vscroll = scroll::clamp(self.vscroll - dy * WHEEL_STEP, self.content_h(), VIEW_H);
             }
@@ -469,7 +487,10 @@ impl Screen for Home {
         let mut hints = Vec::new();
         match item_at(row.games.len(), self.focus.col()) {
             Item::SeeAll => hints.push(Hint::new(&[Action::Confirm], "See all")),
-            Item::Game(_) => hints.push(Hint::new(&[Action::Confirm], "Details")),
+            Item::Game(_) => {
+                hints.push(Hint::new(&[Action::Confirm], "Details"));
+                hints.push(Hint::new(&[Action::Options], "Options"));
+            }
             _ => {}
         }
         hints.push(Hint::new(&[Action::PrevTab, Action::NextTab], "Switch view"));
@@ -675,6 +696,71 @@ mod tests {
                 "{input:?} doesn't play"
             );
         }
+    }
+
+    #[test]
+    fn options_y_or_a_right_click_on_a_shelf_game_opens_its_options_menu() {
+        let mut ctx = Ctx::empty();
+        let games: Vec<_> = (0..3).map(found).collect();
+        ctx.library.sync_system("snes", &games, 0).unwrap();
+        let mut home = Home::new();
+        home.handle(Input::Action(Action::Down), &mut ctx); // initial load
+        let recently_added = 2; // Shelf::ALL's index for Shelf::RecentlyAdded
+        home.focus.shelf = recently_added;
+        let title = |home: &Home, col: usize| home.shelves[recently_added].games[col].title.clone();
+        assert!(home.hints().contains(&Hint::new(&[Action::Options], "Options")));
+
+        let Transition::Push(menu) = home.handle(Input::Action(Action::Options), &mut ctx) else {
+            panic!("Y should open the Options Menu");
+        };
+        assert!(menu.is_modal());
+        assert_eq!(menu.title(), title(&home, 0));
+
+        home.hits = vec![(Rect::new(0.0, 0.0, 50.0, 50.0), Target::Item(recently_added, 2))];
+        let Transition::Push(menu) =
+            home.handle(Input::Pointer(Pointer::RightClick { x: 10.0, y: 10.0 }), &mut ctx)
+        else {
+            panic!("a right-click should open the Options Menu");
+        };
+        assert_eq!(menu.title(), title(&home, 2), "for the Game right-clicked");
+        assert_eq!(home.focus.col(), 2, "which takes focus");
+
+        home.focus.cols[recently_added] = 3; // See all
+        assert!(matches!(
+            home.handle(Input::Action(Action::Options), &mut ctx),
+            Transition::None
+        ));
+        assert!(ctx.play.is_none() && ctx.launch.is_none());
+    }
+
+    #[test]
+    fn hiding_a_game_from_its_options_menu_takes_it_off_every_shelf() {
+        let mut ctx = Ctx::empty();
+        let games: Vec<_> = (0..3).map(found).collect();
+        ctx.library.sync_system("snes", &games, 0).unwrap();
+        let mut home = Home::new();
+        home.handle(Input::Action(Action::Down), &mut ctx); // initial load
+        let recently_added = 2; // Shelf::ALL's index for Shelf::RecentlyAdded
+        home.focus.shelf = recently_added;
+        let hidden = home.shelves[recently_added].games[0].clone();
+        ctx.library.set_favorite(hidden.id, true, 0).unwrap();
+        ctx.revision += 1;
+        let Transition::Push(mut menu) = home.handle(Input::Action(Action::Options), &mut ctx) else {
+            panic!("Y should open the Options Menu");
+        };
+        menu.handle(Input::Action(Action::Down), &mut ctx); // past the actions not built yet
+        assert!(matches!(
+            menu.handle(Input::Action(Action::Confirm), &mut ctx),
+            Transition::Pop
+        ));
+        home.handle(Input::Action(Action::Left), &mut ctx);
+        assert!(
+            home.shelves
+                .iter()
+                .all(|s| s.games.iter().all(|g| g.id != hidden.id)),
+            "on no Shelf, Favorites included"
+        );
+        assert_eq!(home.shelves[recently_added].games.len(), 2);
     }
 
     #[test]

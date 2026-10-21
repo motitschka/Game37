@@ -4,6 +4,7 @@
 use std::time::{Duration, Instant};
 
 use super::details::DetailsPage;
+use super::options::OptionsMenu;
 use crate::ctx::Ctx;
 use crate::emulators::Emulator;
 use crate::library::db::{DbError, GameRow, Library, SortOrder};
@@ -178,6 +179,14 @@ impl GameGrid {
     fn confirm(&self, ctx: &mut Ctx) -> Transition {
         match self.games.get(self.focus) {
             Some(game) => Transition::Push(Box::new(DetailsPage::new(game.clone(), ctx))),
+            None => Transition::None,
+        }
+    }
+
+    /// Y or a right-click on a Game opens its Options Menu (FR-DET-3).
+    fn options(&self) -> Transition {
+        match self.games.get(self.focus) {
+            Some(game) => Transition::Push(Box::new(OptionsMenu::new(game.clone()))),
             None => Transition::None,
         }
     }
@@ -494,6 +503,14 @@ impl Screen for GameGrid {
                 self.notice_focus = self.notice_button_at(x, y);
             }
             Input::Action(Action::Confirm) => return self.confirm(ctx),
+            Input::Action(Action::Options) if self.notice_focus.is_none() => return self.options(),
+            Input::Pointer(Pointer::RightClick { x, y }) => {
+                if let Some(i) = hit(&self.hits, x, y) {
+                    self.focus = i.min(self.games.len().saturating_sub(1));
+                    self.notice_focus = None;
+                    return self.options();
+                }
+            }
             Input::Pointer(Pointer::Move { x, y }) => {
                 if let Some(i) = hit(&self.hits, x, y) {
                     self.focus = i.min(self.games.len().saturating_sub(1));
@@ -630,6 +647,7 @@ impl Screen for GameGrid {
                 let mut hints = Vec::new();
                 if !self.games.is_empty() {
                     hints.push(Hint::new(&[Action::Confirm], "Details"));
+                    hints.push(Hint::new(&[Action::Options], "Options"));
                 }
                 if self.extra.is_some() && !self.games.is_empty() {
                     hints.push(Hint::new(&[Action::Sort], "Sort"));
@@ -849,6 +867,70 @@ mod tests {
                 "{input:?} doesn't play"
             );
         }
+    }
+
+    #[test]
+    fn options_y_or_a_right_click_on_a_grid_game_opens_its_options_menu() {
+        let mut ctx = Ctx::empty();
+        let games: Vec<_> = (0..3).map(found).collect();
+        ctx.library.sync_system("snes", &games, 0).unwrap();
+        let mut grid =
+            GameGrid::new("SNES", console_source()).sortable(Colour::hex(0), "hint".into(), snes());
+        grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+        assert!(grid.hints().contains(&Hint::new(&[Action::Options], "Options")));
+
+        let Transition::Push(menu) = grid.handle(Input::Action(Action::Options), &mut ctx) else {
+            panic!("Y should open the Options Menu");
+        };
+        assert!(menu.is_modal());
+        assert_eq!(menu.title(), "B000");
+
+        grid.hits = vec![(Rect::new(0.0, 0.0, 50.0, 50.0), 2)];
+        let Transition::Push(menu) =
+            grid.handle(Input::Pointer(Pointer::RightClick { x: 10.0, y: 10.0 }), &mut ctx)
+        else {
+            panic!("a right-click should open the Options Menu");
+        };
+        assert_eq!(menu.title(), "B002", "for the Game right-clicked");
+        assert_eq!(grid.focus, 2, "which takes focus");
+        assert!(matches!(
+            grid.handle(Input::Pointer(Pointer::RightClick { x: 99.0, y: 99.0 }), &mut ctx),
+            Transition::None
+        ));
+    }
+
+    #[test]
+    fn hiding_a_game_from_its_options_menu_takes_it_off_the_grid() {
+        let mut ctx = Ctx::empty();
+        let games: Vec<_> = (0..3).map(found).collect();
+        ctx.library.sync_system("snes", &games, 0).unwrap();
+        let mut grid =
+            GameGrid::new("SNES", console_source()).sortable(Colour::hex(0), "hint".into(), snes());
+        grid.handle(Input::Action(Action::Right), &mut ctx); // initial load, focus on B001
+        let Transition::Push(mut menu) = grid.handle(Input::Action(Action::Options), &mut ctx) else {
+            panic!("Y should open the Options Menu");
+        };
+        assert_eq!(menu.title(), "B001");
+        menu.handle(Input::Action(Action::Down), &mut ctx); // past the actions not built yet
+        assert!(matches!(
+            menu.handle(Input::Action(Action::Confirm), &mut ctx),
+            Transition::Pop
+        ));
+        grid.handle(Input::Action(Action::Back), &mut ctx);
+        let titles: Vec<_> = grid.games.iter().map(|g| g.title.as_str()).collect();
+        assert_eq!(titles, ["B000", "B002"]);
+    }
+
+    #[test]
+    fn options_on_an_empty_grid_opens_nothing() {
+        let mut ctx = Ctx::empty();
+        let mut grid =
+            GameGrid::new("SNES", console_source()).sortable(Colour::hex(0), "hint".into(), snes());
+        assert!(matches!(
+            grid.handle(Input::Action(Action::Options), &mut ctx),
+            Transition::None
+        ));
+        assert!(!grid.hints().contains(&Hint::new(&[Action::Options], "Options")));
     }
 
     #[test]

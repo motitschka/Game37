@@ -2,7 +2,8 @@
 //! after `details_page` in `design/generate_mockups.py`.
 //!
 //! Until Artwork arrives (FR-ART-3), the hero is placeholder art in the System's colour, like the
-//! cover. The Options Menu comes later: its button and hint do nothing yet.
+//! cover. Options and Y open the Game's Options Menu; once the Game is hidden or gone from its
+//! folder, the page leaves.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,6 +12,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use walkdir::WalkDir;
 
 use super::home::tilde;
+use super::options::OptionsMenu;
 use crate::cores;
 use crate::ctx::Ctx;
 use crate::emulators::{self, Emulator};
@@ -172,6 +174,8 @@ pub struct DetailsPage {
     /// The `Ctx::revision` the Game was last read at, so Playtime and last played refresh after
     /// a play, which pops back here.
     revision: u64,
+    /// The Game was hidden or left its folder: the page pops on its next tick or input.
+    gone: bool,
     last_played: String,
     added: String,
     save_states: Option<usize>,
@@ -196,6 +200,7 @@ impl DetailsPage {
             system: systems::by_id(&game.system),
             game,
             revision: ctx.revision,
+            gone: false,
             last_played: String::new(),
             added: String::new(),
             save_states: None,
@@ -217,8 +222,8 @@ impl DetailsPage {
         self.revision = ctx.revision;
         match ctx.library.game(self.game.id) {
             Ok(Some(game)) => self.game = game,
-            // Hidden or gone from its folder: the page keeps what it last knew.
-            Ok(None) => {}
+            // Hidden or gone from its folder: the page draws what it last knew until it pops.
+            Ok(None) => self.gone = true,
             Err(e) => eprintln!("game37: {e}"),
         }
         self.load_record(ctx);
@@ -285,9 +290,13 @@ impl DetailsPage {
     fn press(&self, button: Button, ctx: &mut Ctx) -> Transition {
         match button {
             Button::Play if self.missing.is_none() => launch::confirm_game(&self.game, ctx),
-            // Play is off, and the Options Menu comes later.
-            _ => Transition::None,
+            Button::Play => Transition::None,
+            Button::Options => self.options(),
         }
+    }
+
+    fn options(&self) -> Transition {
+        Transition::Push(Box::new(OptionsMenu::new(self.game.clone())))
     }
 
     fn draw_play(&self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
@@ -381,7 +390,7 @@ fn button_glyph(gfx: &mut Gfx<'_>, x: f32, cy: f32, label: &str, on: bool) -> f3
 
 /// A five-pointed star centred on (cx, cy), drawn rather than a text glyph (not every font
 /// covers "★").
-fn star(gfx: &mut Gfx<'_>, cx: f32, cy: f32, r: f32, c: Colour) {
+pub(super) fn star(gfx: &mut Gfx<'_>, cx: f32, cy: f32, r: f32, c: Colour) {
     let point = |i: usize, radius: f32| {
         let a = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::PI / 5.0;
         (cx + radius * a.cos(), cy + radius * a.sin())
@@ -404,9 +413,15 @@ impl Screen for DetailsPage {
 
     fn handle(&mut self, input: Input, ctx: &mut Ctx) -> Transition {
         self.reload_if_changed(ctx);
+        if self.gone {
+            return Transition::Pop;
+        }
         self.sync_missing(ctx);
         match input {
             Input::Action(Action::Back) => return Transition::Pop,
+            Input::Action(Action::Options) | Input::Pointer(Pointer::RightClick { .. }) => {
+                return self.options();
+            }
             Input::Action(Action::Left) if self.missing.is_none() => self.focus = Button::Play,
             Input::Action(Action::Right) => self.focus = Button::Options,
             Input::Action(Action::Confirm) => return self.press(self.focus, ctx),
@@ -426,7 +441,11 @@ impl Screen for DetailsPage {
         Transition::None
     }
 
-    fn tick(&mut self, _: &mut Ctx) -> Transition {
+    fn tick(&mut self, ctx: &mut Ctx) -> Transition {
+        self.reload_if_changed(ctx);
+        if self.gone {
+            return Transition::Pop;
+        }
         self.poll_size();
         Transition::None
     }
@@ -589,24 +608,66 @@ mod tests {
     }
 
     #[test]
-    fn options_on_the_details_page_does_nothing_yet() {
+    fn options_y_confirm_on_options_or_a_right_click_on_the_details_page_opens_its_options_menu() {
         let (_dir, mut ctx, game) = world("gc", "gc/Zelda.iso");
         let mut page = DetailsPage::new(game, &ctx);
+        let opens = |t: Transition| matches!(t, Transition::Push(m) if m.is_modal() && m.title() == "Zelda");
+        assert!(opens(act(&mut page, &mut ctx, Action::Options)), "Y");
         act(&mut page, &mut ctx, Action::Right);
         assert_eq!(page.focus, Button::Options);
         assert!(!page.hints().contains(&PLAY_HINT));
-        assert!(matches!(
-            act(&mut page, &mut ctx, Action::Confirm),
-            Transition::None
-        ));
-        assert!(matches!(
-            act(&mut page, &mut ctx, Action::Options),
-            Transition::None
-        ));
+        assert!(
+            opens(act(&mut page, &mut ctx, Action::Confirm)),
+            "Confirm on Options"
+        );
+        let at = (OPTIONS.x + 10.0, OPTIONS.y + 10.0);
+        assert!(opens(page.handle(
+            Input::Pointer(Pointer::Click { x: at.0, y: at.1 }),
+            &mut ctx
+        )));
+        assert!(opens(page.handle(
+            Input::Pointer(Pointer::RightClick { x: 5.0, y: 5.0 }),
+            &mut ctx
+        )));
         assert!(ctx.launch.is_none() && ctx.play.is_none());
         act(&mut page, &mut ctx, Action::Left);
         assert_eq!(page.focus, Button::Play);
         assert!(matches!(act(&mut page, &mut ctx, Action::Back), Transition::Pop));
+    }
+
+    #[test]
+    fn hiding_the_game_from_the_details_pages_options_menu_pops_the_page_too() {
+        let (_dir, mut ctx, game) = world("gc", "gc/Zelda.iso");
+        let mut page = DetailsPage::new(game.clone(), &ctx);
+        let Transition::Push(mut menu) = act(&mut page, &mut ctx, Action::Options) else {
+            panic!("Y should open the Options Menu");
+        };
+        menu.handle(Input::Action(Action::Down), &mut ctx); // past the actions not built yet
+        assert!(matches!(
+            menu.handle(Input::Action(Action::Confirm), &mut ctx),
+            Transition::Pop
+        ));
+        assert_eq!(ctx.library.game(game.id).unwrap(), None, "hidden");
+        assert!(matches!(page.tick(&mut ctx), Transition::Pop));
+    }
+
+    #[test]
+    fn the_details_page_leaves_once_its_game_is_hidden_or_gone_from_its_folder() {
+        let (_dir, mut ctx, game) = world("gc", "gc/Zelda.iso");
+        let mut page = DetailsPage::new(game.clone(), &ctx);
+        assert!(matches!(page.tick(&mut ctx), Transition::None));
+        ctx.library.set_hidden(game.id, true).unwrap();
+        ctx.revision += 1;
+        assert!(matches!(page.tick(&mut ctx), Transition::Pop), "hidden");
+
+        let (_dir, mut ctx, game) = world("gc", "gc/Zelda.iso");
+        let mut page = DetailsPage::new(game, &ctx);
+        ctx.library.sync_system("gc", &[], 1).unwrap();
+        ctx.revision += 1;
+        assert!(
+            matches!(act(&mut page, &mut ctx, Action::Right), Transition::Pop),
+            "gone"
+        );
     }
 
     #[test]
@@ -625,10 +686,10 @@ mod tests {
 
         act(&mut page, &mut ctx, Action::Left);
         assert_eq!(page.focus, Button::Options, "Play can't take focus");
-        assert!(matches!(
-            act(&mut page, &mut ctx, Action::Confirm),
-            Transition::None
-        ));
+        assert!(
+            matches!(act(&mut page, &mut ctx, Action::Confirm), Transition::Push(_)),
+            "Confirm opens the Options Menu, not Play"
+        );
         let play = (PLAY.x + 10.0, PLAY.y + 10.0);
         page.handle(Input::Pointer(Pointer::Move { x: play.0, y: play.1 }), &mut ctx);
         assert_eq!(page.focus, Button::Options, "nor the pointer over it");
