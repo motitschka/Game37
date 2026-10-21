@@ -173,7 +173,7 @@ Built in milestone 7, after v1.
 - **NFR-5 Privacy:** No telemetry. Network access is limited to the libretro build server and SteamGridDB.
 - **NFR-6 Repo hygiene:** The public repo never contains game files, BIOS files, console keys, or API keys. `.gitignore` enforces this for the usual file types.
 - **NFR-7 Distribution:** v1 is built from source with `cargo build --release`. The README documents this. Game37 is not distributed as a Flatpak.
-- **NFR-8 License:** None (all rights reserved) until decided otherwise.
+- **NFR-8 License:** GPL-3.0-or-later, copyright Matei Novotny (ADR 0014). The full text is in `LICENSE`.
 
 ## Milestones
 
