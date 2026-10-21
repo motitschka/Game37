@@ -1,12 +1,14 @@
 //! The tall Game cover used by Shelves and grids, after `cover` in `design/generate_mockups.py`.
 //!
-//! Until Artwork arrives (FR-ART-3), a cover is placeholder art: a gradient in the System's colour,
-//! the Display Title and a System badge.
+//! A cover shows the Game's Artwork (FR-ART-1). Until it arrives, and for Games without any
+//! (FR-ART-3), it is placeholder art: a gradient in the System's colour and the Display Title. Both
+//! carry the System badge.
 
 use super::Rect;
 use super::gfx::{Align, Gfx, TextStyle};
 use super::text::Weight;
 use super::theme::{ACCENT, Colour, TEXT};
+use crate::artwork::Art;
 use crate::library::db::GameRow;
 use crate::systems;
 
@@ -29,14 +31,32 @@ const SHADE: f32 = 0.22;
 const WHITE: Colour = Colour::hex(0xFFFFFF);
 const BLACK: Colour = Colour::hex(0x000000);
 
-/// Draws `game`'s cover in `r`. `badge` shows the System badge, which a page about a single
-/// System leaves out.
-pub fn draw(gfx: &mut Gfx<'_>, r: Rect, game: &GameRow, badge: bool, focused: bool) {
+/// Draws `game`'s cover in `r`: its Artwork `art` (`ctx.artwork.cover`), or placeholder art while
+/// there is none. `badge` shows the System badge, which a page about a single System leaves out.
+pub fn draw(gfx: &mut Gfx<'_>, r: Rect, game: &GameRow, art: &Art, badge: bool, focused: bool) {
     let system = systems::by_id(&game.system);
-    let colour = Colour::hex(system.map_or(0x5B6477, |s| s.colour));
     if focused {
         focus_ring(gfx, r, COVER_RADIUS);
     }
+    match art {
+        Art::Ready(picture) => gfx.draw_picture(picture, r, COVER_RADIUS),
+        Art::Loading | Art::Placeholder => {
+            placeholder(gfx, r, game, Colour::hex(system.map_or(0x5B6477, |s| s.colour)))
+        }
+    }
+    if badge {
+        let style = TextStyle::new(11, Weight::Bold, TEXT);
+        let label = system.map_or("?", |s| s.short);
+        let label = ellipsize(label, r.w - 38.0, |s| gfx.measure(s, style));
+        let w = gfx.measure(&label, style) + 18.0;
+        gfx.fill_round_rect(Rect::new(r.x + 10.0, r.y + 10.0, w, 22.0), 11.0, BLACK.alpha(0.5));
+        gfx.text(r.x + 19.0, r.y + 25.0, &label, style, Align::Left);
+    }
+}
+
+/// Placeholder art in `r`: a gradient in the System's `colour` with soft shapes and the Display
+/// Title.
+fn placeholder(gfx: &mut Gfx<'_>, r: Rect, game: &GameRow, colour: Colour) {
     gfx.fill_round_rect_vgradient(r, COVER_RADIUS, colour, shade(colour));
     gfx.fill_circle(r.x + r.w * 0.68, r.y + r.h * 0.3, r.w * 0.26, WHITE.alpha(0.12));
     gfx.fill_circle(r.x + r.w * 0.68, r.y + r.h * 0.3, r.w * 0.13, WHITE.alpha(0.16));
@@ -60,15 +80,6 @@ pub fn draw(gfx: &mut Gfx<'_>, r: Rect, game: &GameRow, badge: bool, focused: bo
     for (i, line) in lines.iter().enumerate() {
         let y = r.y + r.h - 16.0 - (n - 1 - i) as f32 * size * 1.12;
         gfx.text(r.x + 12.0, y, line, style, Align::Left);
-    }
-
-    if badge {
-        let style = TextStyle::new(11, Weight::Bold, TEXT);
-        let label = system.map_or("?", |s| s.short);
-        let label = ellipsize(label, r.w - 38.0, |s| gfx.measure(s, style));
-        let w = gfx.measure(&label, style) + 18.0;
-        gfx.fill_round_rect(Rect::new(r.x + 10.0, r.y + 10.0, w, 22.0), 11.0, BLACK.alpha(0.5));
-        gfx.text(r.x + 19.0, r.y + 25.0, &label, style, Align::Left);
     }
 }
 

@@ -581,7 +581,15 @@ impl Screen for GameGrid {
             );
             let game = &self.games[i];
             // While a notice button has focus, no cover is drawn focused.
-            cover::draw(gfx, r, game, true, i == self.focus && self.notice_focus.is_none());
+            let art = ctx.artwork.cover(&ctx.library, game);
+            cover::draw(
+                gfx,
+                r,
+                game,
+                &art,
+                true,
+                i == self.focus && self.notice_focus.is_none(),
+            );
             if game.playtime_secs > 0 {
                 gfx.text(
                     r.x,

@@ -250,7 +250,7 @@ impl Home {
         }
     }
 
-    fn draw_filled(&mut self, gfx: &mut Gfx<'_>, i: usize, base: f32) {
+    fn draw_filled(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx, i: usize, base: f32) {
         let focused_shelf = self.focus.shelf == i;
         let col = self.focus.cols[i];
         let y = base + 44.0;
@@ -266,7 +266,8 @@ impl Home {
             if focused_shelf && c == col {
                 focused = Some(r);
             } else {
-                cover::draw(gfx, r, &row.games[c], true, false);
+                let game = &row.games[c];
+                cover::draw(gfx, r, game, &ctx.artwork.cover(&ctx.library, game), true, false);
             }
         }
         let see_all = Rect::new(left + n as f32 * PITCH, y, SEE_ALL_W, COVER_H);
@@ -277,7 +278,7 @@ impl Home {
         if let Some(r) = focused {
             let big = Rect::new(r.x - GROW, r.y - 12.0, r.w + 2.0 * GROW, r.h + 24.0);
             let game = &row.games[col];
-            cover::draw(gfx, big, game, true, true);
+            cover::draw(gfx, big, game, &ctx.artwork.cover(&ctx.library, game), true, true);
             let max_w = (W - M / 2.0 - big.x).min(4.0 * PITCH);
             let title = TextStyle::new(22, Weight::Bold, TEXT);
             let label = ellipsize(&game.title, max_w, |s| gfx.measure(s, title));
@@ -448,7 +449,7 @@ impl Screen for Home {
             if self.shelves[i].games.is_empty() {
                 self.draw_empty(gfx, ctx, i, base);
             } else {
-                self.draw_filled(gfx, i, base);
+                self.draw_filled(gfx, ctx, i, base);
             }
             gfx.text(M, base, name(self.shelves[i].shelf), title, Align::Left);
         }
