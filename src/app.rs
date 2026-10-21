@@ -178,9 +178,9 @@ fn interactive(
         }
         // Artwork that finished loading in the background (NFR-3).
         ctx.artwork.poll(&ctx.library);
-        if let Some(game) = ctx.play.take() {
+        if let Some(play) = ctx.play.take() {
             let refresh = if vsync { gfx.refresh_rate() } else { None };
-            sdl::start(&game, &mut nav, &ctx, gfx.gl_context(), audio.as_ref(), refresh);
+            sdl::start(&play, &mut nav, &ctx, gfx.gl_context(), audio.as_ref(), refresh);
         }
         inputs.extend(input.controls.poll(sdl3::timer::ticks()));
         for i in inputs.drain(..) {
@@ -197,10 +197,10 @@ fn interactive(
                     gfx.restore();
                 }
             }
-            if let Some(game) = ctx.play.take() {
+            if let Some(play) = ctx.play.take() {
                 // Frames sync to the display only with vsync.
                 let refresh = if vsync { gfx.refresh_rate() } else { None };
-                sdl::start(&game, &mut nav, &ctx, gfx.gl_context(), audio.as_ref(), refresh);
+                sdl::start(&play, &mut nav, &ctx, gfx.gl_context(), audio.as_ref(), refresh);
             }
         }
         // Text input runs only while the top screen has a text field active.
@@ -304,9 +304,9 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
             if let Some(game) = ctx.launch.take() {
                 launcher.start(&game, &mut nav, &ctx);
             }
-            if let Some(game) = ctx.play.take() {
+            if let Some(play) = ctx.play.take() {
                 sdl::start(
-                    &game,
+                    &play,
                     &mut nav,
                     &ctx,
                     gfx.gl_context(),
@@ -332,9 +332,9 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
                 if nav.tick(&mut ctx) == Flow::Quit {
                     break 'steps;
                 }
-                if let Some(game) = ctx.play.take() {
+                if let Some(play) = ctx.play.take() {
                     sdl::start(
-                        &game,
+                        &play,
                         &mut nav,
                         &ctx,
                         gfx.gl_context(),

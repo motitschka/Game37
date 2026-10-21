@@ -184,9 +184,9 @@ impl GameGrid {
     }
 
     /// Y or a right-click on a Game opens its Options Menu (FR-DET-3).
-    fn options(&self) -> Transition {
+    fn options(&self, ctx: &Ctx) -> Transition {
         match self.games.get(self.focus) {
-            Some(game) => Transition::Push(Box::new(OptionsMenu::new(game.clone()))),
+            Some(game) => Transition::Push(Box::new(OptionsMenu::new(game.clone(), &ctx.games_root))),
             None => Transition::None,
         }
     }
@@ -503,12 +503,12 @@ impl Screen for GameGrid {
                 self.notice_focus = self.notice_button_at(x, y);
             }
             Input::Action(Action::Confirm) => return self.confirm(ctx),
-            Input::Action(Action::Options) if self.notice_focus.is_none() => return self.options(),
+            Input::Action(Action::Options) if self.notice_focus.is_none() => return self.options(ctx),
             Input::Pointer(Pointer::RightClick { x, y }) => {
                 if let Some(i) = hit(&self.hits, x, y) {
                     self.focus = i.min(self.games.len().saturating_sub(1));
                     self.notice_focus = None;
-                    return self.options();
+                    return self.options(ctx);
                 }
             }
             Input::Pointer(Pointer::Move { x, y }) => {
