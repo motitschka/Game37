@@ -383,3 +383,243 @@ impl Screen for OptionsMenu {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::library::FoundGame;
+    use crate::library::db::SortOrder;
+
+    /// A Ctx with a temporary Games Root holding `n` SNES Games, "G0" to "G<n-1>".
+    fn world(n: usize) -> (tempfile::TempDir, Ctx, Vec<GameRow>) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = dir.path().join("Games");
+        let found: Vec<_> = (0..n)
+            .map(|i| FoundGame {
+                system: "snes",
+                rel_path: format!("snes/G{i}.sfc"),
+                title: format!("G{i}"),
+            })
+            .collect();
+        ctx.library.sync_system("snes", &found, 0).unwrap();
+        let games = ctx.library.system_games("snes", SortOrder::AZ).unwrap();
+        (dir, ctx, games)
+    }
+
+    fn act(menu: &mut OptionsMenu, ctx: &mut Ctx, action: Action) -> Transition {
+        menu.handle(Input::Action(action), ctx)
+    }
+
+    fn fresh(ctx: &Ctx, game: &GameRow) -> GameRow {
+        ctx.library.game(game.id).unwrap().unwrap()
+    }
+
+    fn favorite_ids(ctx: &Ctx) -> Vec<i64> {
+        let mut ids: Vec<_> = ctx
+            .library
+            .shelf(Shelf::Favorites, None)
+            .unwrap()
+            .iter()
+            .map(|g| g.id)
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    #[test]
+    fn favorite_toggles_and_the_menu_closes() {
+        let (_dir, mut ctx, games) = world(1);
+        let mut menu = OptionsMenu::new(games[0].clone());
+        assert_eq!(menu.focused(), Item::Favorite, "focus starts on Favorite");
+        assert_eq!(Item::Favorite.label(menu.game.favorite), "Add to favorites");
+        let revision = ctx.revision;
+        assert!(matches!(
+            act(&mut menu, &mut ctx, Action::Confirm),
+            Transition::Pop
+        ));
+        assert!(fresh(&ctx, &games[0]).favorite);
+        assert!(ctx.revision > revision, "screens reload");
+
+        let mut menu = OptionsMenu::new(fresh(&ctx, &games[0]));
+        assert_eq!(Item::Favorite.label(menu.game.favorite), "Remove from favorites");
+        assert!(matches!(
+            act(&mut menu, &mut ctx, Action::Confirm),
+            Transition::Pop
+        ));
+        assert!(!fresh(&ctx, &games[0]).favorite);
+    }
+
+    /// Five Favorites, G0 to G4, favorited in that order, and a menu for G5.
+    fn five_favorites() -> (tempfile::TempDir, Ctx, Vec<GameRow>, OptionsMenu) {
+        let (dir, ctx, games) = world(6);
+        for (i, game) in games[..5].iter().enumerate() {
+            ctx.library.set_favorite(game.id, true, i as i64).unwrap();
+        }
+        let menu = OptionsMenu::new(games[5].clone());
+        (dir, ctx, games, menu)
+    }
+
+    #[test]
+    fn favorite_with_five_favorites_opens_a_picker_and_the_one_picked_is_replaced() {
+        let (_dir, mut ctx, games, mut menu) = five_favorites();
+        assert!(matches!(
+            act(&mut menu, &mut ctx, Action::Confirm),
+            Transition::None
+        ));
+        assert_eq!(menu.view(), View::Replace);
+        assert_eq!(menu.hints()[0], Hint::new(&[Action::Confirm], "Replace"));
+        let shown: Vec<_> = menu.favorites.iter().map(|g| g.title.as_str()).collect();
+        assert_eq!(shown, ["G4", "G3", "G2", "G1", "G0"], "the five, newest first");
+        assert!(!fresh(&ctx, &games[5]).favorite, "nothing changes yet");
+
+        act(&mut menu, &mut ctx, Action::Down);
+        act(&mut menu, &mut ctx, Action::Down);
+        assert!(matches!(
+            act(&mut menu, &mut ctx, Action::Confirm),
+            Transition::Pop
+        ));
+        let mut want = vec![games[0].id, games[1].id, games[3].id, games[4].id, games[5].id];
+        want.sort();
+        assert_eq!(favorite_ids(&ctx), want, "G2 made way for G5");
+    }
+
+    #[test]
+    fn a_click_on_a_favorite_in_the_picker_replaces_it() {
+        let (_dir, mut ctx, games, mut menu) = five_favorites();
+        act(&mut menu, &mut ctx, Action::Confirm);
+        menu.pick_hits = vec![(Rect::new(PANEL_X, 400.0, 100.0, 100.0), 4)];
+        let at = Input::Pointer(Pointer::Click {
+            x: PANEL_X + 10.0,
+            y: 410.0,
+        });
+        assert!(matches!(menu.handle(at, &mut ctx), Transition::Pop));
+        assert!(!fresh(&ctx, &games[0]).favorite, "G0 is the 5th, oldest");
+        assert!(fresh(&ctx, &games[5]).favorite);
+        assert_eq!(favorite_ids(&ctx).len(), MAX_FAVORITES);
+    }
+
+    #[test]
+    fn back_from_the_favorite_picker_changes_nothing() {
+        let (_dir, mut ctx, _games, mut menu) = five_favorites();
+        let before = favorite_ids(&ctx);
+        act(&mut menu, &mut ctx, Action::Confirm);
+        act(&mut menu, &mut ctx, Action::Down);
+        let revision = ctx.revision;
+        let outside = Input::Pointer(Pointer::Click { x: 10.0, y: 10.0 });
+        assert!(
+            matches!(menu.handle(outside, &mut ctx), Transition::None),
+            "a click outside"
+        );
+        assert_eq!(menu.view(), View::Replace);
+        assert!(matches!(act(&mut menu, &mut ctx, Action::Back), Transition::None));
+        assert_eq!(menu.view(), View::List, "Back returns to the list");
+        assert_eq!(menu.focused(), Item::Favorite);
+        assert!(matches!(act(&mut menu, &mut ctx, Action::Back), Transition::Pop));
+        assert_eq!(favorite_ids(&ctx), before);
+        assert_eq!(ctx.revision, revision);
+    }
+
+    #[test]
+    fn the_actions_not_built_yet_are_listed_but_not_selectable() {
+        let (_dir, mut ctx, games) = world(1);
+        let mut menu = OptionsMenu::new(games[0].clone());
+        use Item::*;
+        assert_eq!(
+            menu.items(),
+            [Favorite, LoadSaveState, ChooseArtwork, Rename, Hide, ShowFile]
+        );
+        act(&mut menu, &mut ctx, Action::Down);
+        assert_eq!(menu.focused(), Hide, "focus skips them");
+        act(&mut menu, &mut ctx, Action::Up);
+        assert_eq!(menu.focused(), Favorite);
+        act(&mut menu, &mut ctx, Action::Up);
+        assert_eq!(menu.focused(), Favorite, "and stops at the ends");
+
+        menu.item_hits = vec![(Rect::new(PANEL_X, 300.0, 100.0, 50.0), 2)];
+        menu.handle(
+            Input::Pointer(Pointer::Move {
+                x: PANEL_X + 1.0,
+                y: 301.0,
+            }),
+            &mut ctx,
+        );
+        assert_eq!(menu.focused(), Favorite, "nor does the pointer focus them");
+        let click = Input::Pointer(Pointer::Click {
+            x: PANEL_X + 1.0,
+            y: 301.0,
+        });
+        assert!(matches!(menu.handle(click, &mut ctx), Transition::None));
+        assert!(!fresh(&ctx, &games[0]).favorite);
+    }
+
+    #[test]
+    fn load_save_state_is_listed_for_embedded_systems_only() {
+        let mut game = world(1).2.remove(0);
+        game.system = "gc".into();
+        assert!(!OptionsMenu::new(game).items().contains(&Item::LoadSaveState));
+    }
+
+    #[test]
+    fn hide_hides_the_game_and_unfavorites_it() {
+        let (_dir, mut ctx, games) = world(2);
+        ctx.library.set_favorite(games[0].id, true, 0).unwrap();
+        let mut menu = OptionsMenu::new(fresh(&ctx, &games[0]));
+        act(&mut menu, &mut ctx, Action::Down);
+        assert_eq!(menu.focused(), Item::Hide);
+        let revision = ctx.revision;
+        assert!(matches!(
+            act(&mut menu, &mut ctx, Action::Confirm),
+            Transition::Pop
+        ));
+        assert!(ctx.revision > revision);
+        assert_eq!(ctx.library.game(games[0].id).unwrap(), None);
+        let left = ctx.library.system_games("snes", SortOrder::AZ).unwrap();
+        assert_eq!(left.iter().map(|g| g.id).collect::<Vec<_>>(), [games[1].id]);
+        assert_eq!(ctx.library.shelf_count(Shelf::Favorites).unwrap(), 0);
+    }
+
+    #[test]
+    fn show_file_asks_for_the_games_file_and_a_folder_game_for_its_folder() {
+        let (_dir, mut ctx, games) = world(1);
+        let mut menu = OptionsMenu::new(games[0].clone());
+        act(&mut menu, &mut ctx, Action::Down);
+        act(&mut menu, &mut ctx, Action::Down);
+        assert_eq!(menu.focused(), Item::ShowFile);
+        let revision = ctx.revision;
+        assert!(matches!(
+            act(&mut menu, &mut ctx, Action::Confirm),
+            Transition::Pop
+        ));
+        assert_eq!(
+            ctx.show_file_request.take(),
+            Some(ctx.games_root.join("snes/G0.sfc"))
+        );
+        assert_eq!(ctx.revision, revision, "nothing to reload");
+
+        let folder = ctx.games_root.join("ps3/Demon's Souls");
+        std::fs::create_dir_all(folder.join("PS3_GAME")).unwrap();
+        ctx.scan_all(0).unwrap();
+        let game = ctx.library.system_games("ps3", SortOrder::AZ).unwrap().remove(0);
+        let mut menu = OptionsMenu::new(game);
+        let at = (PANEL_X + 10.0, 600.0);
+        menu.item_hits = vec![(Rect::new(PANEL_X, 590.0, 100.0, 50.0), menu.items().len() - 1)];
+        menu.handle(Input::Pointer(Pointer::Click { x: at.0, y: at.1 }), &mut ctx);
+        assert_eq!(ctx.show_file_request, Some(folder));
+    }
+
+    #[test]
+    fn back_or_a_click_outside_the_panel_closes_the_menu_and_changes_nothing() {
+        let (_dir, mut ctx, games) = world(1);
+        let mut menu = OptionsMenu::new(games[0].clone());
+        let revision = ctx.revision;
+        assert!(matches!(act(&mut menu, &mut ctx, Action::Back), Transition::Pop));
+        let outside = Input::Pointer(Pointer::Click {
+            x: PANEL_X - 1.0,
+            y: 10.0,
+        });
+        assert!(matches!(menu.handle(outside, &mut ctx), Transition::Pop));
+        assert_eq!(ctx.revision, revision);
+        assert!(!fresh(&ctx, &games[0]).favorite);
+    }
+}

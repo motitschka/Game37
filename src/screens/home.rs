@@ -734,6 +734,36 @@ mod tests {
     }
 
     #[test]
+    fn hiding_a_game_from_its_options_menu_takes_it_off_every_shelf() {
+        let mut ctx = Ctx::empty();
+        let games: Vec<_> = (0..3).map(found).collect();
+        ctx.library.sync_system("snes", &games, 0).unwrap();
+        let mut home = Home::new();
+        home.handle(Input::Action(Action::Down), &mut ctx); // initial load
+        let recently_added = 2; // Shelf::ALL's index for Shelf::RecentlyAdded
+        home.focus.shelf = recently_added;
+        let hidden = home.shelves[recently_added].games[0].clone();
+        ctx.library.set_favorite(hidden.id, true, 0).unwrap();
+        ctx.revision += 1;
+        let Transition::Push(mut menu) = home.handle(Input::Action(Action::Options), &mut ctx) else {
+            panic!("Y should open the Options Menu");
+        };
+        menu.handle(Input::Action(Action::Down), &mut ctx); // past the actions not built yet
+        assert!(matches!(
+            menu.handle(Input::Action(Action::Confirm), &mut ctx),
+            Transition::Pop
+        ));
+        home.handle(Input::Action(Action::Left), &mut ctx);
+        assert!(
+            home.shelves
+                .iter()
+                .all(|s| s.games.iter().all(|g| g.id != hidden.id)),
+            "on no Shelf, Favorites included"
+        );
+        assert_eq!(home.shelves[recently_added].games.len(), 2);
+    }
+
+    #[test]
     fn a_hit_rect_above_the_view_is_clipped_so_a_click_there_misses() {
         let view = Rect::new(0.0, VIEW_TOP, W, VIEW_H);
         // A cover scrolled so most of it sits above the top bar; only its bottom sliver is

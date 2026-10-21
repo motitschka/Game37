@@ -636,6 +636,22 @@ mod tests {
     }
 
     #[test]
+    fn hiding_the_game_from_the_details_pages_options_menu_pops_the_page_too() {
+        let (_dir, mut ctx, game) = world("gc", "gc/Zelda.iso");
+        let mut page = DetailsPage::new(game.clone(), &ctx);
+        let Transition::Push(mut menu) = act(&mut page, &mut ctx, Action::Options) else {
+            panic!("Y should open the Options Menu");
+        };
+        menu.handle(Input::Action(Action::Down), &mut ctx); // past the actions not built yet
+        assert!(matches!(
+            menu.handle(Input::Action(Action::Confirm), &mut ctx),
+            Transition::Pop
+        ));
+        assert_eq!(ctx.library.game(game.id).unwrap(), None, "hidden");
+        assert!(matches!(page.tick(&mut ctx), Transition::Pop));
+    }
+
+    #[test]
     fn the_details_page_leaves_once_its_game_is_hidden_or_gone_from_its_folder() {
         let (_dir, mut ctx, game) = world("gc", "gc/Zelda.iso");
         let mut page = DetailsPage::new(game.clone(), &ctx);

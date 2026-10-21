@@ -900,6 +900,28 @@ mod tests {
     }
 
     #[test]
+    fn hiding_a_game_from_its_options_menu_takes_it_off_the_grid() {
+        let mut ctx = Ctx::empty();
+        let games: Vec<_> = (0..3).map(found).collect();
+        ctx.library.sync_system("snes", &games, 0).unwrap();
+        let mut grid =
+            GameGrid::new("SNES", console_source()).sortable(Colour::hex(0), "hint".into(), snes());
+        grid.handle(Input::Action(Action::Right), &mut ctx); // initial load, focus on B001
+        let Transition::Push(mut menu) = grid.handle(Input::Action(Action::Options), &mut ctx) else {
+            panic!("Y should open the Options Menu");
+        };
+        assert_eq!(menu.title(), "B001");
+        menu.handle(Input::Action(Action::Down), &mut ctx); // past the actions not built yet
+        assert!(matches!(
+            menu.handle(Input::Action(Action::Confirm), &mut ctx),
+            Transition::Pop
+        ));
+        grid.handle(Input::Action(Action::Back), &mut ctx);
+        let titles: Vec<_> = grid.games.iter().map(|g| g.title.as_str()).collect();
+        assert_eq!(titles, ["B000", "B002"]);
+    }
+
+    #[test]
     fn options_on_an_empty_grid_opens_nothing() {
         let mut ctx = Ctx::empty();
         let mut grid =
