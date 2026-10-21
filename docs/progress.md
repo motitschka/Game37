@@ -47,7 +47,7 @@ Each milestone branch builds on the previous one. `main` has everything through 
 
 Screenshot mode drives the real app headless: `cargo run -- --screenshot out.bmp --config <cfg>
 --data-dir <dir> --actions nexttab,right,confirm,wait:120,back --frames 300`. Actions are `up`,
-`down`, `left`, `right`, `confirm`, `back`, `options`, `sort`, `prevtab`, `nexttab`, `click:X:Y`
+`down`, `left`, `right`, `confirm`, `back`, `options`, `sort`, `prevtab`, `nexttab`, `start`, `click:X:Y`
 and `wait:N`. While a Game runs, `back` is Esc. `--missing-emulators wiiu,ps3` simulates missing
 Standalone Emulators. **Use a fresh `--data-dir` per run**: the Carousel remembers its position in
 the library database, so a reused one starts somewhere else.

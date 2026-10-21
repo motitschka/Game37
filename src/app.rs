@@ -203,6 +203,12 @@ fn interactive(
                 sdl::start(&game, &mut nav, &ctx, gfx.gl_context(), audio.as_ref(), refresh);
             }
         }
+        // Text input runs only while the top screen has a text field active.
+        let text = !sdl::playing(&mut nav) && nav.top().text_input();
+        if text != input.controls.text {
+            input.controls.text = text;
+            gfx.set_text_input(text);
+        }
         copy_clipboard_request(&mut ctx, &video);
         if let Some(path) = ctx.show_file_request.take() {
             crate::file_manager::show(&path);
@@ -281,6 +287,7 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
             }
             match i {
                 Input::Action(_) => view.kind = InputKind::Controller,
+                Input::Text(_) => view.kind = InputKind::Keyboard,
                 Input::Pointer(p) => {
                     view.kind = InputKind::Keyboard;
                     if let Pointer::Move { x, y } = p {
@@ -524,6 +531,10 @@ impl InputState {
             Event::KeyUp {
                 keycode: Some(key), ..
             } => ControlEvent::KeyUp { key },
+            Event::TextInput { text, .. } => {
+                self.controls.typed(&text, out);
+                return Flow::Continue;
+            }
 
             Event::GamepadAdded { which, .. } => {
                 if let Ok(pad) = self.subsystem.open(which) {

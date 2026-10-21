@@ -850,6 +850,17 @@ impl<'tc> Gfx<'tc> {
         window.raise();
     }
 
+    /// Starts or stops the system's text input (and input method) on the window.
+    pub fn set_text_input(&mut self, on: bool) {
+        let window = self.canvas.window();
+        let text_input = window.subsystem().text_input();
+        if on {
+            text_input.start(window);
+        } else {
+            text_input.stop(window);
+        }
+    }
+
     pub fn toggle_fullscreen(&mut self) {
         let window = self.canvas.window_mut();
         let fullscreen = window.fullscreen_state() != sdl3::video::FullscreenType::Off;

@@ -16,10 +16,12 @@ pub enum Action {
     Sort,
     PrevTab,
     NextTab,
+    /// Start on a controller; Enter while a text field is active. Finishes text entry.
+    Start,
 }
 
 impl Action {
-    pub const ALL: [Action; 10] = [
+    pub const ALL: [Action; 11] = [
         Action::Up,
         Action::Down,
         Action::Left,
@@ -30,6 +32,7 @@ impl Action {
         Action::Sort,
         Action::PrevTab,
         Action::NextTab,
+        Action::Start,
     ];
 
     pub fn is_direction(self) -> bool {
@@ -49,6 +52,7 @@ impl Action {
             Action::Sort => "sort",
             Action::PrevTab => "prevtab",
             Action::NextTab => "nexttab",
+            Action::Start => "start",
         }
     }
 
@@ -80,10 +84,19 @@ pub enum Pointer {
     Back,
 }
 
+/// Typing into the active text field, from the physical keyboard (and its input method).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextInput {
+    Char(char),
+    Backspace,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Input {
     Action(Action),
     Pointer(Pointer),
+    /// Only while the top screen has a text field active (see `Screen::text_input`).
+    Text(TextInput),
 }
 
 /// What the player last used, which decides the glyphs the UI shows.
@@ -111,6 +124,7 @@ pub fn button_action(style: ButtonStyle, button: Button) -> Option<Action> {
         (ButtonStyle::Nintendo, Button::North) => Action::Sort,
         (_, Button::LeftShoulder) => Action::PrevTab,
         (_, Button::RightShoulder) => Action::NextTab,
+        (_, Button::Start) => Action::Start,
         (_, Button::DPadUp) => Action::Up,
         (_, Button::DPadDown) => Action::Down,
         (_, Button::DPadLeft) => Action::Left,
@@ -135,6 +149,23 @@ pub fn key_action(key: Keycode) -> Option<Action> {
         _ => return None,
     };
     Some(action)
+}
+
+/// What a key does while a text field is active: the keys that type text (letters, digits, space,
+/// Tab and the rest) do nothing here, their text arrives as [`TextInput::Char`] instead. The arrows
+/// still move, Esc goes back, Enter finishes ([`Action::Start`]) and Backspace erases.
+pub fn text_key(key: Keycode) -> Option<Input> {
+    let action = match key {
+        Keycode::Up => Action::Up,
+        Keycode::Down => Action::Down,
+        Keycode::Left => Action::Left,
+        Keycode::Right => Action::Right,
+        Keycode::Return | Keycode::KpEnter => Action::Start,
+        Keycode::Escape => Action::Back,
+        Keycode::Backspace => return Some(Input::Text(TextInput::Backspace)),
+        _ => return None,
+    };
+    Some(Input::Action(action))
 }
 
 /// Fraction of full deflection the left stick must pass to count as a direction.
@@ -168,12 +199,14 @@ pub fn glyph_label(action: Action, kind: InputKind, style: ButtonStyle) -> &'sta
         (InputKind::Controller, ButtonStyle::Nintendo, Action::Sort) => "X",
         (InputKind::Controller, _, Action::PrevTab) => "L1",
         (InputKind::Controller, _, Action::NextTab) => "R1",
+        (InputKind::Controller, ButtonStyle::Nintendo, Action::Start) => "+",
         (InputKind::Keyboard, _, Action::Confirm) => "Enter",
         (InputKind::Keyboard, _, Action::Back) => "Esc",
         (InputKind::Keyboard, _, Action::Options) => "F",
         (InputKind::Keyboard, _, Action::Sort) => "S",
         (InputKind::Keyboard, _, Action::PrevTab) => "Q",
         (InputKind::Keyboard, _, Action::NextTab) => "E",
+        (InputKind::Keyboard, _, Action::Start) => "Enter",
     }
 }
 
@@ -312,6 +345,7 @@ mod tests {
         assert_eq!(button_action(s, Button::LeftShoulder), Some(Action::PrevTab));
         assert_eq!(button_action(s, Button::RightShoulder), Some(Action::NextTab));
         assert_eq!(button_action(s, Button::DPadLeft), Some(Action::Left));
+        assert_eq!(button_action(s, Button::Start), Some(Action::Start));
         assert_eq!(button_action(s, Button::Guide), None);
     }
 
@@ -334,6 +368,32 @@ mod tests {
             assert_eq!(key_action(key), Some(action), "{key:?}");
         }
         assert_eq!(key_action(Keycode::F11), None);
+    }
+
+    #[test]
+    fn in_a_text_field_only_editing_keys_act_and_typing_keys_do_nothing() {
+        use TextInput::Backspace;
+        let cases = [
+            (Keycode::Up, Input::Action(Action::Up)),
+            (Keycode::Left, Input::Action(Action::Left)),
+            (Keycode::Return, Input::Action(Action::Start)),
+            (Keycode::KpEnter, Input::Action(Action::Start)),
+            (Keycode::Escape, Input::Action(Action::Back)),
+            (Keycode::Backspace, Input::Text(Backspace)),
+        ];
+        for (key, input) in cases {
+            assert_eq!(text_key(key), Some(input), "{key:?}");
+        }
+        for key in [
+            Keycode::Q,
+            Keycode::E,
+            Keycode::F,
+            Keycode::S,
+            Keycode::Space,
+            Keycode::Tab,
+        ] {
+            assert_eq!(text_key(key), None, "{key:?} types text instead");
+        }
     }
 
     #[test]

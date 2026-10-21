@@ -10,6 +10,7 @@ pub mod input;
 pub mod nav;
 pub mod scroll;
 pub mod text;
+pub mod text_entry;
 pub mod theme;
 
 /// Logical screen width.
