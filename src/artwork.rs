@@ -189,7 +189,8 @@ impl fmt::Debug for Artwork {
 #[derive(Default)]
 struct State {
     slots: HashMap<Key, Slot>,
-    candidates: HashMap<(i64, Kind), Candidates>,
+    /// By library id, kind and the Display Title they were listed for.
+    candidates: HashMap<(i64, Kind, String), Candidates>,
     /// The last job id handed out.
     jobs: u64,
     /// Ticks on every ask, for dropping the least recently asked for.
@@ -245,8 +246,9 @@ impl State {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Key {
-    /// A Game's (library id) Artwork.
-    Game(i64, Kind),
+    /// A Game's (library id) Artwork, for its Display Title: once the title changes, what was
+    /// matched automatically for the old one is asked for afresh.
+    Game(i64, Kind, String),
     /// A candidate's preview, by URL.
     Preview(String, Kind),
 }
@@ -258,9 +260,17 @@ enum Slot {
 }
 
 /// What a Game's `artwork` column records (FR-LIB-7), as JSON.
+///
+/// A search answers for the Display Title it was made for: once the title changes (a rename, or a
+/// new file name), `game` and the picks made automatically no longer hold, and the next ask
+/// searches again. Picks the player chose stay.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct Record {
-    /// The SteamGridDB game the Display Title matched; `None` means the search found no match.
+    /// The Display Title last searched for; `None` in a record from before titles were recorded,
+    /// which counts as searched for none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    /// The SteamGridDB game `title` matched; `None` means the search found no match.
     game: Option<u64>,
     /// `None`: not looked up yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -274,22 +284,49 @@ struct Record {
 enum Pick {
     /// SteamGridDB has nothing of this kind for the game.
     NoArtwork,
-    /// The SteamGridDB file shown, picked automatically or by the player.
-    File { id: u64, url: String },
+    /// The SteamGridDB file shown, picked automatically or `chosen` by the player.
+    File {
+        id: u64,
+        url: String,
+        #[serde(default)]
+        chosen: bool,
+    },
+}
+
+impl Pick {
+    fn is_chosen(&self) -> bool {
+        matches!(self, Pick::File { chosen: true, .. })
+    }
 }
 
 impl Record {
-    fn matched(game: u64) -> Record {
-        Record {
-            game: Some(game),
-            ..Record::default()
-        }
+    /// What searching the Display Title `title` found (`Some(None)`: no match), if it was searched.
+    fn search(&self, title: &str) -> Option<Option<u64>> {
+        (self.title.as_deref() == Some(title)).then_some(self.game)
     }
 
-    fn pick(&self, kind: Kind) -> Option<&Pick> {
-        match kind {
+    /// The pick of `kind` that holds for the Display Title `title`: the player's choice always, an
+    /// automatic one only while it was matched for `title`.
+    fn pick(&self, kind: Kind, title: &str) -> Option<&Pick> {
+        let pick = match kind {
             Kind::Cover => self.cover.as_ref(),
             Kind::Hero => self.hero.as_ref(),
+        }?;
+        (pick.is_chosen() || self.search(title).is_some()).then_some(pick)
+    }
+
+    /// The record once searching `title` found `game`: the player's choices stay, and automatic
+    /// picks only if they came from this same search.
+    fn searched(self, title: &str, game: Option<u64>) -> Record {
+        if self.search(title) == Some(game) {
+            return self;
+        }
+        let chosen = |pick: Option<Pick>| pick.filter(Pick::is_chosen);
+        Record {
+            title: Some(title.to_owned()),
+            game,
+            cover: chosen(self.cover),
+            hero: chosen(self.hero),
         }
     }
 
@@ -312,10 +349,16 @@ fn write_record(library: &Library, id: i64, record: &Record) -> Result<(), DbErr
     library.set_artwork(id, &text)
 }
 
-/// Like [`write_record`], from the background results: on failure the Artwork still shows, and the
-/// next run looks it up again.
-fn save_record(library: &Library, id: i64, record: &Record) {
-    if let Err(e) = write_record(library, id, record) {
+/// Applies `update` to Game `id`'s record (an empty one if it has none) and writes it if that
+/// changed anything. For the background results: on failure the Artwork still shows, and the next
+/// run looks it up again.
+fn update_record(library: &Library, id: i64, update: impl FnOnce(Record) -> Record) {
+    let before = read_record(library, id);
+    let after = update(before.clone().unwrap_or_default());
+    if before.as_ref() == Some(&after) {
+        return;
+    }
+    if let Err(e) = write_record(library, id, &after) {
         eprintln!("game37: can't record Artwork: {e}");
     }
 }
@@ -380,18 +423,17 @@ impl Artwork {
         let Some(dir) = &self.dir else {
             return Art::Placeholder;
         };
-        let key = Key::Game(game.id, kind);
+        let key = Key::Game(game.id, kind, game.title.clone());
         let mut state = self.state.borrow_mut();
         state.clock += 1;
         let now = state.clock;
         if let Some(slot) = state.slots.get_mut(&key) {
             return slot.art(now);
         }
-        let record = read_record(library, game.id);
-        let mut slot = match record.as_ref().map(|r| (r.game, r.pick(kind))) {
-            // Searched before: no match, or nothing of this kind.
-            Some((None, _) | (Some(_), Some(Pick::NoArtwork))) => Slot::Placeholder,
-            Some((Some(_), Some(Pick::File { id, url }))) => {
+        let record = read_record(library, game.id).unwrap_or_default();
+        let search = record.search(&game.title);
+        let mut slot = match (record.pick(kind, &game.title), search) {
+            (Some(Pick::File { id, url, .. }), _) => {
                 let job = state.next_job();
                 self.workers(dir).disk(DiskJob {
                     key: key.clone(),
@@ -402,13 +444,14 @@ impl Artwork {
                 });
                 Slot::Loading(job)
             }
+            // Searched this Display Title before: nothing of this kind, or no match.
+            (Some(Pick::NoArtwork), _) | (None, Some(None)) => Slot::Placeholder,
             _ if self.online() => {
                 let job = state.next_job();
                 self.workers(dir).net(NetJob::Lookup {
                     key: key.clone(),
                     job,
-                    title: game.title.clone(),
-                    game: record.as_ref().and_then(|r| r.game),
+                    game: search.flatten(),
                 });
                 Slot::Loading(job)
             }
@@ -426,23 +469,25 @@ impl Artwork {
             return Candidates::Unavailable;
         };
         let mut state = self.state.borrow_mut();
-        if let Some(candidates) = state.candidates.get(&(game.id, kind)) {
+        let key = (game.id, kind, game.title.clone());
+        if let Some(candidates) = state.candidates.get(&key) {
             return candidates.clone();
         }
-        let candidates = match read_record(library, game.id) {
-            Some(Record { game: None, .. }) => Candidates::Unavailable,
-            record if self.online() => {
+        let search = read_record(library, game.id).and_then(|r| r.search(&game.title));
+        let candidates = match search {
+            Some(None) => Candidates::Unavailable,
+            _ if self.online() => {
                 self.workers(dir).net(NetJob::Candidates {
                     game_id: game.id,
                     kind,
                     title: game.title.clone(),
-                    game: record.and_then(|r| r.game),
+                    game: search.flatten(),
                 });
                 Candidates::Loading
             }
             _ => Candidates::Unavailable,
         };
-        state.candidates.insert((game.id, kind), candidates.clone());
+        state.candidates.insert(key, candidates.clone());
         candidates
     }
 
@@ -477,29 +522,31 @@ impl Artwork {
 
     /// The id of the [`Candidate`] `game` shows as its Artwork of `kind`, if any.
     pub fn chosen(&self, library: &Library, game: &GameRow, kind: Kind) -> Option<u64> {
-        match read_record(library, game.id)?.pick(kind)? {
+        match read_record(library, game.id)?.pick(kind, &game.title)? {
             Pick::File { id, .. } => Some(*id),
             Pick::NoArtwork => None,
         }
     }
 
-    /// Makes `candidate` `game`'s Artwork of its kind, for good (FR-ART-2, FR-LIB-7). The next ask
-    /// fetches and shows it.
+    /// Makes `candidate` `game`'s Artwork of its kind, for good (FR-ART-2, FR-LIB-7): it stays
+    /// when the Display Title changes. The next ask fetches and shows it.
     pub fn choose(&self, library: &Library, game: &GameRow, candidate: &Candidate) -> Result<(), DbError> {
-        let mut record = read_record(library, game.id)
-            .filter(|r| r.game == Some(candidate.game))
-            .unwrap_or_else(|| Record::matched(candidate.game));
+        let mut record = read_record(library, game.id).unwrap_or_default();
+        if record.search(&game.title).is_none() {
+            record = record.searched(&game.title, Some(candidate.game));
+        }
         record.set(
             candidate.kind,
             Pick::File {
                 id: candidate.id,
                 url: candidate.url.clone(),
+                chosen: true,
             },
         );
         write_record(library, game.id, &record)?;
         self.state
             .borrow_mut()
-            .remove(&Key::Game(game.id, candidate.kind));
+            .remove(&Key::Game(game.id, candidate.kind, game.title.clone()));
         Ok(())
     }
 
@@ -543,15 +590,15 @@ impl Artwork {
                         });
                     }
                     Outcome::Found { game, pick, picture } => {
-                        let Key::Game(id, kind) = key else { return };
-                        let mut record = read_record(library, id)
-                            .filter(|r| r.game == Some(game))
-                            .unwrap_or_else(|| Record::matched(game));
-                        // The player may have chosen other Artwork meanwhile: theirs stays.
-                        if record.pick(kind).is_none() {
-                            record.set(kind, pick);
-                            save_record(library, id, &record);
-                        }
+                        let Key::Game(id, kind, title) = &key else { return };
+                        update_record(library, *id, |record| {
+                            let mut record = record.searched(title, Some(game));
+                            // The player may have chosen other Artwork meanwhile: theirs stays.
+                            if record.pick(*kind, title).is_none() {
+                                record.set(*kind, pick);
+                            }
+                            record
+                        });
                         if current {
                             match picture {
                                 Some(picture) => state.ready(key, picture, self.budget),
@@ -562,10 +609,8 @@ impl Artwork {
                         }
                     }
                     Outcome::NoMatch => {
-                        let Key::Game(id, _) = key else { return };
-                        if read_record(library, id).is_none() {
-                            save_record(library, id, &Record::default());
-                        }
+                        let Key::Game(id, _, title) = &key else { return };
+                        update_record(library, *id, |record| record.searched(title, None));
                         if current {
                             state.slots.insert(key, Slot::Placeholder);
                         }
@@ -579,24 +624,21 @@ impl Artwork {
             Done::Candidates {
                 game_id,
                 kind,
+                title,
                 result,
             } => {
                 let candidates = match result {
                     Ok((game, list)) => {
-                        if read_record(library, game_id).is_none() {
-                            save_record(library, game_id, &Record::matched(game));
-                        }
+                        update_record(library, game_id, |record| record.searched(&title, Some(game)));
                         Candidates::Ready(list.into())
                     }
                     Err(Failure::NoMatch) => {
-                        if read_record(library, game_id).is_none() {
-                            save_record(library, game_id, &Record::default());
-                        }
+                        update_record(library, game_id, |record| record.searched(&title, None));
                         Candidates::Unavailable
                     }
                     Err(Failure::Failed) => Candidates::Unavailable,
                 };
-                state.candidates.insert((game_id, kind), candidates);
+                state.candidates.insert((game_id, kind, title), candidates);
             }
         }
     }
@@ -799,14 +841,10 @@ impl DiskJob {
 }
 
 enum NetJob {
-    /// Finds a Game's top result of `key`'s kind: searches its Display Title unless the SteamGridDB
-    /// `game` is known, lists that game's Artwork, then fetches, caches and decodes the first.
-    Lookup {
-        key: Key,
-        job: u64,
-        title: String,
-        game: Option<u64>,
-    },
+    /// Finds a Game's top result of `key`'s kind: searches `key`'s Display Title unless the
+    /// SteamGridDB `game` is known, lists that game's Artwork, then fetches, caches and decodes the
+    /// first.
+    Lookup { key: Key, job: u64, game: Option<u64> },
     /// Fetches and decodes one file, caching it at `path` if there is one.
     Download {
         key: Key,
@@ -832,9 +870,12 @@ impl NetJob {
                 job: *job,
                 outcome: Outcome::Failed,
             },
-            NetJob::Candidates { game_id, kind, .. } => Done::Candidates {
+            NetJob::Candidates {
+                game_id, kind, title, ..
+            } => Done::Candidates {
                 game_id: *game_id,
                 kind: *kind,
+                title: title.clone(),
                 result: Err(Failure::Failed),
             },
         }
@@ -850,6 +891,8 @@ enum Done {
     Candidates {
         game_id: i64,
         kind: Kind,
+        /// The Display Title they were listed for.
+        title: String,
         result: Result<(u64, Vec<Candidate>), Failure>,
     },
 }
@@ -914,25 +957,20 @@ struct Net {
     key: Option<ApiKey>,
     fetch: Fetch,
     stopped: Arc<AtomicBool>,
-    /// Display Title searches done this run, by library id, so a Game's cover and hero search once.
-    searched: HashMap<i64, Option<u64>>,
+    /// Display Title searches done this run, so a Game's cover and hero search once.
+    searched: HashMap<String, Option<u64>>,
 }
 
 impl Net {
     fn run(&mut self, job: NetJob) -> Done {
         match job {
-            NetJob::Lookup {
-                key,
-                job,
-                title,
-                game,
-            } => {
-                let outcome = self.lookup(&key, &title, game);
+            NetJob::Lookup { key, job, game } => {
+                let outcome = self.lookup(&key, game);
                 Done::Art { key, job, outcome }
             }
             NetJob::Download { key, job, url, path } => {
                 let kind = match key {
-                    Key::Game(_, kind) | Key::Preview(_, kind) => kind,
+                    Key::Game(_, kind, _) | Key::Preview(_, kind) => kind,
                 };
                 let outcome = match self.download(&url, kind, path.as_deref()) {
                     Ok(picture) => Outcome::Loaded(picture),
@@ -947,22 +985,24 @@ impl Net {
                 game,
             } => {
                 let result = self
-                    .resolve(game_id, &title, game)
+                    .resolve(&title, game)
                     .and_then(|game| Ok((game, self.list(kind, game)?)));
                 Done::Candidates {
                     game_id,
                     kind,
+                    title,
                     result,
                 }
             }
         }
     }
 
-    fn lookup(&mut self, key: &Key, title: &str, game: Option<u64>) -> Outcome {
-        let Key::Game(id, kind) = *key else {
+    fn lookup(&mut self, key: &Key, game: Option<u64>) -> Outcome {
+        let Key::Game(_, kind, title) = key else {
             return Outcome::Failed;
         };
-        let game = match self.resolve(id, title, game) {
+        let kind = *kind;
+        let game = match self.resolve(title, game) {
             Ok(game) => game,
             Err(Failure::NoMatch) => return Outcome::NoMatch,
             Err(Failure::Failed) => return Outcome::Failed,
@@ -984,6 +1024,7 @@ impl Net {
                 pick: Pick::File {
                     id: top.id,
                     url: top.url.clone(),
+                    chosen: false,
                 },
                 picture: Some(picture),
             },
@@ -991,17 +1032,18 @@ impl Net {
         }
     }
 
-    /// The SteamGridDB game for library Game `id`: `known`, or the top search result for `title`.
-    fn resolve(&mut self, id: i64, title: &str, known: Option<u64>) -> Result<u64, Failure> {
+    /// The SteamGridDB game for a Game with the Display Title `title`: `known`, or the top search
+    /// result for `title`.
+    fn resolve(&mut self, title: &str, known: Option<u64>) -> Result<u64, Failure> {
         if let Some(game) = known {
             return Ok(game);
         }
-        if let Some(found) = self.searched.get(&id) {
+        if let Some(found) = self.searched.get(title) {
             return found.ok_or(Failure::NoMatch);
         }
         let found: Vec<FoundGame> = self.api(&format!("/search/autocomplete/{}", encode(title)))?;
         let found = found.first().map(|g| g.id);
-        self.searched.insert(id, found);
+        self.searched.insert(title.to_owned(), found);
         found.ok_or(Failure::NoMatch)
     }
 
@@ -1346,10 +1388,12 @@ mod tests {
         let file = |id: u64, path: &str| Pick::File {
             id,
             url: format!("{CDN}/{path}"),
+            chosen: false,
         };
         assert_eq!(
             read_record(&library, alpha.id),
             Some(Record {
+                title: Some("Alpha".to_owned()),
                 game: Some(42),
                 cover: Some(file(7, "grid/7.png")),
                 hero: Some(file(9, "hero/9.png")),
@@ -1529,7 +1573,11 @@ mod tests {
 
         assert!(is_placeholder(&wait(&artwork, &library, &games[0], Kind::Cover)));
         assert_eq!(fake.calls(), 1);
-        assert_eq!(read_record(&library, games[0].id), Some(Record::default()));
+        let no_match = Record {
+            title: Some("Alpha".to_owned()),
+            ..Record::default()
+        };
+        assert_eq!(read_record(&library, games[0].id), Some(no_match));
         assert!(is_placeholder(&artwork.hero(&library, &games[0])));
         assert!(matches!(
             artwork.candidates(&library, &games[0], Kind::Cover),
@@ -1673,6 +1721,139 @@ mod tests {
         size(&wait(&artwork, &library, &games[0], Kind::Cover));
         assert!(artwork.state.borrow().bytes <= artwork.budget);
         assert_eq!(fake.calls(), 0);
+    }
+
+    /// Renames library Game `game` to `title` and reads it back, as screens do after a rename.
+    fn rename(library: &Library, game: &GameRow, title: &str) -> GameRow {
+        library.rename(game.id, Some(title.to_owned())).unwrap();
+        library.game(game.id).unwrap().unwrap()
+    }
+
+    /// "Gamma" on SteamGridDB: game 60 with cover 12 and hero 13.
+    fn with_gamma(fake: &Fake) {
+        fake.api("/search/autocomplete/Gamma", "[{\"id\":60}]")
+            .api(
+                "/grids/game/60?",
+                &listing(&[(12, &format!("{CDN}/grid/12.png"))]),
+            )
+            .api(
+                "/heroes/game/60?",
+                &listing(&[(13, &format!("{CDN}/hero/13.png"))]),
+            )
+            .route(&format!("{CDN}/grid/12.png"), Ok(png(200, 300)))
+            .route(&format!("{CDN}/hero/13.png"), Ok(png(1500, 500)));
+    }
+
+    #[test]
+    fn artwork_matched_automatically_is_searched_again_under_a_new_display_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = steamgriddb();
+        with_gamma(&fake);
+        let (library, games) = library(dir.path());
+        let artwork = artwork(dir.path(), &fake, true);
+        assert_eq!(
+            size(&wait(&artwork, &library, &games[0], Kind::Cover)),
+            (400, 600)
+        );
+        let calls = fake.calls();
+
+        let gamma = rename(&library, &games[0], "Gamma");
+        assert_eq!(
+            artwork.chosen(&library, &gamma, Kind::Cover),
+            None,
+            "cover 7 was Alpha's"
+        );
+        assert_eq!(size(&wait(&artwork, &library, &gamma, Kind::Cover)), (200, 300));
+        assert_eq!(
+            fake.urls()[calls..],
+            [
+                format!("{API}/search/autocomplete/Gamma"),
+                format!("{API}/grids/game/60?{COVER_QUERY}"),
+                format!("{CDN}/grid/12.png"),
+            ]
+        );
+        assert_eq!(artwork.chosen(&library, &gamma, Kind::Cover), Some(12));
+        drop((artwork, library));
+
+        // The new match is recorded: a restart fetches nothing.
+        let fake = Fake::new();
+        let (library, _) = self::library(dir.path());
+        let gamma = library.game(gamma.id).unwrap().unwrap();
+        let artwork = self::artwork(dir.path(), &fake, true);
+        assert_eq!(size(&wait(&artwork, &library, &gamma, Kind::Cover)), (200, 300));
+        assert_eq!(fake.calls(), 0);
+    }
+
+    #[test]
+    fn artwork_no_match_is_searched_again_under_a_new_display_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Fake::new();
+        fake.api("/search/autocomplete/Alpha", "[]");
+        with_gamma(&fake);
+        let (library, games) = library(dir.path());
+        let artwork = artwork(dir.path(), &fake, true);
+        assert!(is_placeholder(&wait(&artwork, &library, &games[0], Kind::Cover)));
+        let gamma = rename(&library, &games[0], "Gamma");
+        assert_eq!(size(&wait(&artwork, &library, &gamma, Kind::Cover)), (200, 300));
+        assert_eq!(fake.urls()[1], format!("{API}/search/autocomplete/Gamma"));
+    }
+
+    #[test]
+    fn artwork_the_player_chose_survives_a_new_display_title_without_fetching() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = steamgriddb();
+        with_gamma(&fake);
+        let (library, games) = library(dir.path());
+        let artwork = artwork(dir.path(), &fake, true);
+        let alpha = &games[0];
+        let candidates = wait_candidates(&artwork, &library, alpha);
+        artwork.choose(&library, alpha, &candidates[1]).unwrap();
+        assert_eq!(size(&wait(&artwork, &library, alpha, Kind::Cover)), (342, 482));
+        let calls = fake.calls();
+
+        let gamma = rename(&library, alpha, "Gamma");
+        assert_eq!(size(&wait(&artwork, &library, &gamma, Kind::Cover)), (342, 482));
+        assert_eq!(artwork.chosen(&library, &gamma, Kind::Cover), Some(8));
+        assert_eq!(fake.calls(), calls, "the chosen cover is read from the cache");
+        drop((artwork, library));
+
+        // After a restart too; the hero, never chosen, is matched under the new title.
+        let fake2 = steamgriddb();
+        with_gamma(&fake2);
+        let (library, _) = self::library(dir.path());
+        let artwork = self::artwork(dir.path(), &fake2, true);
+        assert_eq!(size(&wait(&artwork, &library, &gamma, Kind::Cover)), (342, 482));
+        assert_eq!(fake2.calls(), 0);
+        assert_eq!(size(&wait(&artwork, &library, &gamma, Kind::Hero)), (1500, 500));
+        assert_eq!(fake2.urls()[0], format!("{API}/search/autocomplete/Gamma"));
+        assert_eq!(
+            artwork.chosen(&library, &gamma, Kind::Cover),
+            Some(8),
+            "and the choice stays"
+        );
+    }
+
+    #[test]
+    fn artwork_under_an_unchanged_display_title_makes_no_requests() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = steamgriddb();
+        let (library, games) = library(dir.path());
+        let artwork = artwork(dir.path(), &fake, true);
+        size(&wait(&artwork, &library, &games[0], Kind::Cover));
+        let calls = fake.calls();
+        // Renamed to the title it already has, and read back afresh.
+        let same = rename(&library, &games[0], "Alpha");
+        size(&wait(&artwork, &library, &same, Kind::Cover));
+        assert!(matches!(
+            artwork.candidates(&library, &same, Kind::Cover),
+            Candidates::Loading | Candidates::Ready(_)
+        ));
+        settle(&artwork, &library, || artwork.busy(), |busy| *busy);
+        // Only the candidate listing, which needs no search: the match is known.
+        assert_eq!(
+            fake.urls()[calls..],
+            [format!("{API}/grids/game/42?{COVER_QUERY}")]
+        );
     }
 
     #[test]
