@@ -4,13 +4,15 @@
 //! opens a wider panel with a text field and an on-screen keyboard (US-3): the menu stays one
 //! modal, so saving closes it like every other action. Loading a Save State shows a picker of
 //! the Game's slots in the same panel, each with its screenshot and time (FR-EMB-5), and starts
-//! the Game from the one chosen.
+//! the Game from the one chosen. Choose artwork opens the artwork picker over the menu, its own
+//! modal, which goes back to the menu when done.
 
 use std::path::Path;
 
 use crate::ctx::{self, Ctx, Play};
 use crate::launch;
 use crate::library::db::{GameRow, Shelf};
+use crate::screens::artwork_picker::ArtworkPicker;
 use crate::session::sdl;
 use crate::session::states::{Rgb, SLOTS, StatePaths};
 use crate::systems::{self, Kind};
@@ -57,7 +59,7 @@ pub enum Item {
     /// Load one of the Game's Save States, with a slot picker; Embedded Systems only, and only
     /// selectable when a slot is filled.
     LoadSaveState,
-    /// Choose different Artwork. Shown but not selectable until it is built.
+    /// Choose different Artwork from SteamGridDB, in the artwork picker (FR-ART-2).
     ChooseArtwork,
     /// Rename the Display Title; the file on disk stays as it is (FR-DET-5).
     Rename,
@@ -192,8 +194,7 @@ impl OptionsMenu {
     pub fn enabled(&self, item: Item) -> bool {
         match item {
             Item::LoadSaveState => self.filled() > 0,
-            Item::ChooseArtwork => false,
-            Item::Favorite | Item::Rename | Item::Hide | Item::ShowFile => true,
+            Item::Favorite | Item::ChooseArtwork | Item::Rename | Item::Hide | Item::ShowFile => true,
         }
     }
 
@@ -326,7 +327,7 @@ impl OptionsMenu {
                 self.pick = (0..SLOTS).find(|&n| self.pickable(n)).unwrap_or(0);
                 return Transition::None;
             }
-            Item::ChooseArtwork => return Transition::None,
+            Item::ChooseArtwork => return Transition::Push(Box::new(ArtworkPicker::new(self.game.clone()))),
         };
         finish(done, ctx)
     }
@@ -790,7 +791,7 @@ mod tests {
     }
 
     #[test]
-    fn the_actions_not_built_yet_are_listed_but_not_selectable() {
+    fn an_action_that_cant_be_chosen_is_listed_but_not_selectable() {
         let (_dir, mut ctx, games) = world(1);
         let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
         use Item::*;
@@ -798,14 +799,15 @@ mod tests {
             menu.items(),
             [Favorite, LoadSaveState, ChooseArtwork, Rename, Hide, ShowFile]
         );
+        assert!(!menu.enabled(LoadSaveState), "no Save State to load");
         act(&mut menu, &mut ctx, Action::Down);
-        assert_eq!(menu.focused(), Rename, "focus skips them");
+        assert_eq!(menu.focused(), ChooseArtwork, "focus skips it");
         act(&mut menu, &mut ctx, Action::Up);
         assert_eq!(menu.focused(), Favorite);
         act(&mut menu, &mut ctx, Action::Up);
         assert_eq!(menu.focused(), Favorite, "and stops at the ends");
 
-        menu.item_hits = vec![(Rect::new(PANEL_X, 300.0, 100.0, 50.0), 2)];
+        menu.item_hits = vec![(Rect::new(PANEL_X, 300.0, 100.0, 50.0), 1)];
         menu.handle(
             Input::Pointer(Pointer::Move {
                 x: PANEL_X + 1.0,
@@ -820,6 +822,33 @@ mod tests {
         });
         assert!(matches!(menu.handle(click, &mut ctx), Transition::None));
         assert!(!fresh(&ctx, &games[0]).favorite);
+    }
+
+    #[test]
+    fn choose_artwork_opens_the_artwork_picker_over_the_menu_and_back_returns_to_it() {
+        use crate::ui::nav::{Flow, Hits, Nav};
+        let (_dir, mut ctx, games) = world(1);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        act(&mut menu, &mut ctx, Action::Down);
+        assert_eq!(menu.focused(), Item::ChooseArtwork);
+        assert!(menu.enabled(Item::ChooseArtwork));
+        let mut nav = Nav::single(Box::new(OptionsMenu::new(games[0].clone(), &ctx.games_root)));
+        nav.push(Box::new(menu));
+        let press = |nav: &mut Nav, ctx: &mut Ctx, action| {
+            assert_eq!(
+                nav.handle(Input::Action(action), &Hits::default(), ctx),
+                Flow::Continue
+            );
+        };
+        let revision = ctx.revision;
+        press(&mut nav, &mut ctx, Action::Confirm);
+        assert_eq!(nav.depth(), 3, "the picker is pushed over the menu");
+        assert_eq!(nav.top().title(), "Choose artwork");
+        assert!(nav.top().is_modal());
+        press(&mut nav, &mut ctx, Action::Back);
+        assert_eq!(nav.depth(), 2, "Back returns to the menu");
+        assert_eq!(nav.top().title(), "G0");
+        assert_eq!(ctx.revision, revision, "nothing changed");
     }
 
     #[test]
@@ -1000,6 +1029,7 @@ mod tests {
         let mut menu = OptionsMenu::new(fresh(&ctx, &games[0]), &ctx.games_root);
         act(&mut menu, &mut ctx, Action::Down);
         act(&mut menu, &mut ctx, Action::Down);
+        act(&mut menu, &mut ctx, Action::Down);
         assert_eq!(menu.focused(), Item::Hide);
         let revision = ctx.revision;
         assert!(matches!(
@@ -1017,6 +1047,7 @@ mod tests {
     fn show_file_asks_for_the_games_file_and_a_folder_game_for_its_folder() {
         let (_dir, mut ctx, games) = world(1);
         let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        act(&mut menu, &mut ctx, Action::Down);
         act(&mut menu, &mut ctx, Action::Down);
         act(&mut menu, &mut ctx, Action::Down);
         act(&mut menu, &mut ctx, Action::Down);
@@ -1066,6 +1097,7 @@ mod tests {
         std::fs::create_dir_all(&snes).unwrap();
         std::fs::write(snes.join("G0.sfc"), b"not a game").unwrap();
         let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        act(&mut menu, &mut ctx, Action::Down);
         act(&mut menu, &mut ctx, Action::Down);
         assert_eq!(menu.focused(), Item::Rename);
         assert!(matches!(
@@ -1142,6 +1174,7 @@ mod tests {
             let (_dir, mut ctx, game, _) = renaming();
             ctx.library.rename(game.id, Some("Mine".into())).unwrap();
             let mut menu = OptionsMenu::new(fresh(&ctx, &game), &ctx.games_root);
+            act(&mut menu, &mut ctx, Action::Down);
             act(&mut menu, &mut ctx, Action::Down);
             act(&mut menu, &mut ctx, Action::Confirm);
             for _ in 0.."Mine".len() {
