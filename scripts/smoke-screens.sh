@@ -80,8 +80,10 @@ shot m5-details "$root/cfg.toml" "nexttab,right,right,confirm,confirm"
 shot m5-options "$root/cfg.toml" "down,down,options"
 shot m5-favorite-replace "$root/cfg.toml" "down,down$(printf ',options,confirm,right%.0s' {1..5}),options,confirm,down"
 shot m5-load-state "$root/cfg.toml" "nexttab,right,right,confirm,confirm,options,down,confirm"
+# Choose artwork: offline, without --artwork, the picker says it needs a SteamGridDB API key
+shot m5-choose-artwork "$root/cfg.toml" "down,down,options,down,confirm"
 # Rename with the on-screen keyboard: erase the Display Title, then Shift, m, k and a space
 shot m5-rename "$root/cfg.toml" \
-    "down,down,options,down,confirm$(printf ',options%.0s' {1..40}),down,down,confirm,$(printf 'right,%.0s' {1..7})confirm,up,left,confirm,sort,up"
+    "down,down,options,down,down,confirm$(printf ',options%.0s' {1..40}),down,down,confirm,$(printf 'right,%.0s' {1..7})confirm,up,left,confirm,sort,up"
 
 echo "screenshots in $out"
