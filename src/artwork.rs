@@ -136,8 +136,19 @@ pub enum Candidates {
     Loading,
     /// In SteamGridDB's order; the first is the one picked automatically.
     Ready(Arc<[Candidate]>),
-    /// No API key, no match, or the lookup failed this run.
-    Unavailable,
+    /// There are none to choose from, and why.
+    Unavailable(Reason),
+}
+
+/// Why a Game has no [`Candidates`], for the picker to say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reason {
+    /// There is no SteamGridDB API key, or Artwork is off altogether.
+    NoKey,
+    /// SteamGridDB knows no game by the Display Title.
+    NoMatch,
+    /// SteamGridDB couldn't be reached, or refused the key, this run.
+    Failed,
 }
 
 /// One HTTP GET. Only API requests carry the key; Artwork files come from the CDN without it.
@@ -466,7 +477,7 @@ impl Artwork {
     /// on first ask and answers `Loading` until it arrives.
     pub fn candidates(&self, library: &Library, game: &GameRow, kind: Kind) -> Candidates {
         let Some(dir) = &self.dir else {
-            return Candidates::Unavailable;
+            return Candidates::Unavailable(Reason::NoKey);
         };
         let mut state = self.state.borrow_mut();
         let key = (game.id, kind, game.title.clone());
@@ -475,7 +486,7 @@ impl Artwork {
         }
         let search = read_record(library, game.id).and_then(|r| r.search(&game.title));
         let candidates = match search {
-            Some(None) => Candidates::Unavailable,
+            Some(None) => Candidates::Unavailable(Reason::NoMatch),
             _ if self.online() => {
                 self.workers(dir).net(NetJob::Candidates {
                     game_id: game.id,
@@ -485,7 +496,9 @@ impl Artwork {
                 });
                 Candidates::Loading
             }
-            _ => Candidates::Unavailable,
+            _ if self.key.is_none() => Candidates::Unavailable(Reason::NoKey),
+            // SteamGridDB refused the key or asked to slow down earlier this run.
+            _ => Candidates::Unavailable(Reason::Failed),
         };
         state.candidates.insert(key, candidates.clone());
         candidates
@@ -634,9 +647,9 @@ impl Artwork {
                     }
                     Err(Failure::NoMatch) => {
                         update_record(library, game_id, |record| record.searched(&title, None));
-                        Candidates::Unavailable
+                        Candidates::Unavailable(Reason::NoMatch)
                     }
-                    Err(Failure::Failed) => Candidates::Unavailable,
+                    Err(Failure::Failed) => Candidates::Unavailable(Reason::Failed),
                 };
                 state.candidates.insert((game_id, kind, title), candidates);
             }
@@ -1150,28 +1163,28 @@ fn ureq_fetch(request: &Request) -> Result<Vec<u8>, FetchError> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::library::FoundGame;
     use crate::library::db::SortOrder;
     use std::sync::{Condvar, Mutex};
     use std::time::Instant;
 
-    const CDN: &str = "https://cdn2.steamgriddb.com/file/sgdb-cdn";
+    pub(crate) const CDN: &str = "https://cdn2.steamgriddb.com/file/sgdb-cdn";
 
-    type Response = Result<Vec<u8>, FetchError>;
+    pub(crate) type Response = Result<Vec<u8>, FetchError>;
 
     /// An offline SteamGridDB: answers each URL from the first route it starts with, and logs every
     /// request with whether it carried the key. Closing the gate holds every request until opened.
     #[derive(Clone)]
-    struct Fake {
+    pub(crate) struct Fake {
         routes: Arc<Mutex<Vec<(String, Response)>>>,
         log: Arc<Mutex<Vec<(String, bool)>>>,
         gate: Arc<(Mutex<bool>, Condvar)>,
     }
 
     impl Fake {
-        fn new() -> Fake {
+        pub(crate) fn new() -> Fake {
             Fake {
                 routes: Arc::default(),
                 log: Arc::default(),
@@ -1179,17 +1192,17 @@ mod tests {
             }
         }
 
-        fn route(&self, prefix: &str, response: Response) -> &Fake {
+        pub(crate) fn route(&self, prefix: &str, response: Response) -> &Fake {
             self.routes.lock().unwrap().push((prefix.to_owned(), response));
             self
         }
 
-        fn api(&self, path: &str, data: &str) -> &Fake {
+        pub(crate) fn api(&self, path: &str, data: &str) -> &Fake {
             let body = format!("{{\"success\":true,\"data\":{data}}}");
             self.route(&format!("{API}{path}"), Ok(body.into_bytes()))
         }
 
-        fn fetch(&self) -> Fetch {
+        pub(crate) fn fetch(&self) -> Fetch {
             let fake = self.clone();
             Arc::new(move |request: &Request| {
                 let (open, opened) = &*fake.gate;
@@ -1223,12 +1236,12 @@ mod tests {
                 .collect()
         }
 
-        fn calls(&self) -> usize {
+        pub(crate) fn calls(&self) -> usize {
             self.log.lock().unwrap().len()
         }
     }
 
-    fn png(w: u32, h: u32) -> Vec<u8> {
+    pub(crate) fn png(w: u32, h: u32) -> Vec<u8> {
         let mut bytes = Vec::new();
         image::RgbaImage::from_pixel(w, h, image::Rgba([200, 30, 30, 255]))
             .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
@@ -1252,7 +1265,7 @@ mod tests {
 
     /// SteamGridDB as the tests know it: "Alpha" is game 42, with covers 7 (600×900) and 8
     /// (342×482) and hero 9 (1920×620); "Beta" is game 50 with cover 11 and no heroes.
-    fn steamgriddb() -> Fake {
+    pub(crate) fn steamgriddb() -> Fake {
         let fake = Fake::new();
         fake.api(
             "/search/autocomplete/Alpha",
@@ -1302,7 +1315,12 @@ mod tests {
     }
 
     /// Asks for `ask` every few milliseconds, polling in between, until it is no longer loading.
-    fn settle<T>(artwork: &Artwork, library: &Library, ask: impl Fn() -> T, loading: fn(&T) -> bool) -> T {
+    pub(crate) fn settle<T>(
+        artwork: &Artwork,
+        library: &Library,
+        ask: impl Fn() -> T,
+        loading: fn(&T) -> bool,
+    ) -> T {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             artwork.poll(library);
@@ -1467,7 +1485,7 @@ mod tests {
         assert!(is_placeholder(&artwork.hero(&library, &games[0])));
         assert!(matches!(
             artwork.candidates(&library, &games[0], Kind::Cover),
-            Candidates::Unavailable
+            Candidates::Unavailable(Reason::NoKey)
         ));
         assert!(!artwork.busy());
         assert!(!artwork.poll(&library));
@@ -1476,6 +1494,10 @@ mod tests {
 
         let off = Artwork::off();
         assert!(is_placeholder(&off.cover(&library, &games[0])));
+        assert!(matches!(
+            off.candidates(&library, &games[0], Kind::Hero),
+            Candidates::Unavailable(Reason::NoKey)
+        ));
     }
 
     #[test]
@@ -1492,12 +1514,32 @@ mod tests {
         assert!(is_placeholder(&artwork.cover(&library, &games[1])));
         assert!(matches!(
             artwork.candidates(&library, &games[1], Kind::Cover),
-            Candidates::Unavailable
+            Candidates::Unavailable(Reason::Failed)
         ));
         assert!(!artwork.busy());
         assert_eq!(fake.calls(), 1);
         // A refused key is not "no match": the next run tries again.
         assert_eq!(read_record(&library, games[0].id), None);
+    }
+
+    #[test]
+    fn artwork_candidates_that_fail_to_arrive_say_so_and_are_not_no_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Fake::new();
+        fake.route(API, Err(FetchError::Connect));
+        let (library, games) = library(dir.path());
+        let artwork = artwork(dir.path(), &fake, true);
+        let ask = || artwork.candidates(&library, &games[0], Kind::Hero);
+        let answer = settle(&artwork, &library, ask, |c| matches!(c, Candidates::Loading));
+        assert!(
+            matches!(answer, Candidates::Unavailable(Reason::Failed)),
+            "{answer:?}"
+        );
+        assert_eq!(
+            read_record(&library, games[0].id),
+            None,
+            "the next run tries again"
+        );
     }
 
     #[test]
@@ -1581,7 +1623,7 @@ mod tests {
         assert!(is_placeholder(&artwork.hero(&library, &games[0])));
         assert!(matches!(
             artwork.candidates(&library, &games[0], Kind::Cover),
-            Candidates::Unavailable
+            Candidates::Unavailable(Reason::NoMatch)
         ));
         assert_eq!(fake.calls(), 1);
         drop((artwork, library));

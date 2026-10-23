@@ -650,7 +650,8 @@ mod tests {
         let Transition::Push(mut menu) = act(&mut page, &mut ctx, Action::Options) else {
             panic!("Y should open the Options Menu");
         };
-        // Past the actions not built yet, and Rename, to Hide.
+        // Past Choose artwork and Rename to Hide (no Save State to load).
+        menu.handle(Input::Action(Action::Down), &mut ctx);
         menu.handle(Input::Action(Action::Down), &mut ctx);
         menu.handle(Input::Action(Action::Down), &mut ctx);
         assert!(matches!(
