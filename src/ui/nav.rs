@@ -71,6 +71,16 @@ pub enum Entry {
     Settings,
 }
 
+impl Entry {
+    /// The input that opens it.
+    fn action(self) -> Action {
+        match self {
+            Entry::Search => Action::Search,
+            Entry::Settings => Action::Settings,
+        }
+    }
+}
+
 /// Makes a new entry screen.
 pub type MakeScreen = Box<dyn Fn(&Ctx) -> Box<dyn Screen>>;
 
@@ -228,6 +238,9 @@ impl Nav {
                 let action = hit(&hits.hints, x, y).unwrap();
                 return self.handle(Input::Action(action), &Hits::default(), ctx);
             }
+            _ if requested(input, hits).is_some() => {
+                return self.open(requested(input, hits).unwrap(), input, ctx);
+            }
             _ if modal => return self.apply(input, ctx),
             Input::Action(Action::PrevTab) if tabs > 1 => {
                 self.switch_to((self.active + tabs - 1) % tabs, ctx)
@@ -242,6 +255,28 @@ impl Nav {
             }
             _ => return self.apply(input, ctx),
         }
+        Flow::Continue
+    }
+
+    /// Pushes the `entry` screen over the active one. Only a screen with chrome that is neither a
+    /// modal nor typing into a field opens it, and only in a Nav with a library; anywhere else
+    /// `input` goes to the top screen as usual. When the entry screen is already on top, it gets the
+    /// entry's action instead of a second copy being pushed.
+    fn open(&mut self, entry: Entry, input: Input, ctx: &mut Ctx) -> Flow {
+        let top = self.top();
+        let shut = top.is_modal() || !top.chrome() || top.text_input();
+        let current = top.entry();
+        let Some(entries) = self.entries.as_ref().filter(|_| !shut) else {
+            return self.apply(input, ctx);
+        };
+        if current == Some(entry) {
+            return self.apply(Input::Action(entry.action()), ctx);
+        }
+        let screen = match entry {
+            Entry::Search => (entries.search)(ctx),
+            Entry::Settings => (entries.settings)(ctx),
+        };
+        self.push(screen);
         Flow::Continue
     }
 
@@ -296,6 +331,18 @@ impl Nav {
         if stack.len() > 1 {
             stack.pop();
         }
+    }
+}
+
+/// The entry screen `input` asks for: its action, or a click on the top bar's pill or gear.
+fn requested(input: Input, hits: &Hits) -> Option<Entry> {
+    let on = |rect: Option<Rect>, x, y| rect.is_some_and(|r| r.contains(x, y));
+    match input {
+        Input::Action(Action::Search) => Some(Entry::Search),
+        Input::Action(Action::Settings) => Some(Entry::Settings),
+        Input::Pointer(Pointer::Click { x, y }) if on(hits.search, x, y) => Some(Entry::Search),
+        Input::Pointer(Pointer::Click { x, y }) if on(hits.settings, x, y) => Some(Entry::Settings),
+        _ => None,
     }
 }
 
@@ -530,5 +577,199 @@ mod tests {
             "without tabs, tab actions reach the screen"
         );
         assert_eq!(act(&mut nav, Action::Confirm), Flow::Quit);
+    }
+
+    /// A screen with the traits that decide whether Search and Settings open over it, which records
+    /// what it was asked to handle.
+    #[derive(Default)]
+    struct Spot {
+        title: &'static str,
+        log: Log,
+        modal: bool,
+        no_chrome: bool,
+        typing: bool,
+        entry: Option<Entry>,
+    }
+
+    impl Screen for Spot {
+        fn title(&self) -> &str {
+            self.title
+        }
+        fn handle(&mut self, input: Input, _: &mut Ctx) -> Transition {
+            self.log.borrow_mut().push((self.title, input));
+            match input {
+                Input::Action(Action::Back) => Transition::Pop,
+                _ => Transition::None,
+            }
+        }
+        fn draw(&mut self, _: &mut Gfx<'_>, _: &Ctx) {}
+        fn hints(&self) -> Vec<Hint> {
+            Vec::new()
+        }
+        fn is_modal(&self) -> bool {
+            self.modal
+        }
+        fn chrome(&self) -> bool {
+            !self.no_chrome
+        }
+        fn text_input(&self) -> bool {
+            self.typing
+        }
+        fn entry(&self) -> Option<Entry> {
+            self.entry
+        }
+    }
+
+    fn spot(title: &'static str, log: &Log) -> Spot {
+        Spot {
+            title,
+            log: log.clone(),
+            ..Spot::default()
+        }
+    }
+
+    /// A Nav with a library on a plain Home, whose Search and Settings log into `log` too.
+    fn library(log: &Log) -> Nav {
+        let entry = |title, entry, log: &Log| -> MakeScreen {
+            let log = log.clone();
+            Box::new(move |_| {
+                Box::new(Spot {
+                    entry: Some(entry),
+                    ..spot(title, &log)
+                })
+            })
+        };
+        Nav::single(Box::new(spot("Home", log))).with_entries(Entries {
+            search: entry("Search", Entry::Search, log),
+            settings: entry("Settings", Entry::Settings, log),
+        })
+    }
+
+    fn titles(nav: &Nav) -> Vec<&str> {
+        nav.tabs[nav.active].stack.iter().map(|s| s.title()).collect()
+    }
+
+    #[test]
+    fn search_and_settings_are_pushed_over_the_screen() {
+        let log = Log::default();
+        let mut nav = library(&log);
+        act(&mut nav, Action::Search);
+        assert_eq!(titles(&nav), ["Home", "Search"]);
+        assert_eq!(nav.back_title(), Some("Home"));
+        act(&mut nav, Action::Back);
+        assert_eq!(titles(&nav), ["Home"], "Back returns to where the player was");
+        act(&mut nav, Action::Settings);
+        assert_eq!(titles(&nav), ["Home", "Settings"]);
+        act(&mut nav, Action::Search);
+        assert_eq!(titles(&nav), ["Home", "Settings", "Search"]);
+        let reached: Vec<_> = log.borrow().iter().map(|(title, _)| *title).collect();
+        assert_eq!(reached, ["Search"], "only Back reached a screen");
+    }
+
+    #[test]
+    fn nothing_opens_over_a_modal_a_text_field_or_a_running_game() {
+        let shut = [
+            Spot {
+                title: "Menu",
+                modal: true,
+                ..Spot::default()
+            },
+            Spot {
+                title: "Rename",
+                typing: true,
+                ..Spot::default()
+            },
+            Spot {
+                title: "Game",
+                no_chrome: true,
+                ..Spot::default()
+            },
+        ];
+        for top in shut {
+            let (title, log) = (top.title, top.log.clone());
+            let mut nav = library(&log);
+            nav.push(Box::new(top));
+            act(&mut nav, Action::Search);
+            act(&mut nav, Action::Settings);
+            assert_eq!(titles(&nav), ["Home", title], "{title}");
+            assert_eq!(
+                *log.borrow(),
+                [
+                    (title, Input::Action(Action::Search)),
+                    (title, Input::Action(Action::Settings))
+                ],
+                "{title} gets the inputs"
+            );
+        }
+    }
+
+    #[test]
+    fn an_entry_already_on_top_gets_its_action_instead() {
+        let log = Log::default();
+        let mut nav = library(&log);
+        let hits = Hits {
+            search: Some(Rect::new(0.0, 0.0, 100.0, 50.0)),
+            ..Hits::default()
+        };
+        act(&mut nav, Action::Search);
+        act(&mut nav, Action::Search);
+        click(&mut nav, &hits, 10.0, 10.0);
+        act(&mut nav, Action::Settings);
+        act(&mut nav, Action::Settings);
+        assert_eq!(titles(&nav), ["Home", "Search", "Settings"]);
+        assert_eq!(
+            *log.borrow(),
+            [
+                ("Search", Input::Action(Action::Search)),
+                ("Search", Input::Action(Action::Search)),
+                ("Settings", Input::Action(Action::Settings))
+            ],
+            "a click on the pill arrives as the action"
+        );
+    }
+
+    #[test]
+    fn clicking_the_pill_the_gear_or_a_hint_opens_them() {
+        let log = Log::default();
+        let mut nav = library(&log);
+        let hits = Hits {
+            search: Some(Rect::new(600.0, 0.0, 400.0, 50.0)),
+            settings: Some(Rect::new(1800.0, 0.0, 50.0, 50.0)),
+            hints: vec![
+                (Rect::new(0.0, 1000.0, 100.0, 50.0), Action::Search),
+                (Rect::new(200.0, 1000.0, 100.0, 50.0), Action::Settings),
+            ],
+            ..Hits::default()
+        };
+        click(&mut nav, &hits, 700.0, 20.0);
+        assert_eq!(titles(&nav), ["Home", "Search"]);
+        nav.pop();
+        click(&mut nav, &hits, 1820.0, 20.0);
+        assert_eq!(titles(&nav), ["Home", "Settings"]);
+        nav.pop();
+        click(&mut nav, &hits, 10.0, 1010.0);
+        assert_eq!(titles(&nav), ["Home", "Search"]);
+        nav.pop();
+        click(&mut nav, &hits, 210.0, 1010.0);
+        assert_eq!(titles(&nav), ["Home", "Settings"]);
+        nav.pop();
+        click(&mut nav, &hits, 1200.0, 20.0);
+        assert_eq!(titles(&nav), ["Home"]);
+        assert_eq!(log.borrow().len(), 1, "a click beside them reaches the screen");
+    }
+
+    #[test]
+    fn without_a_library_nothing_opens() {
+        let log = Log::default();
+        let mut nav = Nav::single(Box::new(spot("Setup", &log)));
+        let hits = Hits {
+            search: Some(Rect::new(0.0, 0.0, 100.0, 50.0)),
+            ..Hits::default()
+        };
+        act(&mut nav, Action::Search);
+        act(&mut nav, Action::Settings);
+        click(&mut nav, &hits, 10.0, 10.0);
+        assert_eq!(titles(&nav), ["Setup"]);
+        assert_eq!(log.borrow().len(), 3, "every input reaches the screen");
     }
 }
