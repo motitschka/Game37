@@ -66,6 +66,9 @@ pub struct Session {
     touch_screen: bool,
     /// Whether the left stick also presses the d-pad ([`cores::CoreInfo::stick_is_dpad`]).
     stick_dpad: bool,
+    /// Set once, by [`Session::start`]: the message to show the player when they chose a Save
+    /// State slot that couldn't be loaded, so the Game started fresh instead (FR-DET-4).
+    start_message: Option<String>,
 }
 
 struct Audio {
@@ -206,18 +209,10 @@ impl Session {
             (srm, tracker)
         });
         let states = StatePaths::new(root, system.id, Path::new(&game.rel_path));
-        // Continue where the player quit (FR-EMB-6), or from the Save State they chose. A state the
-        // Core can't read, e.g. after a Core update, starts the Game fresh.
-        let from = start_state(&states, play.slot);
-        match fs::read(&from) {
-            Ok(state) => {
-                if let Err(e) = core.unserialize(&state) {
-                    eprintln!("game37: can't start from {}: {e}", from.display());
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => eprintln!("game37: can't read {}: {e}", from.display()),
-        }
+        // Continue where the player quit (FR-EMB-6), or from the Save State they chose (FR-DET-4).
+        let start_message = load_start_state(&states, play.slot, |state| {
+            core.unserialize(state).map_err(|e| e.to_string())
+        });
         let av = core.av_info();
         let audio = audio.and_then(|a| {
             Audio::open(a, av.sample_rate)
@@ -244,6 +239,7 @@ impl Session {
             paused: false,
             touch_screen: std::ptr::eq(core_info, &cores::MELONDS_DS),
             stick_dpad: core_info.stick_is_dpad(),
+            start_message,
         })
     }
 
@@ -485,8 +481,45 @@ fn start_state(states: &StatePaths, slot: Option<usize>) -> PathBuf {
     slot.map_or_else(|| states.resume(), |n| states.slot(n))
 }
 
+/// The title of the message pushed when a chosen Save State slot couldn't be loaded.
+const SLOT_FAILED_TITLE: &str = "Couldn't load the save";
+
+/// Reads the start state for `slot`'s Save State (FR-DET-4) or the Resume State (FR-EMB-6) from
+/// `states`, and hands its bytes to `restore` (`Core::unserialize` in [`Session::start`], a stub
+/// in tests). Returns the message to show the player when `slot` was chosen and its state
+/// couldn't be loaded — missing, unreadable, or refused by `restore` — so starting fresh isn't
+/// silent. The Resume State falls back to a fresh start silently either way.
+fn load_start_state(
+    states: &StatePaths,
+    slot: Option<usize>,
+    restore: impl FnOnce(&[u8]) -> Result<(), String>,
+) -> Option<String> {
+    let from = start_state(states, slot);
+    let failed = match fs::read(&from) {
+        Ok(state) => match restore(&state) {
+            Ok(()) => false,
+            Err(e) => {
+                eprintln!("game37: can't start from {}: {e}", from.display());
+                true
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+        Err(e) => {
+            eprintln!("game37: can't read {}: {e}", from.display());
+            true
+        }
+    };
+    failed
+        .then(|| {
+            slot.map(|n| format!("Slot {n} couldn't be loaded, so the Game started from the beginning."))
+        })
+        .flatten()
+}
+
 /// Starts `play`'s Game and pushes its session, or pushes the message saying why it couldn't
 /// start. Its Core's OpenGL host is chosen from `frontend` and the Core itself (see [`open_gl`]).
+/// When the player chose a Save State slot that couldn't be loaded, the Game still starts (fresh),
+/// but the message saying so is pushed over it, pausing it until dismissed.
 pub fn start(
     play: &Play,
     nav: &mut Nav,
@@ -496,7 +529,13 @@ pub fn start(
     refresh: Option<f64>,
 ) {
     match Session::start(play, ctx, frontend, audio, refresh) {
-        Ok(session) => nav.push(Box::new(session)),
+        Ok(mut session) => {
+            let slot_message = session.start_message.take();
+            nav.push(Box::new(session));
+            if let Some(text) = slot_message {
+                nav.push(Box::new(Message::new(SLOT_FAILED_TITLE, text)));
+            }
+        }
         Err(message) => nav.push(Box::new(Message::new(FAILED_TITLE, message))),
     }
 }
@@ -751,6 +790,43 @@ mod tests {
         );
     }
 
+    /// A chosen slot the Core refuses (a junk file, e.g. after a Core update) starts the Game
+    /// fresh and tells the player, instead of staying silent (FR-DET-4).
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn a_junk_chosen_slot_starts_fresh_and_tells_the_player() {
+        let _serial = serial();
+        let root = TempDir::new().unwrap();
+        let rel = "snes/240p Test Suite (World).sfc";
+        fs::create_dir_all(root.path().join("snes")).unwrap();
+        fs::copy(Path::new(TESTDATA).join("games").join(rel), root.path().join(rel)).unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = root.path().to_path_buf();
+        ctx.data_dir = Path::new(TESTDATA).join("data");
+        let game = GameRow {
+            id: 1,
+            system: "snes".into(),
+            rel_path: rel.into(),
+            title: "240p Test Suite".into(),
+            date_added: 0,
+            last_played: None,
+            playtime_secs: 0,
+            favorite: false,
+        };
+        let states = StatePaths::new(&ctx.games_root, "snes", Path::new(rel));
+        fs::create_dir_all(states.slot(2).parent().unwrap()).unwrap();
+        fs::write(states.slot(2), b"not a real save state").unwrap();
+
+        let play = Play { game, slot: Some(2) };
+        let mut session = Session::start(&play, &ctx, None, None, None).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            session.start_message.as_deref(),
+            Some("Slot 2 couldn't be loaded, so the Game started from the beginning."),
+            "the player is told, instead of a silent fresh start"
+        );
+        run(&mut session, 2);
+    }
+
     #[test]
     fn a_session_starts_from_the_chosen_slot_else_from_the_resume_state() {
         let states = StatePaths::new(Path::new("/g"), "snes", Path::new("snes/T.sfc"));
@@ -794,6 +870,40 @@ mod tests {
         );
         store_resume(&path, Err::<Vec<u8>, _>("again, with nothing to remove"));
         assert!(!path.exists());
+    }
+
+    /// A chosen slot that can't be loaded (missing or refused) tells the player; a chosen slot
+    /// that loads fine, or the Resume State either way, says nothing (FR-DET-4, FR-EMB-6).
+    #[test]
+    fn load_start_state_messages_only_on_a_bad_chosen_slot() {
+        let dir = TempDir::new().unwrap();
+        let states = StatePaths::new(dir.path(), "snes", Path::new("Game.sfc"));
+
+        // Slot 2 was chosen but there's no such file.
+        let message = load_start_state(&states, Some(2), |_| panic!("not reached: missing file"));
+        assert_eq!(
+            message,
+            Some("Slot 2 couldn't be loaded, so the Game started from the beginning.".to_string())
+        );
+
+        // Slot 1 was chosen, its file exists, but the Core refuses it.
+        fs::create_dir_all(states.slot(1).parent().unwrap()).unwrap();
+        fs::write(states.slot(1), b"junk").unwrap();
+        let message = load_start_state(&states, Some(1), |_| Err("bad state".to_string()));
+        assert_eq!(
+            message,
+            Some("Slot 1 couldn't be loaded, so the Game started from the beginning.".to_string())
+        );
+
+        // Slot 1 was chosen, its file exists, and the Core accepts it: no message.
+        let message = load_start_state(&states, Some(1), |_| Ok(()));
+        assert_eq!(message, None);
+
+        // No slot was chosen (Resume State): missing or refused still says nothing.
+        assert_eq!(load_start_state(&states, None, |_| panic!("not reached")), None);
+        fs::write(states.resume(), b"junk").unwrap();
+        let message = load_start_state(&states, None, |_| Err("bad state".to_string()));
+        assert_eq!(message, None, "the Resume State falls back silently");
     }
 
     /// Held arrow keys reach port 0's left stick only on a stick-mode System (N64, PSP), as
