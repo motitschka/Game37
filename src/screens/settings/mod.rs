@@ -161,7 +161,7 @@ impl Settings {
             Box::new(library::Library::default()),
             Box::new(artwork::Artwork),
             Box::new(bios::Bios::default()),
-            Box::new(cores::Cores),
+            Box::new(cores::Cores::default()),
             Box::new(controls::Controls),
             Box::new(display::Display),
             Box::new(about::About),

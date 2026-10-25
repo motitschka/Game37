@@ -746,6 +746,20 @@ pub(crate) mod testing {
         Download::spawn(core, data_dir, fetch)
     }
 
+    /// A `Download` with no thread behind it: it reports whatever the test puts in the returned
+    /// state, so a test can hold it running for as long as it likes.
+    pub fn manual() -> (Download, Arc<Mutex<DownloadState>>) {
+        let state = Arc::new(Mutex::new(DownloadState::Running {
+            received: 0,
+            total: None,
+        }));
+        let download = Download {
+            state: Arc::clone(&state),
+            cancel: Arc::new(AtomicBool::new(false)),
+        };
+        (download, state)
+    }
+
     /// A `Download` that fails to connect as soon as it is polled.
     pub fn spawn_failing(core: &'static CoreInfo, data_dir: PathBuf) -> Download {
         Download::spawn(core, data_dir, Arc::new(|_url: &str| Err(FetchError::Connect)))
