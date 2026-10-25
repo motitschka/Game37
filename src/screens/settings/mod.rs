@@ -19,7 +19,7 @@ use crate::ui::gfx::{Align, Gfx, TextStyle};
 use crate::ui::input::{Action, Input, Pointer};
 use crate::ui::nav::{Entry, Hint, Screen, Transition};
 use crate::ui::text::Weight;
-use crate::ui::theme::{ACCENT, DANGER, LINE, MUTED, SURFACE, SURFACE2, TEXT};
+use crate::ui::theme::{ACCENT, DANGER, LINE, MUTED, SURFACE, SURFACE2, TEXT, WARN};
 use crate::ui::{M, Rect, W, hit};
 
 /// The first section and the first row.
@@ -43,6 +43,8 @@ pub struct Row {
     pub label: &'static str,
     /// Right-aligned, e.g. a path or a count.
     pub value: Option<String>,
+    /// Whether the value is a warning, drawn in `WARN`.
+    pub warn: bool,
     /// A muted line under the label.
     pub sub: Option<&'static str>,
     /// Whether it opens a sub-list, shown with a "›".
@@ -58,6 +60,7 @@ impl Row {
         Row {
             label,
             value: None,
+            warn: false,
             sub: None,
             opens: false,
             danger: false,
@@ -70,6 +73,10 @@ impl Row {
             value: Some(value.into()),
             ..self
         }
+    }
+
+    pub fn warn(self) -> Row {
+        Row { warn: true, ..self }
     }
 
     pub fn sub(self, sub: &'static str) -> Row {
@@ -264,7 +271,7 @@ impl Settings {
                 right -= 36.0;
             }
             if let Some(value) = &row.value {
-                let style = TextStyle::new(18, Weight::Medium, MUTED);
+                let style = TextStyle::new(18, Weight::Medium, if row.warn { WARN } else { MUTED });
                 let room = right - (RX + 32.0 + label_w + 48.0);
                 let value = ellipsize(value, room, |s| gfx.measure(s, style));
                 gfx.text(right, r.y + r.h / 2.0 + 7.0, &value, style, Align::Right);
