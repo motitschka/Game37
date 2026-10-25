@@ -275,7 +275,7 @@ mod tests {
         act(&mut setup, ctx, Action::Right);
         act(&mut setup, ctx, Action::Right);
         act(&mut setup, ctx, Action::Confirm);
-        assert_eq!(setup.step(), 2);
+        assert_eq!(setup.step(), 3, "PlayStation needs no emulator, so step 2 is passed over");
     }
 
     #[test]

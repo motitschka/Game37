@@ -88,5 +88,9 @@ shot m5-rename "$root/cfg.toml" \
 # M6: top bar entries
 shot m6-search-open "$root/cfg.toml" "down,down,search"
 shot m6-settings-open "$root/cfg.toml" "settings"
+# First-run Setup step 2: GameCube, Switch and PlayStation 2 ticked, then every System
+shot m6-setup-emulators "$root/missing.toml" \
+    "down,confirm,down,right,confirm,up,right,right,right,right,confirm,settings" --missing-emulators switch,ps2
+shot m6-setup-emulators-all "$root/missing.toml" "sort,settings" --missing-emulators wii,3ds,wiiu,switch,ps2,ps3,ps4
 
 echo "screenshots in $out"

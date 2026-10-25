@@ -6,6 +6,7 @@
 //! going Back and forward. Each step keeps its own focus. A step that doesn't apply to what is
 //! ticked is passed over both ways, and Back from the first step quits Game37.
 
+mod emulators;
 mod systems;
 
 use std::path::{Path, PathBuf};
@@ -23,6 +24,8 @@ use crate::ui::{M, Rect, W, hit};
 const STEPS: usize = 5;
 /// Top of each step's content, below the title and the explanation.
 const CONTENT_Y: f32 = 296.0;
+/// Width of the lists and boxes below the title, left-aligned at `M`.
+const SETUP_W: f32 = 1200.0;
 /// Top of the pill buttons above the hint bar.
 const BUTTONS_Y: f32 = 906.0;
 const PILL_H: f32 = 64.0;
@@ -141,8 +144,12 @@ impl Setup {
             model: Model::new(games_root),
             steps: vec![
                 Box::new(systems::Systems::new()),
+                Box::new(emulators::Install::new()),
                 Box::new(Later {
-                    title: "Install the emulators",
+                    title: "Make your folders",
+                }),
+                Box::new(Later {
+                    title: "Download the Cores",
                 }),
             ],
             at: 0,
@@ -392,7 +399,7 @@ mod tests {
 
         act(&mut setup, ctx, Action::Confirm);
         act(&mut setup, ctx, Action::Settings);
-        assert_eq!(setup.step(), 2);
+        assert_eq!(setup.step(), 3, "NES needs no emulator, so step 2 is passed over");
         assert_eq!(setup.back_label(), "Back");
         assert!(matches!(act(&mut setup, ctx, Action::Back), Transition::None));
         assert_eq!(setup.step(), 1);

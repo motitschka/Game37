@@ -51,6 +51,8 @@ pub const ACCENT: Colour = Colour::hex(0x8B7BFF);
 pub const STAR: Colour = Colour::hex(0xFFC84A);
 /// Missing-emulator warnings (FR-CAR-9).
 pub const WARN: Colour = Colour::hex(0xFFB020);
+/// What is ready, such as an installed emulator: the mockups' `C["ahead"]`.
+pub const SUCCESS: Colour = Colour::hex(0x3DDC84);
 
 #[cfg(test)]
 mod tests {
