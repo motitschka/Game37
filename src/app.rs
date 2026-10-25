@@ -130,7 +130,9 @@ fn interactive(
 
     let mut input = InputState::new(gamepads);
     let mut hits = Hits::default();
-    let mut inputs = Vec::new();
+    let mut feeds = Vec::new();
+    // Whether SDL sends text input events, which follows `input.controls.text`.
+    let mut text_on = false;
     let mut sync_failing = false;
     let mut last_frame = Instant::now();
     'frames: loop {
@@ -146,9 +148,7 @@ fn interactive(
             events.wait_event_timeout(HIDDEN_WAIT)
         };
         for event in woken_by.into_iter().chain(events.poll_iter()) {
-            if input.event(event, &mut gfx, &mut inputs) == Flow::Quit {
-                break 'frames;
-            }
+            feeds.extend(input.event(event, &mut gfx));
         }
         if let Some(watcher) = &mut watcher {
             match watcher.poll(&mut ctx.library, ctx::now()) {
@@ -182,32 +182,33 @@ fn interactive(
             let refresh = if vsync { gfx.refresh_rate() } else { None };
             sdl::start(&play, &mut nav, &ctx, gfx.gl_context(), audio.as_ref(), refresh);
         }
-        inputs.extend(input.controls.poll(sdl3::timer::ticks()));
-        for i in inputs.drain(..) {
-            // A running Game takes no menu input: it reads the keyboard itself.
-            if sdl::playing(&mut nav) {
-                continue;
-            }
-            if nav.handle(i, &hits, &mut ctx) == Flow::Quit {
-                break 'frames;
-            }
-            if let Some(game) = ctx.launch.take() {
-                gfx.minimize();
-                if !launcher.start(&game, &mut nav, &ctx) {
-                    gfx.restore();
+        feeds.push(Feed::Repeat(sdl3::timer::ticks()));
+        let flow = feed(
+            &mut input.controls,
+            feeds.drain(..),
+            &mut nav,
+            &hits,
+            &mut ctx,
+            |nav, ctx| {
+                if let Some(game) = ctx.launch.take() {
+                    gfx.minimize();
+                    if !launcher.start(&game, nav, ctx) {
+                        gfx.restore();
+                    }
                 }
-            }
-            if let Some(play) = ctx.play.take() {
-                // Frames sync to the display only with vsync.
-                let refresh = if vsync { gfx.refresh_rate() } else { None };
-                sdl::start(&play, &mut nav, &ctx, gfx.gl_context(), audio.as_ref(), refresh);
-            }
+                if let Some(play) = ctx.play.take() {
+                    // Frames sync to the display only with vsync.
+                    let refresh = if vsync { gfx.refresh_rate() } else { None };
+                    sdl::start(&play, nav, ctx, gfx.gl_context(), audio.as_ref(), refresh);
+                }
+            },
+        );
+        if flow == Flow::Quit {
+            break 'frames;
         }
-        // Text input runs only while the top screen has a text field active.
-        let text = !sdl::playing(&mut nav) && nav.top().text_input();
-        if text != input.controls.text {
-            input.controls.text = text;
-            gfx.set_text_input(text);
+        if input.controls.text != text_on {
+            text_on = input.controls.text;
+            gfx.set_text_input(text_on);
         }
         copy_clipboard_request(&mut ctx, &video);
         if let Some(path) = ctx.show_file_request.take() {
@@ -462,7 +463,63 @@ fn clock() -> String {
     }
 }
 
-/// Turns SDL events into UI inputs: keys and gamepads through [`Controls`], the mouse directly.
+/// One SDL event as the menus get it: a key or pad event or typed text, which [`Controls`] reads
+/// only once the events before it are handled, or an input of its own (the mouse).
+#[derive(Debug, Clone, PartialEq)]
+enum Feed {
+    Quit,
+    /// What happened, at what time in milliseconds.
+    Control(u64, ControlEvent),
+    Typed(String),
+    Input(Input),
+    /// The held direction's repeat, if due at this time.
+    Repeat(u64),
+}
+
+/// Whether the keyboard types rather than acts: only while the top screen has a text field
+/// active, and never while a Game runs.
+fn wants_text(nav: &mut Nav) -> bool {
+    !sdl::playing(nav) && nav.top().text_input()
+}
+
+/// Handles a frame's `feeds` in order. Each is read in the text mode the top screen wants once the
+/// ones before it are handled: Enter on Rename then F in the same frame types (or drops) the F,
+/// never acts on it. `started` runs after each handled input, to start what it asked to launch or
+/// play. Leaves `controls.text` as the top screen wants it.
+fn feed(
+    controls: &mut Controls,
+    feeds: impl IntoIterator<Item = Feed>,
+    nav: &mut Nav,
+    hits: &Hits,
+    ctx: &mut Ctx,
+    mut started: impl FnMut(&mut Nav, &mut Ctx),
+) -> Flow {
+    let mut inputs = Vec::new();
+    for feed in feeds {
+        controls.text = wants_text(nav);
+        match feed {
+            Feed::Quit => return Flow::Quit,
+            Feed::Control(at, event) => controls.handle(at, event, &mut inputs),
+            Feed::Typed(text) => controls.typed(&text, &mut inputs),
+            Feed::Input(input) => inputs.push(input),
+            Feed::Repeat(at) => inputs.extend(controls.poll(at)),
+        }
+        for input in inputs.drain(..) {
+            // A running Game takes no menu input: it reads the keyboard itself.
+            if sdl::playing(nav) {
+                continue;
+            }
+            if nav.handle(input, hits, ctx) == Flow::Quit {
+                return Flow::Quit;
+            }
+            started(nav, ctx);
+        }
+    }
+    controls.text = wants_text(nav);
+    Flow::Continue
+}
+
+/// Turns SDL events into [`Feed`]s: keys and gamepads for [`Controls`], the mouse directly.
 struct InputState {
     subsystem: GamepadSubsystem,
     pads: HashMap<JoystickId, Gamepad>,
@@ -507,9 +564,9 @@ impl InputState {
         }
     }
 
-    fn event(&mut self, event: Event, gfx: &mut Gfx<'_>, out: &mut Vec<Input>) -> Flow {
+    fn event(&mut self, event: Event, gfx: &mut Gfx<'_>) -> Option<Feed> {
         let control = match event {
-            Event::Quit { .. } => return Flow::Quit,
+            Event::Quit { .. } => return Some(Feed::Quit),
             Event::Window {
                 win_event: WindowEvent::FocusLost,
                 ..
@@ -521,7 +578,7 @@ impl InputState {
                 ..
             } => {
                 gfx.toggle_fullscreen();
-                return Flow::Continue;
+                return None;
             }
             Event::KeyDown {
                 keycode: Some(key),
@@ -531,17 +588,14 @@ impl InputState {
             Event::KeyUp {
                 keycode: Some(key), ..
             } => ControlEvent::KeyUp { key },
-            Event::TextInput { text, .. } => {
-                self.controls.typed(&text, out);
-                return Flow::Continue;
-            }
+            Event::TextInput { text, .. } => return Some(Feed::Typed(text)),
 
             Event::GamepadAdded { which, .. } => {
                 if let Ok(pad) = self.subsystem.open(which) {
                     self.pads.insert(which, pad);
                     self.ports.connect(which);
                 }
-                return Flow::Continue;
+                return None;
             }
             Event::GamepadRemoved { which, .. } => {
                 self.pads.remove(&which);
@@ -571,8 +625,7 @@ impl InputState {
                 let (x, y) = gfx.to_logical(x, y);
                 self.controls.kind = InputKind::Keyboard;
                 self.pointer = Some((x, y));
-                out.push(Input::Pointer(Pointer::Move { x, y }));
-                return Flow::Continue;
+                return Some(Feed::Input(Input::Pointer(Pointer::Move { x, y })));
             }
             Event::MouseButtonUp { mouse_btn, x, y, .. } => {
                 let (x, y) = gfx.to_logical(x, y);
@@ -581,26 +634,78 @@ impl InputState {
                     MouseButton::Left => Pointer::Click { x, y },
                     MouseButton::Right => Pointer::RightClick { x, y },
                     MouseButton::X1 => Pointer::Back,
-                    _ => return Flow::Continue,
+                    _ => return None,
                 };
-                out.push(Input::Pointer(pointer));
-                return Flow::Continue;
+                return Some(Feed::Input(Input::Pointer(pointer)));
             }
             Event::MouseWheel { y, .. } => {
                 self.controls.kind = InputKind::Keyboard;
-                out.push(Input::Pointer(Pointer::Wheel { dy: y }));
-                return Flow::Continue;
+                return Some(Feed::Input(Input::Pointer(Pointer::Wheel { dy: y })));
             }
-            _ => return Flow::Continue,
+            _ => return None,
         };
-        self.controls.handle(sdl3::timer::ticks(), control, out);
-        Flow::Continue
+        Some(Feed::Control(sdl3::timer::ticks(), control))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Enter on Rename, then F in the same frame (FR-UI-1): the rename field is open by the time
+    /// F is read, so F types (dropped here, as SDL's text input wasn't on yet) rather than acts as
+    /// Options, which the field takes as Backspace.
+    #[test]
+    fn a_key_after_the_one_that_opens_a_text_field_is_read_as_typing_in_the_same_frame() {
+        use crate::library::FoundGame;
+        use crate::screens::Stub;
+        use crate::screens::options::OptionsMenu;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = dir.path().join("Games");
+        let found = [FoundGame {
+            system: "snes",
+            rel_path: "snes/G0.sfc".into(),
+            title: "G0".into(),
+        }];
+        ctx.library.sync_system("snes", &found, 0).unwrap();
+        let game = ctx
+            .library
+            .system_games("snes", Default::default())
+            .unwrap()
+            .remove(0);
+        let mut nav = Nav::single(Box::new(Stub::new("Home")));
+        nav.push(Box::new(OptionsMenu::new(game.clone(), &ctx.games_root)));
+        let mut controls = Controls::new(InputKind::Keyboard);
+        let press = |key| {
+            [
+                Feed::Control(0, ControlEvent::KeyDown { key, repeat: false }),
+                Feed::Control(0, ControlEvent::KeyUp { key }),
+            ]
+        };
+        let mut frame = |nav: &mut Nav, ctx: &mut Ctx, keys: &[Keycode]| {
+            let feeds = keys.iter().flat_map(|&k| press(k));
+            assert_eq!(
+                feed(&mut controls, feeds, nav, &Hits::default(), ctx, |_, _| {}),
+                Flow::Continue
+            );
+        };
+
+        frame(
+            &mut nav,
+            &mut ctx,
+            &[Keycode::Down, Keycode::Down, Keycode::Return, Keycode::F],
+        );
+        assert!(nav.top().text_input(), "the rename field is open");
+        frame(&mut nav, &mut ctx, &[Keycode::Return]);
+        assert_eq!(nav.depth(), 1, "the second Enter saved and closed the menu");
+        assert_eq!(
+            ctx.library.game(game.id).unwrap().unwrap().title,
+            "G0",
+            "F erased nothing"
+        );
+    }
 
     /// `Ports` keyed by the SDL joystick ids `InputState` gets from `GamepadAdded` and
     /// `GamepadRemoved` (FR-EMB-8): player order follows connection order, the other pads keep
