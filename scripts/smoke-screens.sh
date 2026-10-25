@@ -106,5 +106,8 @@ shot m6-settings-library "$root/cfg.toml" "settings,right,down,down"
 shot m6-settings-hidden "$root/cfg.toml" "down,down,options,down,down,down,confirm,settings,right,down,down,confirm"
 shot m6-settings-reset "$root/cfg.toml" "settings,right,down,down,down,confirm"
 shot m6-settings-about "$root/cfg.toml" "settings$(printf ',down%.0s' {1..6})"
+# M6: Settings BIOS and Cores, each with the focus on its first row (no download starts)
+shot m6-settings-bios "$root/cfg.toml" "settings,down,down,right"
+shot m6-settings-cores "$root/cfg.toml" "settings,down,down,down,right"
 
 echo "screenshots in $out"
