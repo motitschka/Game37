@@ -1344,8 +1344,10 @@ impl Net {
         let Ok(list) = self.list(kind, game) else {
             return Outcome::Failed;
         };
-        // A file that is no good, or that its host won't serve, gives way to the next. If none of
-        // them would ever do, that is recorded as none, so a restart doesn't fetch them again.
+        // A file that is no good, or whose host has nothing at it (404, 410), gives way to the
+        // next, like an unusable file. If none of them would ever do, that is recorded as none,
+        // so a restart doesn't fetch them again. A host refusal for any other reason also gives
+        // way to the next, but makes the whole result temporary, so it is searched again instead.
         let mut refused = false;
         for top in list.iter().take(FILES_TRIED) {
             let path = cache_path(&self.dir, kind, top.id, &top.url);
@@ -1362,6 +1364,7 @@ impl Net {
                     };
                 }
                 Err(FileError::Fetch(FetchError::Connect)) => return Outcome::Searched { game },
+                Err(FileError::Fetch(FetchError::Status(404 | 410))) => {}
                 Err(FileError::Fetch(FetchError::Status(_))) => refused = true,
                 Err(FileError::Fetch(FetchError::TooLarge) | FileError::Unusable) => {}
             }
@@ -1996,6 +1999,50 @@ pub(crate) mod tests {
         let artwork = self::artwork(dir.path(), &fake, true);
         assert!(is_placeholder(&artwork.cover(&library, &games[0])));
         assert_eq!(fake.calls(), 0);
+    }
+
+    #[test]
+    fn artwork_whose_top_files_are_all_404_or_410_is_remembered_as_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Fake::new();
+        let files: Vec<(u64, String)> = (1..=4).map(|id| (id, format!("{CDN}/grid/{id}.png"))).collect();
+        let files: Vec<(u64, &str)> = files.iter().map(|(id, url)| (*id, url.as_str())).collect();
+        fake.api("/search/autocomplete/Alpha", "[{\"id\":42}]")
+            .api("/grids/game/42?", &listing(&files))
+            .route(&format!("{CDN}/grid/1.png"), Err(FetchError::Status(404)))
+            .route(&format!("{CDN}/grid/2.png"), Err(FetchError::Status(410)))
+            .route(&format!("{CDN}/grid/3.png"), Err(FetchError::Status(404)));
+        let (library, games) = library(dir.path());
+        let artwork = artwork(dir.path(), &fake, true);
+        assert!(is_placeholder(&wait(&artwork, &library, &games[0], Kind::Cover)));
+        let tried: Vec<String> = fake.urls().into_iter().filter(|u| u.starts_with(CDN)).collect();
+        assert_eq!(tried, [1, 2, 3].map(|id| format!("{CDN}/grid/{id}.png")));
+        let record = read_record(&library, games[0].id).unwrap();
+        assert_eq!((record.game, record.cover), (Some(42), Some(Pick::NoArtwork)));
+        drop((artwork, library));
+
+        let fake = Fake::new();
+        let (library, games) = self::library(dir.path());
+        let artwork = self::artwork(dir.path(), &fake, true);
+        assert!(is_placeholder(&artwork.cover(&library, &games[0])));
+        assert_eq!(fake.calls(), 0);
+    }
+
+    #[test]
+    fn artwork_whose_top_files_are_refused_for_some_other_reason_is_searched_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Fake::new();
+        let files: Vec<(u64, String)> = (1..=4).map(|id| (id, format!("{CDN}/grid/{id}.png"))).collect();
+        let files: Vec<(u64, &str)> = files.iter().map(|(id, url)| (*id, url.as_str())).collect();
+        fake.api("/search/autocomplete/Alpha", "[{\"id\":42}]")
+            .api("/grids/game/42?", &listing(&files))
+            .route(&format!("{CDN}/grid/"), Err(FetchError::Status(503)));
+        let (library, games) = library(dir.path());
+        let artwork = artwork(dir.path(), &fake, true);
+        assert!(is_placeholder(&wait(&artwork, &library, &games[0], Kind::Cover)));
+        let record = read_record(&library, games[0].id).unwrap();
+        assert_eq!(record.game, Some(42));
+        assert_ne!(record.cover, Some(Pick::NoArtwork));
     }
 
     #[test]
