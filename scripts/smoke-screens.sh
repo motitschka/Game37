@@ -85,5 +85,8 @@ shot m5-choose-artwork "$root/cfg.toml" "down,down,options,down,confirm"
 # Rename with the on-screen keyboard: erase the Display Title, then Shift, m, k and a space
 shot m5-rename "$root/cfg.toml" \
     "down,down,options,down,down,confirm$(printf ',options%.0s' {1..40}),down,down,confirm,$(printf 'right,%.0s' {1..7})confirm,up,left,confirm,sort,up"
+# M6: top bar entries
+shot m6-search-open "$root/cfg.toml" "down,down,search"
+shot m6-settings-open "$root/cfg.toml" "settings"
 
 echo "screenshots in $out"
