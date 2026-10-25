@@ -10,6 +10,7 @@ mod bios;
 mod controls;
 mod cores;
 mod display;
+mod hidden;
 mod library;
 
 use crate::ctx::Ctx;
