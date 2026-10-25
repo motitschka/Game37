@@ -895,10 +895,85 @@ def screen_timer_window():
     sv.save()
 
 
+# ---------- search (M6) ----------
+
+def gear(sv, cx, cy):
+    """The Settings button: a 48 px circle with a drawn gear."""
+    sv.add(circle(cx, cy, 24, C["surface"], stroke=C["line"], sw=1))
+    teeth = " ".join(f"M{cx + 7 * dx:.1f},{cy + 7 * dy:.1f} L{cx + 12.5 * dx:.1f},{cy + 12.5 * dy:.1f}"
+                     for dx, dy in [(1, 0), (.7071, .7071), (0, 1), (-.7071, .7071), (-1, 0), (-.7071, -.7071),
+                                    (0, -1), (.7071, -.7071)])
+    sv.add(f'<path d="{teeth}" stroke="{C["muted"]}" stroke-width="4.5"/>',
+           circle(cx, cy, 8.5, C["muted"]), circle(cx, cy, 3.5, C["surface"]))
+
+
+def search_topbar(sv, query, focused):
+    """The Search screen's top bar: the search pill grown into the field, then the gear and the clock."""
+    logo(sv)
+    sv.add(text(M + 150, 70, "Home", 20, 500, fill=C["muted"]))
+    fx, fy, fw, fh = M + 300, 40, W - M - 174 - (M + 300), 56
+    sv.add(rect(fx, fy, fw, fh, C["surface"], rx=fh / 2, stroke=C["accent"] if focused else C["line"],
+                sw=2 if focused else 1),
+           circle(fx + 32, 66, 9, "none", stroke=C["muted"], sw=2.5),
+           f'<line x1="{fx + 39}" y1="73" x2="{fx + 45}" y2="79" stroke="{C["muted"]}" stroke-width="2.5"'
+           f' stroke-linecap="round"/>')
+    tx = fx + 62
+    if query:
+        sv.add(text(tx, 76, query, 22, 500))
+    if focused:
+        sv.add(rect(tx + tw(query, 22, 500) + 5, fy + 15, 3, fh - 30, C["accent"]))
+    if not query:
+        sv.add(text(tx + 14, 76, "Search games", 22, 400, fill=C["muted"]))
+    gear(sv, W - M - 134, 68)
+    sv.add(text(W - M, 76, "21:42", 24, 600, anchor="end"))
+
+
+def search_order(games, query):
+    """Titles starting with the query, then with a word starting with it, then any other match."""
+    q = query.lower()
+
+    def group(g):
+        t = g["title"].lower()
+        return 0 if t.startswith(q) else 1 if any(w.startswith(q) for w in t.split()) else 2
+
+    return sorted((g for g in games if q in g["title"].lower()), key=lambda g: (group(g), g["title"].lower()))
+
+
+SEARCH_QUERY = "mar"
+SEARCH_RESULTS = search_order([
+    game("Mario Kart 8 Deluxe", "switch"), game("Mario Party DS", "nds"), game("Mario Kart: Double Dash!!", "gc"),
+    game("Super Mario World", "snes"), game("Paper Mario", "n64"), game("Super Mario Galaxy", "wii"),
+    game("Nightmare Creatures", "ps1")], SEARCH_QUERY)
+SEARCH_TOTAL = 23  # all Games that aren't hidden
+
+
+def search_results(sv, focus=None):
+    """The count line and the results grid, sized like the Console Page's."""
+    sv.add(text(M, 160, f"{len(SEARCH_RESULTS)} Games", 20, 500, fill=C["muted"]))
+    cols, top, pitch = 8, 196, CH + 72
+    for i, g in enumerate(SEARCH_RESULTS):
+        r, c = divmod(i, cols)
+        x, y = M + c * (CW + GAP), top + r * pitch
+        cover(sv, x, y, CW, CH, g, focused=(i == focus), show_sys=True)
+        if i == focus:
+            sv.add(text(x, y + CH + 40, g["title"], 22, 700),
+                   text(x, y + CH + 68, SYS[g["sys"]][1], 17, 400, fill=C["muted"]))
+
+
+def screen_search():
+    sv = Svg("22-search", "Search")
+    background(sv)
+    search_topbar(sv, SEARCH_QUERY, focused=True)
+    search_results(sv)
+    hintbar(sv, [(["↓"], "Results"), (["Esc"], "Close")])
+    sv.save()
+
+
 if __name__ == "__main__":
     for fn in [screen_home, screen_home_empty, screen_carousel, screen_console_page, screen_details,
                screen_options, screen_pause, screen_ds, screen_console_missing_emulator,
                screen_details_missing_emulator, screen_speedrun_page, screen_splits_editor,
-               screen_speedrun_embedded, screen_pause_run, screen_timer_window, screen_details_speedrun]:
+               screen_speedrun_embedded, screen_pause_run, screen_timer_window, screen_details_speedrun,
+               screen_search]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))
