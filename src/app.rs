@@ -845,7 +845,14 @@ mod tests {
                     Feed::Control(0, ControlEvent::PadButtonUp { pad, button }),
                 ]
             });
-        let flow = feed(&mut controls, feeds, &mut nav, &Hits::default(), &mut ctx, |_, _| {});
+        let flow = feed(
+            &mut controls,
+            feeds,
+            &mut nav,
+            &Hits::default(),
+            &mut ctx,
+            |_, _| {},
+        );
         assert_eq!(flow, Flow::Continue);
         assert_eq!(
             *log.borrow(),

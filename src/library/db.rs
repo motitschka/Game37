@@ -1086,7 +1086,10 @@ mod tests {
             lib.set_button_style(style).unwrap();
             assert_eq!(lib.button_style().unwrap(), style);
         }
-        assert_eq!(lib.setting("button_style").unwrap().as_deref(), Some("playstation"));
+        assert_eq!(
+            lib.setting("button_style").unwrap().as_deref(),
+            Some("playstation")
+        );
     }
 
     #[test]

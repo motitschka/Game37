@@ -534,7 +534,10 @@ mod tests {
         controls.style = ButtonStyle::PlayStation;
         press(&mut controls, Button::East, &mut out);
         press(&mut controls, Button::South, &mut out);
-        assert_eq!(out, [Action::Confirm, Action::Back, Action::Confirm].map(Input::Action));
+        assert_eq!(
+            out,
+            [Action::Confirm, Action::Back, Action::Confirm].map(Input::Action)
+        );
     }
 
     #[test]

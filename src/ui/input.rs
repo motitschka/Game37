@@ -446,7 +446,11 @@ mod tests {
             (ButtonStyle::PlayStation, [Confirm, Back, Options, Sort]),
         ];
         for (style, actions) in cases {
-            assert_eq!(face.map(|b| button_action(style, b)), actions.map(Some), "{style:?}");
+            assert_eq!(
+                face.map(|b| button_action(style, b)),
+                actions.map(Some),
+                "{style:?}"
+            );
         }
     }
 
@@ -505,10 +509,19 @@ mod tests {
     #[test]
     fn button_styles_cycle_both_ways_and_wrap() {
         use ButtonStyle::{Nintendo, PlayStation, Xbox};
-        assert_eq!([Nintendo, Xbox, PlayStation].map(ButtonStyle::next), [Xbox, PlayStation, Nintendo]);
-        assert_eq!([Nintendo, Xbox, PlayStation].map(ButtonStyle::prev), [PlayStation, Nintendo, Xbox]);
+        assert_eq!(
+            [Nintendo, Xbox, PlayStation].map(ButtonStyle::next),
+            [Xbox, PlayStation, Nintendo]
+        );
+        assert_eq!(
+            [Nintendo, Xbox, PlayStation].map(ButtonStyle::prev),
+            [PlayStation, Nintendo, Xbox]
+        );
         assert_eq!(ButtonStyle::default(), Nintendo);
-        assert_eq!(ButtonStyle::ALL.map(ButtonStyle::label), ["Nintendo", "Xbox", "PlayStation"]);
+        assert_eq!(
+            ButtonStyle::ALL.map(ButtonStyle::label),
+            ["Nintendo", "Xbox", "PlayStation"]
+        );
         assert_eq!(
             ButtonStyle::ALL.map(ButtonStyle::description),
             [
