@@ -7,6 +7,7 @@ use crate::cores::{CoreInfo, Download};
 use crate::emulators::Emulators;
 use crate::library::db::{DbError, GameRow, Library};
 use crate::library::scan;
+use crate::session::input::PadState;
 use crate::systems::SYSTEMS;
 use crate::ui::input::{ButtonStyle, InputKind};
 
@@ -23,6 +24,14 @@ impl Play {
     pub fn resume(game: GameRow) -> Play {
         Play { game, slot: None }
     }
+}
+
+/// A connected controller as screens see it: its name and this frame's buttons, sticks and
+/// triggers (US-34). Plain data, so tests and screenshot mode can make one.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Controller {
+    pub name: String,
+    pub pad: PadState,
 }
 
 pub struct Ctx {
@@ -63,6 +72,13 @@ pub struct Ctx {
     /// Games' covers and heroes (FR-ART-1–4). Off (placeholder art only) until `app.rs` starts it
     /// with the data dir and the API key; tests swap in one with a fake fetcher.
     pub artwork: Artwork,
+    /// The connected controllers in connection order, as of this frame; `app.rs` fills it.
+    pub controllers: Vec<Controller>,
+    /// Which of `controllers` had a button pressed or a stick or trigger pushed last, if any.
+    pub last_controller: Option<usize>,
+    /// Milliseconds since SDL started, as of this frame: the clock screens time held buttons with.
+    /// `app.rs` sets it; tests drive it by hand.
+    pub ticks: u64,
 }
 
 impl Ctx {
@@ -84,6 +100,9 @@ impl Ctx {
             start_download: Box::new(Download::start),
             start_assets_download: Box::new(Download::start_assets),
             artwork: Artwork::off(),
+            controllers: Vec::new(),
+            last_controller: None,
+            ticks: 0,
         }
     }
 

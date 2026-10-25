@@ -17,7 +17,7 @@ use sdl3::{GamepadSubsystem, VideoSubsystem};
 use crate::artwork::Artwork;
 use crate::cli::{Options, Screenshot};
 use crate::config;
-use crate::ctx::{self, Ctx};
+use crate::ctx::{self, Controller, Ctx};
 use crate::emulators::Emulators;
 use crate::launch::{Launcher, NeverExits, Processes};
 use crate::library::db::Library;
@@ -150,6 +150,9 @@ fn interactive(
         for event in woken_by.into_iter().chain(events.poll_iter()) {
             feeds.extend(input.event(event, &mut gfx));
         }
+        ctx.controllers = input.controllers();
+        ctx.last_controller = input.last_controller();
+        ctx.ticks = sdl3::timer::ticks();
         if let Some(watcher) = &mut watcher {
             match watcher.poll(&mut ctx.library, ctx::now()) {
                 Ok(changed) => {
@@ -533,6 +536,10 @@ fn feed(
 struct InputState {
     subsystem: GamepadSubsystem,
     pads: HashMap<JoystickId, Gamepad>,
+    /// The connected pads and their names, in connection order.
+    connected: Vec<(JoystickId, String)>,
+    /// The pad that last had a button pressed or a stick or trigger pushed past half way.
+    last_used: Option<JoystickId>,
     /// Which pad plays on which port, kept for the app's whole life (FR-EMB-8): player order
     /// follows connection order, and persists across Games.
     ports: Ports<JoystickId>,
@@ -551,6 +558,8 @@ impl InputState {
         InputState {
             subsystem,
             pads: HashMap::new(),
+            connected: Vec::new(),
+            last_used: None,
             ports: Ports::default(),
             controls: Controls::new(kind),
             pointer: None,
@@ -566,6 +575,26 @@ impl InputState {
             .collect()
     }
 
+    /// Every connected pad's name and state this frame, in connection order.
+    fn controllers(&self) -> Vec<Controller> {
+        self.connected
+            .iter()
+            .filter_map(|(id, name)| {
+                let pad = sdl::pad_state(self.pads.get(id)?);
+                Some(Controller {
+                    name: name.clone(),
+                    pad,
+                })
+            })
+            .collect()
+    }
+
+    /// Where the last-used pad is in [`InputState::controllers`].
+    fn last_controller(&self) -> Option<usize> {
+        let last = self.last_used?;
+        self.connected.iter().position(|(id, _)| *id == last)
+    }
+
     fn view(&self) -> View {
         View {
             kind: self.controls.kind,
@@ -575,6 +604,12 @@ impl InputState {
     }
 
     fn event(&mut self, event: Event, gfx: &mut Gfx<'_>) -> Option<Feed> {
+        // Any stick or trigger pushed past half way, as SDL reports each axis on its own.
+        if let Event::GamepadAxisMotion { which, value, .. } = &event
+            && value.unsigned_abs() > i16::MAX as u16 / 2
+        {
+            self.last_used = Some(*which);
+        }
         let control = match event {
             Event::Quit { .. } => return Some(Feed::Quit),
             Event::Window {
@@ -607,6 +642,9 @@ impl InputState {
 
             Event::GamepadAdded { which, .. } => {
                 if let Ok(pad) = self.subsystem.open(which) {
+                    let name = pad.name().unwrap_or_else(|| "Controller".to_owned());
+                    self.connected.retain(|(id, _)| *id != which);
+                    self.connected.push((which, name));
                     self.pads.insert(which, pad);
                     self.ports.connect(which);
                 }
@@ -614,10 +652,12 @@ impl InputState {
             }
             Event::GamepadRemoved { which, .. } => {
                 self.pads.remove(&which);
+                self.connected.retain(|(id, _)| *id != which);
                 self.ports.disconnect(which);
                 ControlEvent::PadRemoved { pad: which }
             }
             Event::GamepadButtonDown { which, button, .. } => {
+                self.last_used = Some(which);
                 ControlEvent::PadButtonDown { pad: which, button }
             }
             Event::GamepadButtonUp { which, button, .. } => ControlEvent::PadButtonUp { pad: which, button },
