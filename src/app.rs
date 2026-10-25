@@ -16,7 +16,7 @@ use sdl3::{GamepadSubsystem, VideoSubsystem};
 
 use crate::artwork::Artwork;
 use crate::cli::{Options, Screenshot, ShotScreen};
-use crate::config;
+use crate::config::{self, Config};
 use crate::ctx::{self, Controller, Ctx};
 use crate::emulators::Emulators;
 use crate::launch::{Launcher, NeverExits, Processes};
@@ -38,24 +38,21 @@ pub fn run(options: Options) -> Result<(), String> {
     let loaded = config::load(&path);
     let data_dir = options.data_dir.unwrap_or_else(config::data_dir);
     let log_dir = data_dir.join("logs");
-    let (mut ctx, has_library) = match &loaded {
-        Ok(Some(config)) => {
-            let library = Library::open(&data_dir.join("library.db")).map_err(|e| e.to_string())?;
-            (Ctx::new(library, config.games_root.clone()), true)
-        }
-        _ => (Ctx::empty(), false),
-    };
+    let mut ctx = Ctx::empty();
     ctx.data_dir = data_dir;
-    ctx.config_path = path.clone();
+    ctx.config_path = path;
+    let has_library = match &loaded {
+        Ok(Some(config)) => {
+            open_library(&mut ctx, config)?;
+            true
+        }
+        _ => false,
+    };
     match options.screenshot {
         Some(shot) => {
-            // Scan in the foreground, so the screenshot shows every Game.
-            if has_library {
-                ctx.scan_all(ctx::now()).map_err(|e| e.to_string())?;
-            }
             ctx.simulate_emulators(shot.missing_emulators.clone());
-            if has_library && shot.artwork {
-                ctx.artwork = artwork(&path, &ctx.data_dir);
+            if has_library {
+                start_shot_library(&mut ctx, shot.artwork)?;
             }
             // Setup's folders go under the data dir, never in the real ~/Games.
             let mut nav = screens::start(loaded, &ctx.data_dir.join("Games"), &ctx);
@@ -68,17 +65,56 @@ pub fn run(options: Options) -> Result<(), String> {
         }
         None => {
             ctx.animate = true;
-            if has_library {
-                ctx.emulators = Emulators::detect();
-                ctx.artwork = artwork(&path, &ctx.data_dir);
-            }
+            let watcher = has_library.then(|| start_live_library(&mut ctx));
             let setup_root = dirs::home_dir().expect("no home directory").join("Games");
             let nav = screens::start(loaded, &setup_root, &ctx);
-            let watcher = has_library.then(|| LibraryWatcher::start(ctx.games_root.clone()));
             let launcher = Launcher::new(Box::new(Processes), log_dir);
             interactive(nav, ctx, watcher, launcher)
         }
     }
+}
+
+/// What starting with a Config does in both modes, at launch or when First-run Setup finishes
+/// (FR-CFG-1): the library in the data dir, for the Config's Games Root.
+fn open_library(ctx: &mut Ctx, config: &Config) -> Result<(), String> {
+    ctx.library = Library::open(&ctx.data_dir.join("library.db")).map_err(|e| e.to_string())?;
+    ctx.games_root = config.games_root.clone();
+    Ok(())
+}
+
+/// Screenshot mode's start with a library: every System scanned in the foreground, so the
+/// screenshot shows every Game, and Artwork only with `--artwork`. The emulators stay simulated.
+fn start_shot_library(ctx: &mut Ctx, with_artwork: bool) -> Result<(), String> {
+    ctx.scan_all(ctx::now()).map_err(|e| e.to_string())?;
+    if with_artwork {
+        ctx.artwork = artwork(&ctx.config_path, &ctx.data_dir);
+    }
+    Ok(())
+}
+
+/// The interactive start with a library: the emulators detected, Artwork with the key in
+/// `secrets.toml`, and the watcher, which scans every System in the background and then follows the
+/// Games Root.
+fn start_live_library(ctx: &mut Ctx) -> LibraryWatcher {
+    ctx.emulators = Emulators::detect();
+    ctx.artwork = artwork(&ctx.config_path, &ctx.data_dir);
+    LibraryWatcher::start(ctx.games_root.clone())
+}
+
+/// Carries out First-run Setup's Finish (FR-CFG-4) as if Game37 had started with `config`: opens
+/// its library, starts it as the mode does with `start`, and replaces Setup with Home and Consoles.
+fn finish_setup<T>(
+    nav: &mut Nav,
+    ctx: &mut Ctx,
+    config: Config,
+    start: impl FnOnce(&mut Ctx) -> Result<T, String>,
+) -> Result<T, String> {
+    nav.leave_all(ctx);
+    open_library(ctx, &config)?;
+    let started = start(ctx)?;
+    let root = config.games_root.clone();
+    *nav = screens::start(Ok(Some(config)), &root, ctx);
+    Ok(started)
 }
 
 /// `--screen controller-test`: the Controller test over Settings, with two fake controllers
@@ -251,6 +287,10 @@ fn interactive(
         if let Some(path) = ctx.show_file_request.take() {
             crate::file_manager::show(&path);
         }
+        if let Some(config) = ctx.setup_finished.take() {
+            let started = finish_setup(&mut nav, &mut ctx, config, |ctx| Ok(start_live_library(ctx)))?;
+            watcher = Some(started);
+        }
         if let Some(session) = sdl::running(&mut nav) {
             session.set_shown(shown);
         }
@@ -339,6 +379,11 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
             copy_clipboard_request(&mut ctx, &video);
             // Screenshot mode never opens the file manager.
             ctx.show_file_request = None;
+            if let Some(config) = ctx.setup_finished.take() {
+                finish_setup(&mut nav, &mut ctx, config, |ctx| {
+                    start_shot_library(ctx, shot.artwork)
+                })?;
+            }
             if let Some(game) = ctx.launch.take() {
                 launcher.start(&game, &mut nav, &ctx);
             }
@@ -744,6 +789,34 @@ impl InputState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finishing_setup_opens_the_library_for_the_new_games_root_and_starts_on_home() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("Games");
+        std::fs::create_dir_all(root.join("nes")).unwrap();
+        std::fs::write(root.join("nes/Dummy.nes"), b"").unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.data_dir = dir.path().join("data");
+        let mut nav = screens::start(Ok(None), &root, &ctx);
+        assert_eq!(nav.top().title(), "First-run Setup");
+
+        let config = Config {
+            games_root: root.clone(),
+        };
+        finish_setup(&mut nav, &mut ctx, config, |ctx| start_shot_library(ctx, false)).unwrap();
+        assert_eq!(ctx.games_root, root);
+        assert!(
+            ctx.data_dir.join("library.db").is_file(),
+            "the library is the data dir's"
+        );
+        let games = ctx.library.system_games("nes", Default::default()).unwrap();
+        let titles: Vec<_> = games.iter().map(|g| g.title.as_str()).collect();
+        assert_eq!(titles, ["Dummy"]);
+        assert_eq!(nav.tab_labels(), Some(vec!["Home", "Consoles"]));
+        assert_eq!(nav.top().title(), "Home");
+        assert!(nav.has_library(), "with Search and Settings");
+    }
 
     /// Enter on Rename, then F in the same frame (FR-UI-1): the rename field is open by the time
     /// F is read, so F types (dropped here, as SDL's text input wasn't on yet) rather than acts as
