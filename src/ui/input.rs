@@ -22,10 +22,12 @@ pub enum Action {
     Search,
     /// Opens Settings: Start on a controller outside a text field, or Ctrl+comma.
     Settings,
+    /// Pastes the system clipboard into the active text field: Ctrl+V while typing.
+    Paste,
 }
 
 impl Action {
-    pub const ALL: [Action; 13] = [
+    pub const ALL: [Action; 14] = [
         Action::Up,
         Action::Down,
         Action::Left,
@@ -39,6 +41,7 @@ impl Action {
         Action::Start,
         Action::Search,
         Action::Settings,
+        Action::Paste,
     ];
 
     pub fn is_direction(self) -> bool {
@@ -61,6 +64,7 @@ impl Action {
             Action::Start => "start",
             Action::Search => "search",
             Action::Settings => "settings",
+            Action::Paste => "paste",
         }
     }
 
@@ -161,11 +165,14 @@ pub fn key_action(key: Keycode) -> Option<Action> {
 }
 
 /// What a key pressed with Ctrl does, text field or not: Ctrl+F searches and Ctrl+comma opens
-/// Settings (GNOME's Preferences shortcut). Other Ctrl keys act as without it.
-pub fn ctrl_key_action(key: Keycode) -> Option<Action> {
+/// Settings (GNOME's Preferences shortcut). Ctrl+V pastes, but only while `text` is active;
+/// outside a text field it acts as without Ctrl, which is nothing. Other Ctrl keys act as
+/// without it too.
+pub fn ctrl_key_action(key: Keycode, text: bool) -> Option<Action> {
     match key {
         Keycode::F => Some(Action::Search),
         Keycode::Comma => Some(Action::Settings),
+        Keycode::V if text => Some(Action::Paste),
         _ => None,
     }
 }
@@ -229,6 +236,7 @@ pub fn glyph_label(action: Action, kind: InputKind, style: ButtonStyle) -> &'sta
         (InputKind::Keyboard, _, Action::Start) => "Enter",
         (InputKind::Keyboard, _, Action::Search) => "Ctrl F",
         (InputKind::Keyboard, _, Action::Settings) => "Ctrl ,",
+        (_, _, Action::Paste) => "Ctrl V",
     }
 }
 
@@ -394,18 +402,28 @@ mod tests {
 
     #[test]
     fn ctrl_f_searches_and_ctrl_comma_opens_settings() {
-        assert_eq!(ctrl_key_action(Keycode::F), Some(Action::Search));
+        assert_eq!(ctrl_key_action(Keycode::F, false), Some(Action::Search));
         assert_eq!(
             key_action(Keycode::F),
             Some(Action::Options),
             "plain F stays Options"
         );
-        assert_eq!(ctrl_key_action(Keycode::Comma), Some(Action::Settings));
+        assert_eq!(ctrl_key_action(Keycode::Comma, false), Some(Action::Settings));
         assert_eq!(key_action(Keycode::Comma), None);
         assert_eq!(
-            ctrl_key_action(Keycode::Q),
+            ctrl_key_action(Keycode::Q, false),
             None,
             "other Ctrl keys act as without it"
+        );
+    }
+
+    #[test]
+    fn ctrl_v_pastes_only_in_text_mode() {
+        assert_eq!(ctrl_key_action(Keycode::V, true), Some(Action::Paste));
+        assert_eq!(
+            ctrl_key_action(Keycode::V, false),
+            None,
+            "outside text mode Ctrl+V does nothing"
         );
     }
 

@@ -184,7 +184,7 @@ impl Controls {
             repeat: false,
             ctrl: true,
         } = event
-            && let Some(action) = ctrl_key_action(key)
+            && let Some(action) = ctrl_key_action(key, self.text)
         {
             self.kind = InputKind::Keyboard;
             self.ctrl = true;
@@ -553,6 +553,23 @@ mod tests {
             out,
             [Input::Text(TextInput::Char('f'))],
             "without Ctrl, F types again"
+        );
+    }
+
+    #[test]
+    fn ctrl_v_pastes_in_a_text_field_and_types_nothing_outside_one() {
+        let mut controls = Controls::new(InputKind::Keyboard);
+        let mut out = Vec::new();
+        controls.handle(0, ctrl_down(Keycode::V), &mut out);
+        controls.typed("v", &mut out);
+        assert_eq!(out, [], "outside a text field Ctrl+V does nothing");
+        controls.text = true;
+        controls.handle(1, ctrl_down(Keycode::V), &mut out);
+        controls.typed("v", &mut out);
+        assert_eq!(
+            out,
+            [Input::Action(Action::Paste)],
+            "Ctrl+V pastes and types no v"
         );
     }
 

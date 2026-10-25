@@ -10,7 +10,7 @@ use crate::screens::confirm::Confirm;
 use crate::screens::home::tilde;
 use crate::screens::message::dim;
 use crate::ui::gfx::{Align, Gfx, TextStyle};
-use crate::ui::input::{Input, InputKind};
+use crate::ui::input::{Action, Input, InputKind};
 use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
 use crate::ui::text_entry::{KEYBOARD_H, KEYBOARD_W, Outcome, TextEntry};
@@ -200,7 +200,9 @@ impl Screen for KeyEntry {
     }
 
     fn hints(&self) -> Vec<Hint> {
-        TextEntry::hints(self.kind, "Save")
+        let mut hints = TextEntry::hints(self.kind, "Save");
+        hints.push(Hint::new(&[Action::Paste], "Paste"));
+        hints
     }
 }
 
@@ -404,6 +406,28 @@ mod tests {
         assert_eq!(ctx.artwork.key().map(ApiKey::expose), Some(SECRET));
         entry.handle(Input::Text(TextInput::Backspace), ctx);
         assert_eq!(entry.error, None, "typing clears the error");
+    }
+
+    #[test]
+    fn pasting_into_the_key_field_saves_the_pasted_key() {
+        let (_dir, mut ctx) = world(None);
+        let ctx = &mut ctx;
+        let mut entry = KeyEntry::new(ctx);
+        let pasted = format!("\t {SECRET} \n");
+        for input in crate::app::paste_inputs(&pasted) {
+            entry.handle(input, ctx);
+        }
+        assert_eq!(
+            entry.entry.text(),
+            format!(" {SECRET} "),
+            "the tab and newline were dropped"
+        );
+        assert!(matches!(
+            entry.handle(Input::Action(Action::Start), ctx),
+            Transition::Pop
+        ));
+        let saved = config::load_api_key(&ctx.config_path).unwrap();
+        assert_eq!(saved.as_ref().map(ApiKey::expose), Some(SECRET));
     }
 
     #[test]
