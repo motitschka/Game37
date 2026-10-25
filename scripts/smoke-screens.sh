@@ -88,5 +88,7 @@ shot m5-rename "$root/cfg.toml" \
 # M6: top bar entries
 shot m6-search-open "$root/cfg.toml" "down,down,search"
 shot m6-settings-open "$root/cfg.toml" "settings"
+# M6: Controller test
+shot m6-controller-test "$root/cfg.toml" "" --screen controller-test
 
 echo "screenshots in $out"

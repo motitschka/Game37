@@ -8,7 +8,7 @@ use crate::ui::input::{Action, Input, Pointer};
 
 pub const USAGE: &str = "usage: game37 [--config <path>] [--data-dir <path>] \
 [--screenshot <out.bmp> [--actions <a,b,...>] [--missing-emulators <system ids>] [--frames <n>] \
-[--artwork]]";
+[--artwork] [--screen controller-test]]";
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Options {
@@ -35,6 +35,16 @@ pub struct Screenshot {
     /// key in `secrets.toml` next to the Config, waiting for it before each frame. Without it every
     /// Game shows placeholder art and nothing is read or fetched.
     pub artwork: bool,
+    /// `--screen`: a screen to open over the start screen before the steps, with the state it shows
+    /// faked.
+    pub screen: Option<ShotScreen>,
+}
+
+/// A screen `--screen` opens, for screens no step sequence can reach on its own.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ShotScreen {
+    /// `controller-test`: the Controller test over Settings, with fake controllers connected.
+    ControllerTest,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -74,6 +84,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
     let mut missing_emulators = None;
     let mut frames = None;
     let mut artwork = false;
+    let mut screen = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or_else(|| format!("{arg} needs a value"));
@@ -85,6 +96,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
             "--missing-emulators" => missing_emulators = Some(value()?),
             "--frames" => frames = Some(value()?),
             "--artwork" => artwork = true,
+            "--screen" => screen = Some(value()?),
             _ => return Err(format!("unknown argument {arg:?}")),
         }
     }
@@ -94,6 +106,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
             ("--missing-emulators", missing_emulators.is_some()),
             ("--frames", frames.is_some()),
             ("--artwork", artwork),
+            ("--screen", screen.is_some()),
         ];
         if let Some((flag, _)) = given.iter().find(|(_, given)| *given) {
             return Err(format!("{flag} only works with --screenshot"));
@@ -113,6 +126,11 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
                 .ok_or_else(|| format!("bad --frames {n:?}: expected a whole number from 1"))?,
         },
         artwork,
+        screen: match screen.as_deref() {
+            None => None,
+            Some("controller-test") => Some(ShotScreen::ControllerTest),
+            Some(other) => return Err(format!("bad --screen {other:?}: expected controller-test")),
+        },
     });
     Ok(options)
 }
@@ -244,6 +262,21 @@ mod tests {
         let err = parse(args("--artwork")).unwrap_err();
         assert!(err.contains("--artwork") && err.contains("--screenshot"), "{err}");
         assert!(USAGE.contains("[--artwork]"));
+    }
+
+    #[test]
+    fn screen_opens_the_controller_test_and_only_works_with_screenshot() {
+        let shot = |a: &str| parse(args(a)).unwrap().screenshot.unwrap();
+        assert_eq!(shot("--screenshot o.bmp").screen, None);
+        assert_eq!(
+            shot("--screen controller-test --screenshot o.bmp").screen,
+            Some(ShotScreen::ControllerTest)
+        );
+        let err = parse(args("--screen controller-test")).unwrap_err();
+        assert!(err.contains("--screen") && err.contains("--screenshot"), "{err}");
+        let err = parse(args("--screenshot o.bmp --screen settings")).unwrap_err();
+        assert!(err.contains("controller-test"), "{err}");
+        assert!(USAGE.contains("[--screen controller-test]"));
     }
 
     #[test]

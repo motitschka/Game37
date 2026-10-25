@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use sdl3::event::{Event, WindowEvent};
-use sdl3::gamepad::{Axis, Gamepad};
+use sdl3::gamepad::{Axis, Button, Gamepad};
 use sdl3::joystick::JoystickId;
 use sdl3::keyboard::{Keycode, Mod, Scancode};
 use sdl3::mouse::MouseButton;
@@ -15,7 +15,7 @@ use sdl3::sys::render::SDL_RendererLogicalPresentation;
 use sdl3::{GamepadSubsystem, VideoSubsystem};
 
 use crate::artwork::Artwork;
-use crate::cli::{Options, Screenshot};
+use crate::cli::{Options, Screenshot, ShotScreen};
 use crate::config;
 use crate::ctx::{self, Controller, Ctx};
 use crate::emulators::Emulators;
@@ -56,7 +56,10 @@ pub fn run(options: Options) -> Result<(), String> {
             if has_library && shot.artwork {
                 ctx.artwork = artwork(&path, &ctx.data_dir);
             }
-            let nav = screens::start(loaded, &path, &ctx);
+            let mut nav = screens::start(loaded, &path, &ctx);
+            if shot.screen == Some(ShotScreen::ControllerTest) {
+                open_controller_test(&mut nav, &mut ctx);
+            }
             // Never starts a process: a launch shows the Playing screen for good.
             let launcher = Launcher::new(Box::new(NeverExits::default()), log_dir);
             screenshot(nav, ctx, launcher, shot)
@@ -73,6 +76,34 @@ pub fn run(options: Options) -> Result<(), String> {
             interactive(nav, ctx, watcher, launcher)
         }
     }
+}
+
+/// `--screen controller-test`: the Controller test over Settings, with two fake controllers
+/// connected, as in the mockup. The first, shown one has A and L1 held, its left stick pushed up and
+/// right, and R2 pulled to 60%; the second is idle.
+fn open_controller_test(nav: &mut Nav, ctx: &mut Ctx) {
+    nav.push(Box::new(screens::Stub::new("Settings")));
+    nav.push(Box::new(screens::ControllerTest::new()));
+    let full = i16::MAX as f32;
+    let mut pad = input::PadState {
+        left_x: (0.62 * full) as i16,
+        left_y: (-0.41 * full) as i16,
+        right_trigger: (0.6 * full) as i16,
+        ..Default::default()
+    };
+    pad.press(Button::East);
+    pad.press(Button::LeftShoulder);
+    ctx.controllers = vec![
+        Controller {
+            name: "Xbox Wireless Controller".to_owned(),
+            pad,
+        },
+        Controller {
+            name: "8BitDo Pro 2".to_owned(),
+            pad: input::PadState::default(),
+        },
+    ];
+    ctx.last_controller = Some(0);
 }
 
 /// Artwork cached under `data_dir`, fetched with the key in `secrets.toml` next to the Config at
