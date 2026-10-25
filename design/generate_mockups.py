@@ -995,11 +995,42 @@ def screen_settings_bios():
     sv.save()
 
 
+# Each Embedded System's Core, by the System Order of its first System, with its state in the mockup.
+CORES = [("Mesen", ["nes"], "Installed"), ("SameBoy", ["gb", "gbc"], "Installed"), ("bsnes", ["snes"], "Installed"),
+         ("Mupen64Plus-Next", ["n64"], 45), ("mGBA", ["gba"], "Installed"),
+         ("melonDS DS", ["nds"], "Not downloaded"), ("Beetle PSX HW", ["ps1"], "Failed"),
+         ("PPSSPP", ["psp"], "Not downloaded")]
+
+
+def screen_settings_cores():
+    sv = Svg("19-settings-cores", "Settings: Cores")
+    settings_page(sv, "Cores")
+    installed = sum(state == "Installed" for _, _, state in CORES)
+    settings_row(sv, TOP, 64, "Update all", f"Redownloads the {installed} installed Cores")
+    for i, (name, systems, state) in enumerate(CORES):
+        y, h = TOP + 78 + i * 78, 70
+        r = settings_row(sv, y, h, name, sub=", ".join(SYS[k][1] for k in systems), focused=state == "Failed")
+        base = y + h / 2 + 7
+        if state == "Failed":
+            sv.add(text(r, base, "Download failed · Retry", 18, 600, fill=WARN, anchor="end"))
+        elif isinstance(state, int):
+            bw = 240
+            sv.add(rect(r - bw, y + h / 2 - 4, bw, 8, C["line"], rx=4),
+                   rect(r - bw, y + h / 2 - 4, bw * state / 100, 8, C["accent"], rx=4),
+                   text(r - bw - 20, base, f"Downloading {state}%", 18, 500, fill=C["text"], anchor="end"))
+        else:
+            sv.add(text(r, base, state, 18, 500, fill=C["muted"] if state == "Installed" else C["dim"],
+                        anchor="end"))
+    hintbar(sv, [(["A"], "Download"), (["B"], "Back")])
+    sv.save()
+
+
 if __name__ == "__main__":
     for fn in [screen_home, screen_home_empty, screen_carousel, screen_console_page, screen_details,
                screen_options, screen_pause, screen_ds, screen_console_missing_emulator,
                screen_details_missing_emulator, screen_speedrun_page, screen_splits_editor,
                screen_speedrun_embedded, screen_pause_run, screen_timer_window, screen_details_speedrun,
-               screen_settings_library, screen_settings_bios]:
+               screen_settings_library, screen_settings_bios,
+               screen_settings_cores]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))
