@@ -764,6 +764,54 @@ mod tests {
     }
 
     #[test]
+    fn a_click_on_a_result_opens_it_from_the_field_or_the_results() {
+        let (_dir, mut ctx) = ctx_with(&["Super Mario World", "Paper Mario"]);
+        let mut search = Search::new(&ctx);
+        type_text(&mut search, "mario", &mut ctx);
+        search.hits = vec![(Rect::new(300.0, 200.0, 50.0, 50.0), 1)];
+        let click = Input::Pointer(Pointer::Click { x: 310.0, y: 210.0 });
+        let move_over = Input::Pointer(Pointer::Move { x: 310.0, y: 210.0 });
+        search.handle(move_over, &mut ctx);
+        assert!(
+            search.text_input(),
+            "hovering a result doesn't take focus from the field"
+        );
+        let Transition::Push(page) = search.handle(click, &mut ctx) else {
+            panic!("a click on a result should open its Details Page");
+        };
+        assert_eq!(page.title(), "Super Mario World");
+        assert!(!search.text_input(), "and focuses it, for coming back");
+        let right_click = Input::Pointer(Pointer::RightClick { x: 310.0, y: 210.0 });
+        let Transition::Push(menu) = search.handle(right_click, &mut ctx) else {
+            panic!("a right-click on a result should open its Options Menu");
+        };
+        assert_eq!(menu.title(), "Super Mario World");
+        let miss = Input::Pointer(Pointer::Click { x: 10.0, y: 900.0 });
+        assert!(matches!(search.handle(miss, &mut ctx), Transition::None));
+    }
+
+    #[test]
+    fn a_click_on_the_field_focuses_it() {
+        let (_dir, mut ctx) = pad_ctx_with(&["Quest"]);
+        let mut search = Search::new(&ctx);
+        act(&mut search, Action::Confirm, &mut ctx);
+        act(&mut search, Action::Start, &mut ctx);
+        assert!(!search.text_input());
+        let click = Input::Pointer(Pointer::Click {
+            x: FIELD.x + 100.0,
+            y: 60.0,
+        });
+        search.handle(click, &mut ctx);
+        assert!(search.text_input());
+        assert!(
+            search.keyboard_shown(),
+            "on a controller with the on-screen keyboard"
+        );
+        search.handle(click, &mut ctx);
+        assert_eq!(search.query(), "q", "a click on the field types nothing");
+    }
+
+    #[test]
     fn the_count_line_is_singular_for_one_game() {
         assert_eq!(count(1), "1 Game");
         assert_eq!(count(7), "7 Games");
