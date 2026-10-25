@@ -14,6 +14,7 @@ use unicode_normalization::char::is_combining_mark;
 
 use super::FoundGame;
 use crate::systems;
+use crate::ui::input::ButtonStyle;
 
 /// How many Games a Shelf shows on Home (FR-HOME-3).
 pub const SHELF_SIZE: usize = 20;
@@ -584,6 +585,19 @@ impl Library {
         self.set_setting("last_system", system)
     }
 
+    /// The menus' button style (FR-UI-2); Nintendo until changed, or if the stored one is unknown.
+    pub fn button_style(&self) -> Result<ButtonStyle, DbError> {
+        Ok(self
+            .setting("button_style")?
+            .as_deref()
+            .and_then(ButtonStyle::from_id)
+            .unwrap_or_default())
+    }
+
+    pub fn set_button_style(&self, style: ButtonStyle) -> Result<(), DbError> {
+        self.set_setting("button_style", style.id())
+    }
+
     fn setting(&self, key: &str) -> Result<Option<String>, DbError> {
         let value = self
             .conn
@@ -1062,6 +1076,24 @@ mod tests {
         let lib = Library::open_in_memory().unwrap();
         lib.set_last_system("dreamcast").unwrap();
         assert_eq!(lib.last_system().unwrap(), "nes");
+    }
+
+    #[test]
+    fn button_style_defaults_to_nintendo_and_round_trips() {
+        let lib = Library::open_in_memory().unwrap();
+        assert_eq!(lib.button_style().unwrap(), ButtonStyle::Nintendo);
+        for style in ButtonStyle::ALL {
+            lib.set_button_style(style).unwrap();
+            assert_eq!(lib.button_style().unwrap(), style);
+        }
+        assert_eq!(lib.setting("button_style").unwrap().as_deref(), Some("playstation"));
+    }
+
+    #[test]
+    fn unknown_button_style_reads_as_nintendo() {
+        let lib = Library::open_in_memory().unwrap();
+        lib.set_setting("button_style", "sega").unwrap();
+        assert_eq!(lib.button_style().unwrap(), ButtonStyle::Nintendo);
     }
 
     #[test]

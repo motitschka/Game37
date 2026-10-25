@@ -46,6 +46,12 @@ pub fn run(options: Options) -> Result<(), String> {
         _ => (Ctx::empty(), false),
     };
     ctx.data_dir = data_dir;
+    if has_library {
+        ctx.button_style = ctx.library.button_style().unwrap_or_else(|e| {
+            eprintln!("game37: can't read the button style: {e}");
+            ButtonStyle::default()
+        });
+    }
     match options.screenshot {
         Some(shot) => {
             // Scan in the foreground, so the screenshot shows every Game.
@@ -270,7 +276,6 @@ fn interactive(
             sdl.mouse().show_cursor(cursor);
         }
         ctx.input_kind = input.controls.kind;
-        ctx.button_style = input.controls.style;
         hits = draw(&mut gfx, &mut nav, &ctx, &input.view(), &clock());
         gfx.present();
         if !vsync && let Some(left) = FRAME.checked_sub(frame_start.elapsed()) {
@@ -306,7 +311,6 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
 
     let mut view = View {
         kind: InputKind::Controller,
-        style: ButtonStyle::default(),
         pointer: None,
     };
     let clock = clock();
@@ -433,7 +437,6 @@ const BLACK: Colour = Colour::hex(0x000000);
 /// What the chrome needs to know about input.
 struct View {
     kind: InputKind,
-    style: ButtonStyle,
     pointer: Option<(f32, f32)>,
 }
 
@@ -447,7 +450,7 @@ fn draw(gfx: &mut Gfx<'_>, nav: &mut Nav, ctx: &Ctx, view: &View, clock: &str) -
         };
         // The Pause Menu over a running Game.
         modal.draw(gfx, ctx);
-        let hints = chrome::hintbar(gfx, &modal.hints(), view.kind, view.style, view.pointer);
+        let hints = chrome::hintbar(gfx, &modal.hints(), view.kind, ctx.button_style, view.pointer);
         return Hits {
             hints,
             ..Hits::default()
@@ -465,7 +468,7 @@ fn draw(gfx: &mut Gfx<'_>, nav: &mut Nav, ctx: &Ctx, view: &View, clock: &str) -
         search,
         settings: library,
         kind: view.kind,
-        style: view.style,
+        style: ctx.button_style,
         pointer: view.pointer,
     };
     let top = chrome::topbar(gfx, &bar);
@@ -473,7 +476,7 @@ fn draw(gfx: &mut Gfx<'_>, nav: &mut Nav, ctx: &Ctx, view: &View, clock: &str) -
     if let Some(modal) = nav.modal() {
         modal.draw(gfx, ctx);
     }
-    let hints = chrome::hintbar(gfx, &nav.top().hints(), view.kind, view.style, view.pointer);
+    let hints = chrome::hintbar(gfx, &nav.top().hints(), view.kind, ctx.button_style, view.pointer);
     Hits {
         tabs: top.tabs,
         back: top.back,
@@ -528,8 +531,9 @@ fn wants_text(nav: &mut Nav) -> bool {
 
 /// Handles a frame's `feeds` in order. Each is read in the text mode the top screen wants once the
 /// ones before it are handled: Enter on Rename then F in the same frame types (or drops) the F,
-/// never acts on it. `started` runs after each handled input, to start what it asked to launch or
-/// play. Leaves `controls.text` as the top screen wants it.
+/// never acts on it. Likewise each takes the button style as it is by then, so switching it flips
+/// Confirm and Back from the next press (US-32). `started` runs after each handled input, to start
+/// what it asked to launch or play. Leaves `controls.text` as the top screen wants it.
 fn feed(
     controls: &mut Controls,
     feeds: impl IntoIterator<Item = Feed>,
@@ -542,6 +546,7 @@ fn feed(
     for feed in feeds {
         controls.text = wants_text(nav);
         controls.raw = nav.top().raw_controller();
+        controls.style = ctx.button_style;
         match feed {
             Feed::Quit => return Flow::Quit,
             Feed::Control(at, event) => controls.handle(at, event, &mut inputs),
@@ -630,7 +635,6 @@ impl InputState {
     fn view(&self) -> View {
         View {
             kind: self.controls.kind,
-            style: self.controls.style,
             pointer: self.pointer,
         }
     }
@@ -799,6 +803,56 @@ mod tests {
             "G0",
             "F erased nothing"
         );
+    }
+
+    /// Stands in for the Settings row: records the actions it gets, and switches to the next button
+    /// style on Options, which keeps its button in every style.
+    struct StyleRow(std::rc::Rc<std::cell::RefCell<Vec<Action>>>);
+
+    impl crate::ui::nav::Screen for StyleRow {
+        fn title(&self) -> &str {
+            "Settings"
+        }
+        fn handle(&mut self, input: Input, ctx: &mut Ctx) -> crate::ui::nav::Transition {
+            if let Input::Action(action) = input {
+                self.0.borrow_mut().push(action);
+                if action == Action::Options {
+                    ctx.set_button_style(ctx.button_style.next());
+                }
+            }
+            crate::ui::nav::Transition::None
+        }
+        fn draw(&mut self, _: &mut Gfx<'_>, _: &Ctx) {}
+        fn hints(&self) -> Vec<crate::ui::nav::Hint> {
+            Vec::new()
+        }
+    }
+
+    /// US-32: "Switching the setting flips confirm and back immediately", even between two presses
+    /// in the same frame.
+    #[test]
+    fn switching_the_button_style_flips_confirm_and_back_from_the_next_press() {
+        let log = std::rc::Rc::default();
+        let mut nav = Nav::single(Box::new(StyleRow(std::rc::Rc::clone(&log))));
+        let mut ctx = Ctx::empty();
+        let mut controls = Controls::new(InputKind::Controller);
+        let pad = JoystickId::new(1);
+        let feeds = [Button::East, Button::West, Button::East, Button::South]
+            .into_iter()
+            .flat_map(|button| {
+                [
+                    Feed::Control(0, ControlEvent::PadButtonDown { pad, button }),
+                    Feed::Control(0, ControlEvent::PadButtonUp { pad, button }),
+                ]
+            });
+        let flow = feed(&mut controls, feeds, &mut nav, &Hits::default(), &mut ctx, |_, _| {});
+        assert_eq!(flow, Flow::Continue);
+        assert_eq!(
+            *log.borrow(),
+            [Action::Confirm, Action::Options, Action::Back, Action::Confirm],
+            "East confirms in Nintendo style, then goes back in Xbox style, where South confirms"
+        );
+        assert_eq!(ctx.library.button_style().unwrap(), ButtonStyle::Xbox, "saved");
     }
 
     /// `Ports` keyed by the SDL joystick ids `InputState` gets from `GamepadAdded` and

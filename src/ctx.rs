@@ -46,6 +46,8 @@ pub struct Ctx {
     pub animate: bool,
     /// What the player last used, so screens can show matching glyphs in their own text.
     pub input_kind: InputKind,
+    /// The menus' button style; `app.rs` loads it from the library at start and hands it to the
+    /// controls before every event, so a change applies from the next press on.
     pub button_style: ButtonStyle,
     /// Which Standalone Emulators are installed, as last checked.
     pub emulators: Emulators,
@@ -117,6 +119,15 @@ impl Ctx {
     pub fn simulate_emulators(&mut self, emulators: Emulators) {
         self.emulators = emulators.clone();
         self.detect_emulators = Box::new(move || emulators.clone());
+    }
+
+    /// Switches the menus' button style (US-32) and saves it. It applies from the next press, and
+    /// glyphs follow from the next frame.
+    pub fn set_button_style(&mut self, style: ButtonStyle) {
+        self.button_style = style;
+        if let Err(e) = self.library.set_button_style(style) {
+            eprintln!("game37: can't save the button style: {e}");
+        }
     }
 
     /// Scans every System folder and brings the library up to date (FR-LIB-1).
