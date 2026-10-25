@@ -3,6 +3,7 @@
 
 Cover art is placeholder gradients: real art comes from SteamGridDB at runtime.
 """
+import math
 import textwrap
 from html import escape
 from pathlib import Path
@@ -179,6 +180,16 @@ def logo(sv, x=M, y=72):
            f' letter-spacing="1">GAME<tspan fill="{C["accent"]}">37</tspan></text>')
 
 
+def gear(sv, cx, cy, r, fill, hole):
+    """A Settings gear of outer radius r: eight teeth round a ring, its hole filled with `hole`."""
+    pts = []
+    for k in range(8):
+        a = 2 * math.pi * k / 8
+        for da, rr in [(-0.27, r * 0.74), (-0.16, r), (0.16, r), (0.27, r * 0.74)]:
+            pts.append(f"{cx + rr * math.cos(a + da):.1f},{cy + rr * math.sin(a + da):.1f}")
+    sv.add(f'<polygon points="{" ".join(pts)}" fill="{fill}"/>', circle(cx, cy, r * 0.36, hole))
+
+
 def topbar(sv, active=None, crumb=None):
     logo(sv)
     if crumb:
@@ -192,8 +203,8 @@ def topbar(sv, active=None, crumb=None):
             sv.add(text(x, 70, label, 24, 700 if on else 500, fill=C["text"] if on else C["muted"], anchor="middle"))
             if on:
                 sv.add(rect(x - tw(label, 24, 700) / 2, 86, tw(label, 24, 700), 4, C["accent"], rx=2))
-    # search pill + clock
-    sx = W - M - 110 - 330
+    # search pill, Settings gear and clock
+    sx = W - M - 504
     sv.add(rect(sx, 44, 330, 48, C["surface"], rx=24, stroke=C["line"], sw=1),
            circle(sx + 30, 66, 8, "none", stroke=C["muted"], sw=2.5),
            f'<line x1="{sx + 36}" y1="{72}" x2="{sx + 42}" y2="{78}" stroke="{C["muted"]}" stroke-width="2.5"'
@@ -202,6 +213,9 @@ def topbar(sv, active=None, crumb=None):
     l3_x = sx + 330 - 14 - 40
     glyph(sv, l3_x, 68, "L3")
     glyph(sv, l3_x - 8 - (tw("Ctrl F", 14, 700) + 18), 68, "Ctrl F")
+    gx = W - M - 134
+    sv.add(circle(gx, 68, 24, C["surface"], stroke=C["line"], sw=1))
+    gear(sv, gx, 68, 13, C["muted"], C["surface"])
     sv.add(text(W - M, 76, "21:42", 24, 600, anchor="end"))
 
 
