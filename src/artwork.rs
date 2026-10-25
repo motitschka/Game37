@@ -17,6 +17,7 @@
 //! bulk loading. Only SteamGridDB hosts are contacted (NFR-5), and the API key only goes to the API.
 
 use std::cell::{Cell, OnceCell, RefCell};
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{Cursor, Write};
@@ -238,8 +239,10 @@ struct State {
     bytes: usize,
 }
 
-/// When a loading slot or candidate list was last asked for: in which poll, to drop what is no
-/// longer asked for, and at which clock tick, to run the most recently asked for first.
+/// When a loading slot or candidate list was asked for: in which poll, to drop what is no longer
+/// asked for or, for `first`, to run what just scrolled into view before what has been waiting;
+/// and at which clock tick, to run the most recently asked for first, or, for `first`, the
+/// earliest-drawn of a poll first.
 #[derive(Debug, Clone, Copy, Default)]
 struct Asked {
     poll: u64,
@@ -249,8 +252,10 @@ struct Asked {
 /// A Game's candidate list of one kind, as far as it has got.
 struct Listing {
     candidates: Candidates,
-    /// Only matters while loading.
+    /// Only matters while loading. Updated on every ask.
     asked: Asked,
+    /// When first queued, for [`State::next_net`]'s order. Never updated after that.
+    first: Asked,
 }
 
 impl State {
@@ -275,7 +280,15 @@ impl State {
     /// When `key`'s slot was last asked for, if it is still waiting for `job`.
     fn slot_asked(&self, key: &Key, job: u64) -> Option<Asked> {
         match self.slots.get(key) {
-            Some(Slot::Loading { job: j, asked }) if *j == job => Some(*asked),
+            Some(Slot::Loading { job: j, asked, .. }) if *j == job => Some(*asked),
+            _ => None,
+        }
+    }
+
+    /// When `key`'s slot was first asked for, if it is still waiting for `job`.
+    fn slot_first(&self, key: &Key, job: u64) -> Option<Asked> {
+        match self.slots.get(key) {
+            Some(Slot::Loading { job: j, first, .. }) if *j == job => Some(*first),
             _ => None,
         }
     }
@@ -290,7 +303,25 @@ impl State {
                 Some(Listing {
                     candidates: Candidates::Loading,
                     asked,
+                    ..
                 }) => Some(*asked),
+                _ => None,
+            },
+        }
+    }
+
+    /// When what `job` is for was first asked for, if it is still waiting for it.
+    fn net_first(&self, job: &NetJob) -> Option<Asked> {
+        match job {
+            NetJob::Lookup { key, job, .. } | NetJob::Download { key, job, .. } => self.slot_first(key, *job),
+            NetJob::Candidates {
+                game_id, kind, title, ..
+            } => match self.candidates.get(&(*game_id, *kind, title.clone())) {
+                Some(Listing {
+                    candidates: Candidates::Loading,
+                    first,
+                    ..
+                }) => Some(*first),
                 _ => None,
             },
         }
@@ -355,7 +386,9 @@ impl State {
     }
 
     /// The queued network job to run next: a candidate list first, then a preview, then a Game's
-    /// Artwork; within each, the most recently asked for.
+    /// Artwork; within each, the one first asked for in the most recent poll (what just scrolled
+    /// into view beats what has been waiting), and among those from the same poll, the one first
+    /// asked for earliest in it (draw order, so top-left first).
     fn next_net(&mut self) -> Option<NetJob> {
         let rank = |job: &NetJob| match job {
             NetJob::Candidates { .. } => 2,
@@ -367,16 +400,20 @@ impl State {
         };
         let next = (0..self.net.len()).max_by_key(|&i| {
             let job = &self.net[i];
-            (rank(job), self.net_asked(job).map(|a| a.tick))
+            let first = self.net_first(job).map(|a| (a.poll, Reverse(a.tick)));
+            (rank(job), first)
         })?;
         Some(self.net.swap_remove(next))
     }
 
-    /// The queued cached file to read next: the most recently asked for.
+    /// The queued cached file to read next: the one first asked for in the most recent poll (what
+    /// just scrolled into view beats what has been waiting), and among those from the same poll,
+    /// the one first asked for earliest in it (draw order, so top-left first).
     fn next_disk(&mut self) -> Option<DiskJob> {
         let next = (0..self.disk.len()).max_by_key(|&i| {
             let job = &self.disk[i];
-            self.slot_asked(&job.key, job.job).map(|a| a.tick)
+            self.slot_first(&job.key, job.job)
+                .map(|a| (a.poll, Reverse(a.tick)))
         })?;
         Some(self.disk.swap_remove(next))
     }
@@ -426,8 +463,18 @@ enum Key {
 }
 
 enum Slot {
-    Loading { job: u64, asked: Asked },
-    Ready { picture: Arc<Picture>, used: u64 },
+    Loading {
+        job: u64,
+        /// Updated on every ask.
+        asked: Asked,
+        /// When first queued, for [`State::next_net`] and [`State::next_disk`]'s order. Never
+        /// updated after that.
+        first: Asked,
+    },
+    Ready {
+        picture: Arc<Picture>,
+        used: u64,
+    },
     Placeholder,
 }
 
@@ -621,7 +668,11 @@ impl Artwork {
                     path: cache_path(dir, kind, *id, url),
                     url: url.clone(),
                 });
-                Slot::Loading { job, asked }
+                Slot::Loading {
+                    job,
+                    asked,
+                    first: asked,
+                }
             }
             // Searched this Display Title before: nothing of this kind, or no match.
             (Some(Pick::NoArtwork), _) | (None, Some(None)) => Slot::Placeholder,
@@ -632,7 +683,11 @@ impl Artwork {
                     job,
                     game: search.flatten(),
                 });
-                Slot::Loading { job, asked }
+                Slot::Loading {
+                    job,
+                    asked,
+                    first: asked,
+                }
             }
             _ => Slot::Placeholder,
         };
@@ -673,6 +728,7 @@ impl Artwork {
         let listing = Listing {
             candidates: candidates.clone(),
             asked,
+            first: asked,
         };
         state.candidates.insert(key, listing);
         candidates
@@ -705,7 +761,11 @@ impl Artwork {
                 url: candidate.preview.clone(),
                 path: None,
             });
-            Slot::Loading { job, asked }
+            Slot::Loading {
+                job,
+                asked,
+                first: asked,
+            }
         } else {
             Slot::Placeholder
         };
@@ -873,6 +933,7 @@ impl Artwork {
                 let listing = Listing {
                     candidates,
                     asked: Asked::default(),
+                    first: Asked::default(),
                 };
                 state.candidates.insert((game_id, kind, title), listing);
             }
@@ -2257,8 +2318,12 @@ pub(crate) mod tests {
             assert!(matches!(artwork.cover(&library, game), Art::Loading));
         }
         // The player stops at the last ten, so only they are asked for from now on. The gate stays
-        // shut for longer than a queued job waits, so nothing scrolled past can run first.
+        // shut for longer than a queued job waits, so nothing scrolled past can run first, except
+        // the one cover whose job is already handed to the (still blocked) worker the moment
+        // polling starts: of the games still queued at that point, it is the one first asked for
+        // earliest (top-left of the sweep above), so it is the one with the oldest surviving ask.
         let shown = &games[games.len() - 10..];
+        let leaked = &games[games.len() - MAX_QUEUED_NET];
         let ask = || {
             for game in shown {
                 artwork.cover(&library, game);
@@ -2284,16 +2349,96 @@ pub(crate) mod tests {
             .filter(|u| u.contains("/search/"))
             .collect();
         searched.sort();
-        let wanted: Vec<String> = shown
+        let mut wanted: Vec<String> = shown
             .iter()
+            .chain([leaked])
             .map(|g| format!("{API}/search/autocomplete/{}", encode(&g.title)))
             .collect();
+        wanted.sort();
         assert_eq!(searched, wanted);
         assert_eq!(
             fake.calls(),
-            3 * shown.len(),
-            "a search, a listing and a file each"
+            3 * (shown.len() + 1),
+            "a search, a listing and a file each, plus the one that leaked"
         );
+    }
+
+    #[test]
+    fn artwork_asked_first_in_a_poll_runs_first() {
+        // A Console Page draws top-left first: A, then B, then C, all in the same poll (frame).
+        let dir = tempfile::tempdir().unwrap();
+        let fake = any_title();
+        let (library, games) = many(dir.path(), 3);
+        let (a, b, c) = (&games[0], &games[1], &games[2]);
+        let artwork = artwork(dir.path(), &fake, true);
+        fake.set_gate(false);
+        artwork.cover(&library, a);
+        artwork.cover(&library, b);
+        artwork.cover(&library, c);
+        let ask = || {
+            artwork.cover(&library, a);
+            artwork.cover(&library, b);
+            artwork.cover(&library, c);
+        };
+        fake.set_gate(true);
+        settle(
+            &artwork,
+            &library,
+            || {
+                ask();
+                artwork.busy()
+            },
+            |busy| *busy,
+        );
+
+        let urls = fake.urls();
+        let pos = |g: &GameRow| urls.iter().position(|u| u.contains(&encode(&g.title))).unwrap();
+        assert!(pos(a) < pos(b), "{urls:?}");
+        assert!(pos(b) < pos(c), "{urls:?}");
+    }
+
+    #[test]
+    fn artwork_first_asked_in_a_later_poll_goes_ahead_of_an_older_still_being_asked() {
+        // Alpha occupies the only worker, blocked at the gate, so the queue order below is never
+        // disturbed by a job actually starting. Earlier is asked every poll from the start;
+        // Late only scrolls into view several polls afterwards, but is asked every poll too.
+        // Neither is stale, yet Late, asked first more recently, must run before Earlier.
+        let dir = tempfile::tempdir().unwrap();
+        let fake = any_title();
+        let (library, games) = many(dir.path(), 3);
+        let (alpha, earlier, late) = (&games[0], &games[1], &games[2]);
+        let artwork = artwork(dir.path(), &fake, true);
+        fake.set_gate(false);
+        artwork.cover(&library, alpha);
+        artwork.poll(&library);
+        artwork.cover(&library, earlier);
+        for _ in 0..5 {
+            artwork.poll(&library);
+            artwork.cover(&library, alpha);
+            artwork.cover(&library, earlier);
+        }
+        artwork.cover(&library, late);
+        let ask = || {
+            artwork.cover(&library, alpha);
+            artwork.cover(&library, earlier);
+            artwork.cover(&library, late);
+        };
+        artwork.poll(&library);
+        ask();
+        fake.set_gate(true);
+        settle(
+            &artwork,
+            &library,
+            || {
+                ask();
+                artwork.busy()
+            },
+            |busy| *busy,
+        );
+
+        let urls = fake.urls();
+        let pos = |g: &GameRow| urls.iter().position(|u| u.contains(&encode(&g.title))).unwrap();
+        assert!(pos(late) < pos(earlier), "{urls:?}");
     }
 
     #[test]
