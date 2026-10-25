@@ -91,4 +91,12 @@ shot m6-settings-open "$root/cfg.toml" "settings"
 # M6: Controller test
 shot m6-controller-test "$root/cfg.toml" "" --screen controller-test
 
+# M6: Search. Typing (text:) makes the player's input kind the keyboard, and any other action the
+# controller's: the controller shot types on the keyboard, then presses Up, which the field ignores,
+# to show the on-screen keyboard. The empty shot clicks the field to show it as on the keyboard.
+shot m6-search-typed "$root/cfg.toml" "search,text:test"
+shot m6-search-results "$root/cfg.toml" "search,text:test,down,right"
+shot m6-search-empty "$root/cfg.toml" "search,click:1000:68"
+shot m6-search-controller "$root/cfg.toml" "search,text:test,up"
+
 echo "screenshots in $out"

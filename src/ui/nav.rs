@@ -57,8 +57,8 @@ pub trait Screen {
     fn entry(&self) -> Option<Entry> {
         None
     }
-    /// Whether the top bar draws the search pill over it. The Search screen draws its own field
-    /// there instead.
+    /// Whether the top bar draws the search pill, and any tabs, over it. The Search screen draws
+    /// its own field there instead.
     fn search_pill(&self) -> bool {
         true
     }

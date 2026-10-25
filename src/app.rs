@@ -457,9 +457,11 @@ fn draw(gfx: &mut Gfx<'_>, nav: &mut Nav, ctx: &Ctx, view: &View, clock: &str) -
     nav.base().draw(gfx, ctx);
     let labels = nav.tab_labels();
     let library = nav.has_library();
-    let search = library && nav.base().search_pill();
+    let pill = nav.base().search_pill();
+    let search = library && pill;
     let bar = TopBar {
-        tabs: labels.as_deref().map(|l| (l, nav.active_tab())),
+        // The Search screen's field takes the tabs' place too.
+        tabs: labels.as_deref().filter(|_| pill).map(|l| (l, nav.active_tab())),
         back: nav.back_title(),
         clock,
         search,
