@@ -1059,6 +1059,78 @@ def screen_settings_api_key():
     sv.save()
 
 
+def pad_button(sv, cx, cy, r, label, lit=False):
+    sv.add(circle(cx, cy, r, C["accent"] if lit else C["surface2"], stroke=C["accent"] if lit else C["line"], sw=2),
+           text(cx, cy + 6, label, 17, 700, fill=C["text"] if lit else C["muted"], anchor="middle"))
+
+
+def pad_stick(sv, cx, cy, x, y, moved=False):
+    """A stick well with its cap pushed to (x, y), each from -1 to 1."""
+    sv.add(circle(cx, cy, 56, C["bg"], stroke=C["line"], sw=2),
+           circle(cx + x * 26, cy + y * 26, 30, C["text"] if moved else C["surface2"],
+                  stroke=C["line"], sw=2, opacity=0.9 if moved else 1))
+
+
+def pad_trigger(sv, x, y, w, label, amount):
+    sv.add(text(x + w / 2, y - 12, label, 16, 700, fill=C["text"] if amount else C["muted"], anchor="middle"),
+           rect(x, y, w, 20, C["surface2"], rx=10, stroke=C["line"], sw=1))
+    if amount:
+        sv.add(rect(x, y, w * amount, 20, C["accent"], rx=10))
+
+
+def pad_shoulder(sv, x, y, w, label, lit=False):
+    sv.add(rect(x, y, w, 40, C["accent"] if lit else C["surface2"], rx=20, stroke=C["accent"] if lit else C["line"],
+                sw=2),
+           text(x + w / 2, y + 27, label, 17, 700, fill=C["text"] if lit else C["muted"], anchor="middle"))
+
+
+def screen_controller_test():
+    sv = Svg("21-controller-test", "Controller test")
+    background(sv)
+    topbar(sv, crumb="Settings")
+    sv.add(text(M, 196, "Controller test", 48, 800))
+    sv.add(text(M, TOP + 28, "Controllers", 20, 700, fill=C["muted"]))
+    for i, name in enumerate(["Xbox Wireless Controller", "8BitDo Pro 2"]):
+        y = TOP + 52 + i * 76
+        if i == 0:
+            sv.add(rect(M - 24, y, 400, 64, C["surface2"], rx=14), rect(M - 24, y + 12, 5, 40, C["accent"], rx=2))
+        sv.add(text(M, y + 40, name, 20, 700 if i == 0 else 500, fill=C["text"] if i == 0 else C["muted"]))
+    sv.add(rect(M + 400, TOP, 1, 740, C["line"]))
+    # the pad: a body and two grips, outlined as one shape (outline pass, then fill pass)
+    cx = (RX + W - M) / 2
+    for fill, extra in [(C["line"], f' stroke="{C["line"]}" stroke-width="4"'), (C["surface"], "")]:
+        for gx, a in [(cx - 290, 20), (cx + 290, -20)]:
+            sv.add(f'<ellipse cx="{gx:.1f}" cy="690" rx="110" ry="160" fill="{fill}"{extra}'
+                   f' transform="rotate({a} {gx:.1f} 690)"/>')
+        sv.add(f'<rect x="{cx - 390:.1f}" y="400" width="780" height="300" rx="150" fill="{fill}"{extra}/>')
+    pad_trigger(sv, cx - 330, 300, 170, "L2", 0)
+    pad_trigger(sv, cx + 160, 300, 170, "R2 60%", 0.6)
+    pad_shoulder(sv, cx - 330, 346, 170, "L1", lit=True)
+    pad_shoulder(sv, cx + 160, 346, 170, "R1")
+    # left stick, pushed up and right
+    pad_stick(sv, cx - 240, 490, 0.62, -0.41, moved=True)
+    sv.add(text(cx - 240, 580, "x 0.62 · y −0.41", 16, 500, fill=C["muted"], anchor="middle", font=MONO))
+    # d-pad
+    dx, dy = cx - 120, 640
+    sv.add(rect(dx - 18, dy - 50, 36, 100, C["surface2"], rx=6, stroke=C["line"], sw=2),
+           rect(dx - 50, dy - 18, 100, 36, C["surface2"], rx=6, stroke=C["line"], sw=2),
+           rect(dx - 16, dy - 16, 32, 32, C["surface2"]))
+    # face buttons, labelled as the menus label them (Nintendo style: A right, B bottom)
+    fx, fy = cx + 240, 490
+    for label, ox, oy in [("X", 0, -50), ("A", 50, 0), ("B", 0, 50), ("Y", -50, 0)]:
+        pad_button(sv, fx + ox, fy + oy, 22, label, lit=label == "A")
+    pad_stick(sv, cx + 120, 640, 0, 0)
+    # Select, Guide, Start
+    sv.add(circle(cx, 450, 26, C["surface2"], stroke=C["line"], sw=2),
+           text(cx, 498, "Guide", 14, 600, fill=C["muted"], anchor="middle"))
+    for label, sx in [("Select", cx - 80), ("Start", cx + 80)]:
+        sv.add(rect(sx - 22, 516, 44, 22, C["surface2"], rx=11, stroke=C["line"], sw=2),
+               text(sx, 560, label, 14, 600, fill=C["muted"], anchor="middle"))
+    sv.add(text(cx, 920, "Menu buttons don't act here.", 20, 500, fill=C["muted"], anchor="middle"))
+    hintbar(sv, [(["B"], "Hold to exit")])
+    sv.save()
+
+
 # ---------- search (M6) ----------
 
 def search_topbar(sv, query, focused):
@@ -1418,7 +1490,7 @@ if __name__ == "__main__":
                screen_details_missing_emulator, screen_speedrun_page, screen_splits_editor,
                screen_speedrun_embedded, screen_pause_run, screen_timer_window, screen_details_speedrun,
                screen_settings_library, screen_settings_bios, screen_settings_cores, screen_settings_api_key,
-               screen_search, screen_search_controller, screen_search_results, screen_search_empty,
+               screen_controller_test, screen_search, screen_search_controller, screen_search_results, screen_search_empty,
                screen_setup_systems, screen_setup_emulators, screen_setup_folders, screen_setup_cores,
                screen_setup_key]:
         fn()
