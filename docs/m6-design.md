@@ -108,9 +108,10 @@ the rest: the same covers as a Console Page, each with its System badge (FR-SRCH
 - **Keyboard:** typing goes into the field. Down or Enter moves into the results. In the results,
   arrows move, Enter opens the Details Page, and F opens the Options Menu. Up from the top row, or
   Ctrl+F, goes back to the field.
-- **Controller:** the on-screen keyboard from rename is docked under the field (FR-SRCH-2), with
-  the grid above it updating live. Its Done key (or Start) moves into the results and hides the
-  keyboard. Up from the top row brings the keyboard back.
+- **Controller:** the on-screen keyboard from rename is docked at the bottom of the screen
+  (FR-SRCH-2), with the grid between it and the field updating live. Its buttons are rename's: Y
+  Backspace, X Space. Its Done key (or Start) moves into the results and hides the keyboard. Up
+  from the top row brings the keyboard back.
 - **Mouse:** a click on a result opens it, and a click on the field focuses it.
 - Back from the results closes search. Back from the field closes it too, after clearing a
   non-empty query first. The query survives a visit to a Details Page and back.

@@ -1001,7 +1001,7 @@ def screen_search_controller():
     ty = 1010 - 24 - OSK_H - 24
     sv.add(rect(0, ty, W, 1010 - ty, C["surface"]), rect(0, ty, W, 1, C["line"]))
     osk(sv, (W - OSK_W) / 2, ty + 24, "r")
-    hintbar(sv, [(["A"], "Type"), (["B"], "Backspace"), (["+"], "Results")])
+    hintbar(sv, [(["A"], "Type"), (["Y"], "Backspace"), (["X"], "Space"), (["+"], "Results"), (["B"], "Close")])
     sv.save()
 
 
