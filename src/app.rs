@@ -27,7 +27,7 @@ use crate::session::input::{self, Mouse, Ports};
 use crate::session::sdl;
 use crate::ui::chrome::{self, TopBar};
 use crate::ui::controls::{ControlEvent, Controls, StickAxis};
-use crate::ui::gfx::Gfx;
+use crate::ui::gfx::{Gfx, WindowMode};
 use crate::ui::input::{Action, ButtonStyle, Input, InputKind, Pointer};
 use crate::ui::nav::{Flow, Hits, Nav};
 use crate::ui::text::Fonts;
@@ -50,6 +50,10 @@ pub fn run(options: Options) -> Result<(), String> {
         ctx.button_style = ctx.library.button_style().unwrap_or_else(|e| {
             eprintln!("game37: can't read the button style: {e}");
             ButtonStyle::default()
+        });
+        ctx.window_mode = ctx.library.window_mode().unwrap_or_else(|e| {
+            eprintln!("game37: can't read the window mode: {e}");
+            WindowMode::default()
         });
     }
     match options.screenshot {
@@ -79,7 +83,15 @@ pub fn run(options: Options) -> Result<(), String> {
             let nav = screens::start(loaded, &path, &ctx);
             let watcher = has_library.then(|| LibraryWatcher::start(ctx.games_root.clone()));
             let launcher = Launcher::new(Box::new(Processes), log_dir);
-            interactive(nav, ctx, watcher, launcher)
+            // First-run Setup, without a library, always starts windowed.
+            let fullscreen = has_library && {
+                let last = ctx.library.last_fullscreen().unwrap_or_else(|e| {
+                    eprintln!("game37: can't read the last window state: {e}");
+                    false
+                });
+                starts_fullscreen(ctx.window_mode, last)
+            };
+            interactive(nav, ctx, watcher, launcher, fullscreen)
         }
     }
 }
@@ -122,6 +134,16 @@ fn artwork(config_path: &Path, data_dir: &Path) -> Artwork {
     Artwork::start(data_dir.join("artwork"), key)
 }
 
+/// Whether the window opens fullscreen (FR-UI-3): Remember last goes by how it was when Game37
+/// last quit or F11 last toggled it, the Always modes ignore that.
+fn starts_fullscreen(mode: WindowMode, last_fullscreen: bool) -> bool {
+    match mode {
+        WindowMode::RememberLast => last_fullscreen,
+        WindowMode::AlwaysFullscreen => true,
+        WindowMode::AlwaysWindowed => false,
+    }
+}
+
 /// A window with an SDL_Renderer on the named backend, presenting logical 1920×1080 letterboxed.
 fn canvas(video: &VideoSubsystem, w: u32, h: u32, driver: &CStr) -> Result<WindowCanvas, String> {
     let window = video
@@ -148,6 +170,7 @@ fn interactive(
     mut ctx: Ctx,
     mut watcher: Option<LibraryWatcher>,
     mut launcher: Launcher,
+    mut fullscreen: bool,
 ) -> Result<(), String> {
     let sdl = sdl3::init().map_err(|e| e.to_string())?;
     let video = sdl.video().map_err(|e| e.to_string())?;
@@ -163,6 +186,9 @@ fn interactive(
     }
     let creator = canvas.texture_creator();
     let mut gfx = Gfx::new(canvas, &creator, fonts);
+    if fullscreen {
+        gfx.set_fullscreen(true);
+    }
     let mut events = sdl.event_pump().map_err(|e| e.to_string())?;
 
     let mut input = InputState::new(gamepads);
@@ -186,6 +212,12 @@ fn interactive(
         };
         for event in woken_by.into_iter().chain(events.poll_iter()) {
             feeds.extend(input.event(event, &mut gfx));
+        }
+        // F11 toggled it, or the window manager did: saved for Remember last (US-33). Read back
+        // from the window, which may take a frame or two to follow the request.
+        if gfx.is_fullscreen() != fullscreen {
+            fullscreen = !fullscreen;
+            ctx.remember_fullscreen(fullscreen);
         }
         ctx.controllers = input.controllers();
         ctx.last_controller = input.last_controller();
@@ -282,6 +314,7 @@ fn interactive(
             std::thread::sleep(left);
         }
     }
+    ctx.remember_fullscreen(gfx.is_fullscreen());
     close(&mut nav, &mut ctx, &mut launcher);
     Ok(())
 }
@@ -803,6 +836,25 @@ mod tests {
             "G0",
             "F erased nothing"
         );
+    }
+
+    #[test]
+    fn remember_last_starts_as_last_time_and_the_always_modes_ignore_it() {
+        let cases = [
+            (WindowMode::RememberLast, false, false),
+            (WindowMode::RememberLast, true, true),
+            (WindowMode::AlwaysFullscreen, false, true),
+            (WindowMode::AlwaysFullscreen, true, true),
+            (WindowMode::AlwaysWindowed, false, false),
+            (WindowMode::AlwaysWindowed, true, false),
+        ];
+        for (mode, last, fullscreen) in cases {
+            assert_eq!(
+                starts_fullscreen(mode, last),
+                fullscreen,
+                "{mode:?}, last fullscreen {last}"
+            );
+        }
     }
 
     /// Stands in for the Settings row: records the actions it gets, and switches to the next button

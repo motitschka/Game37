@@ -9,6 +9,7 @@ use crate::library::db::{DbError, GameRow, Library};
 use crate::library::scan;
 use crate::session::input::PadState;
 use crate::systems::SYSTEMS;
+use crate::ui::gfx::WindowMode;
 use crate::ui::input::{ButtonStyle, InputKind};
 
 /// A request to play a Game of an Embedded System: from its Resume State, as every launch does
@@ -49,6 +50,9 @@ pub struct Ctx {
     /// The menus' button style; `app.rs` loads it from the library at start and hands it to the
     /// controls before every event, so a change applies from the next press on.
     pub button_style: ButtonStyle,
+    /// Whether the window opens fullscreen; `app.rs` loads it from the library at start, and a
+    /// change takes effect at the next start.
+    pub window_mode: WindowMode,
     /// Which Standalone Emulators are installed, as last checked.
     pub emulators: Emulators,
     /// How Check again re-detects installed emulators (FR-CAR-9): `Emulators::detect` in
@@ -93,6 +97,7 @@ impl Ctx {
             animate: false,
             input_kind: InputKind::Controller,
             button_style: ButtonStyle::default(),
+            window_mode: WindowMode::default(),
             emulators: Emulators::all_installed(),
             detect_emulators: Box::new(Emulators::detect),
             clipboard_request: None,
@@ -130,6 +135,21 @@ impl Ctx {
         }
     }
 
+    /// Switches the startup window mode (US-33) and saves it; it applies from the next start.
+    pub fn set_window_mode(&mut self, mode: WindowMode) {
+        self.window_mode = mode;
+        if let Err(e) = self.library.set_window_mode(mode) {
+            eprintln!("game37: can't save the window mode: {e}");
+        }
+    }
+
+    /// Saves whether the window is fullscreen now, for Remember last's next start.
+    pub fn remember_fullscreen(&self, fullscreen: bool) {
+        if let Err(e) = self.library.set_last_fullscreen(fullscreen) {
+            eprintln!("game37: can't save the window state: {e}");
+        }
+    }
+
     /// Scans every System folder and brings the library up to date (FR-LIB-1).
     pub fn scan_all(&mut self, now: i64) -> Result<(), DbError> {
         let mut changed = false;
@@ -149,4 +169,22 @@ pub fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_setters_switch_and_save() {
+        let mut ctx = Ctx::empty();
+        ctx.set_button_style(ButtonStyle::PlayStation);
+        assert_eq!(ctx.button_style, ButtonStyle::PlayStation);
+        assert_eq!(ctx.library.button_style().unwrap(), ButtonStyle::PlayStation);
+        ctx.set_window_mode(WindowMode::AlwaysWindowed);
+        assert_eq!(ctx.window_mode, WindowMode::AlwaysWindowed);
+        assert_eq!(ctx.library.window_mode().unwrap(), WindowMode::AlwaysWindowed);
+        ctx.remember_fullscreen(true);
+        assert!(ctx.library.last_fullscreen().unwrap());
+    }
 }
