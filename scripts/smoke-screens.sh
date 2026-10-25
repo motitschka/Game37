@@ -97,6 +97,12 @@ shot m6-setup-emulators-all "$root/missing.toml" "sort,settings" --missing-emula
 shot m6-setup-folders "$root/missing.toml" \
     "confirm,down,confirm,down,right,confirm,up,right,right,right,right,confirm,settings,settings,confirm" \
     --missing-emulators switch,ps2
+# First-run Setup's Finish: NES ticked, step 2 passed over, Create folders on step 3, on through
+# the placeholder steps 4 and 5, then Finish, which writes its own Config in the smoke dir and
+# switches to Home. The shots above share missing.toml, so check no Finish wrote it.
+shot m6-setup-finish "$root/setup-finish.toml" "confirm,settings,confirm,settings,settings,settings,wait:5"
+[ -f "$root/setup-finish.toml" ] || echo "FAIL m6-setup-finish (Finish wrote no Config)"
+[ ! -e "$root/missing.toml" ] || echo "FAIL $root/missing.toml exists, so the no-Config shots had a Config"
 
 # M6: Controller test
 shot m6-controller-test "$root/cfg.toml" "" --screen controller-test
