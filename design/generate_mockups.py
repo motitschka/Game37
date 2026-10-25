@@ -1014,11 +1014,20 @@ def screen_search_results():
     sv.save()
 
 
+def screen_search_empty():
+    sv = Svg("25-search-empty", "Search (empty)")
+    background(sv)
+    search_topbar(sv, "", focused=True)
+    sv.add(text(W / 2, 520, f"Type to search {SEARCH_TOTAL} Games", 26, 500, fill=C["muted"], anchor="middle"))
+    hintbar(sv, [(["Esc"], "Close")])
+    sv.save()
+
+
 if __name__ == "__main__":
     for fn in [screen_home, screen_home_empty, screen_carousel, screen_console_page, screen_details,
                screen_options, screen_pause, screen_ds, screen_console_missing_emulator,
                screen_details_missing_emulator, screen_speedrun_page, screen_splits_editor,
                screen_speedrun_embedded, screen_pause_run, screen_timer_window, screen_details_speedrun,
-               screen_search, screen_search_controller, screen_search_results]:
+               screen_search, screen_search_controller, screen_search_results, screen_search_empty]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))
