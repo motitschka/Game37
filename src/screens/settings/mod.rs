@@ -10,6 +10,7 @@ mod bios;
 mod controls;
 mod cores;
 mod display;
+mod games_root;
 mod hidden;
 mod library;
 

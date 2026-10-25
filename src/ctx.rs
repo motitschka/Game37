@@ -76,6 +76,9 @@ pub struct Ctx {
     /// The Config First-run Setup's Finish wrote (FR-CFG-4); `app.rs` takes it and switches to Home
     /// as if Game37 had started with it.
     pub setup_finished: Option<Config>,
+    /// Settings moved the Games Root to `games_root` and rescanned there; `app.rs` takes it and
+    /// restarts the watcher on the new root.
+    pub games_root_changed: bool,
     /// Starts downloading a Core (FR-EMB-2): `Download::start` in production; tests and
     /// screenshot mode's offline cases swap it so they never hit the network.
     pub start_download: Box<dyn Fn(&'static CoreInfo, PathBuf) -> Download>,
@@ -113,6 +116,7 @@ impl Ctx {
             launch: None,
             play: None,
             setup_finished: None,
+            games_root_changed: false,
             start_download: Box::new(Download::start),
             start_assets_download: Box::new(Download::start_assets),
             artwork: Artwork::off(),

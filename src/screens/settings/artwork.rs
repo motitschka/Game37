@@ -20,11 +20,11 @@ use crate::ui::{Rect, W};
 const KEY: usize = 0;
 const REMOVE: usize = 1;
 
-/// The key entry card, placed like the Rename card in `options.rs`.
-const CARD_W: f32 = 1240.0;
-const CARD_H: f32 = 768.0;
-const CARD_X: f32 = (W - CARD_W) / 2.0;
-const CARD_Y: f32 = 120.0;
+/// The key entry card, placed like the Rename card in `options.rs`; the Games Root entry's too.
+pub(super) const CARD_W: f32 = 1240.0;
+pub(super) const CARD_H: f32 = 768.0;
+pub(super) const CARD_X: f32 = (W - CARD_W) / 2.0;
+pub(super) const CARD_Y: f32 = 120.0;
 /// SteamGridDB's keys are 32 characters; room to spare, so a long paste isn't cut short.
 const MAX_KEY_CHARS: usize = 128;
 /// What a key with characters no key has gets, without echoing what was typed.
