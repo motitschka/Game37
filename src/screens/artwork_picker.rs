@@ -5,11 +5,13 @@
 //! to the Options Menu, which shows it; Back changes nothing. Without results it says why
 //! (FR-ART-3).
 
+use std::cell::Cell;
 use std::sync::Arc;
 
 use crate::artwork::{Art, Candidate, Candidates, Kind, Reason};
 use crate::ctx::Ctx;
 use crate::library::db::GameRow;
+use crate::screens::message::Message;
 use crate::systems;
 use crate::ui::chrome::glyph;
 use crate::ui::cover::{self, COVER_RADIUS, RING_REACH, ellipsize};
@@ -34,6 +36,8 @@ const TAB_Y: f32 = 196.0;
 const WHEEL_STEP: f32 = 80.0;
 /// A hero's shape: SteamGridDB's 1920×620.
 const HERO_ASPECT: f32 = 620.0 / 1920.0;
+
+const CHOOSE_FAILED_TITLE: &str = "Couldn't keep that artwork";
 
 const TABS: [Kind; 2] = [Kind::Cover, Kind::Hero];
 
@@ -102,6 +106,9 @@ pub struct ArtworkPicker {
     reveal: bool,
     /// Whether the open tab had previews to choose from, as of the last look, for the hints.
     choosable: bool,
+    /// Whether the candidates were asked for yet: the first ask tries again lists that failed to
+    /// arrive when the picker was open before.
+    asked: Cell<bool>,
     cell_hits: Vec<(Rect, usize)>,
     tab_hits: Vec<(Rect, Kind)>,
 }
@@ -119,6 +126,7 @@ impl ArtworkPicker {
             placed: [false; 2],
             reveal: false,
             choosable: false,
+            asked: Cell::new(false),
             cell_hits: Vec::new(),
             tab_hits: Vec::new(),
         }
@@ -135,6 +143,9 @@ impl ArtworkPicker {
 
     /// The open tab's SteamGridDB results; asking queues the lookup the first time.
     pub fn candidates(&self, ctx: &Ctx) -> Candidates {
+        if !self.asked.replace(true) {
+            ctx.artwork.retry_failed(&self.game);
+        }
         ctx.artwork.candidates(&ctx.library, &self.game, self.tab)
     }
 
@@ -229,13 +240,18 @@ impl ArtworkPicker {
         self.reveal = true;
     }
 
-    /// Makes `list[i]` the Game's Artwork of its kind for good and goes back.
+    /// Makes `list[i]` the Game's Artwork of its kind for good and goes back; if that can't be
+    /// saved, says so over the picker.
     fn choose(&mut self, list: &[Candidate], i: usize, ctx: &mut Ctx) -> Transition {
         let Some(candidate) = list.get(i) else {
             return Transition::None;
         };
         if let Err(e) = ctx.artwork.choose(&ctx.library, &self.game, candidate) {
             eprintln!("game37: can't keep the chosen Artwork: {e}");
+            return Transition::Push(Box::new(Message::new(
+                CHOOSE_FAILED_TITLE,
+                "Game37 couldn't save the choice in its library. The Game keeps the artwork it had.",
+            )));
         }
         ctx.revision += 1;
         Transition::Pop
@@ -597,6 +613,35 @@ mod tests {
     }
 
     #[test]
+    fn picker_choice_that_cannot_be_saved_says_so_and_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = steamgriddb();
+        let (mut ctx, games) = world(dir.path(), &fake, true);
+        let alpha = games[0].clone();
+        cover_shown(&ctx, &alpha);
+        let before = ctx.library.artwork(alpha.id).unwrap();
+        let mut picker = ArtworkPicker::new(alpha.clone());
+        assert_eq!(ids(&picker, &ctx), [7, 8]);
+        // Every save of a record fails.
+        rusqlite::Connection::open(dir.path().join("library.db"))
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER no_artwork BEFORE UPDATE OF artwork ON games \
+                 BEGIN SELECT RAISE(ABORT, 'read-only'); END;",
+            )
+            .unwrap();
+        act(&mut picker, &mut ctx, Action::Right);
+        let revision = ctx.revision;
+        match act(&mut picker, &mut ctx, Action::Confirm) {
+            Transition::Push(message) => assert_eq!(message.title(), CHOOSE_FAILED_TITLE),
+            _ => panic!("expected a Message"),
+        }
+        assert_eq!(ctx.revision, revision, "nothing to reload");
+        assert_eq!(ctx.library.artwork(alpha.id).unwrap(), before);
+        assert_eq!(ctx.artwork.chosen(&ctx.library, &alpha, Kind::Cover), Some(7));
+    }
+
+    #[test]
     fn picker_click_on_a_preview_chooses_it() {
         let dir = tempfile::tempdir().unwrap();
         let fake = steamgriddb();
@@ -687,6 +732,31 @@ mod tests {
         ));
         let notice = picker.notice(&ctx).expect("a notice");
         (notice, fake.calls(), picker.hints())
+    }
+
+    #[test]
+    fn picker_reopened_after_a_list_failed_to_arrive_asks_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = steamgriddb();
+        let search = "https://www.steamgriddb.com/api/v2/search/";
+        fake.route_first(search, Err(FetchError::Connect));
+        let (ctx, games) = world(dir.path(), &fake, true);
+        let picker = ArtworkPicker::new(games[0].clone());
+        assert!(matches!(
+            settled(&picker, &ctx),
+            Candidates::Unavailable(Reason::Failed)
+        ));
+
+        // Back online: the open picker keeps its answer, a reopened one asks again.
+        fake.unroute(search);
+        let calls = fake.calls();
+        assert!(matches!(
+            picker.candidates(&ctx),
+            Candidates::Unavailable(Reason::Failed)
+        ));
+        assert_eq!(fake.calls(), calls);
+        let reopened = ArtworkPicker::new(games[0].clone());
+        assert_eq!(ids(&reopened, &ctx), [7, 8]);
     }
 
     #[test]

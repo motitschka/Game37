@@ -42,6 +42,8 @@ const HERO_QUERY: &str =
 const MAX_API_BYTES: u64 = 4 * 1024 * 1024;
 /// A cap on one Artwork file as downloaded. The largest heroes are a few MB.
 const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
+/// How many of SteamGridDB's top results a lookup tries in turn while they are no good.
+const FILES_TRIED: usize = 3;
 /// A cap on a decoded file's width and height, so a malicious file can't exhaust memory.
 const MAX_DIMENSION: u32 = 8192;
 /// How many bytes of decoded Artwork are kept in memory. Beyond it, the least recently asked for
@@ -179,7 +181,7 @@ pub struct Artwork {
     dir: Option<PathBuf>,
     key: Option<ApiKey>,
     fetch: Fetch,
-    /// Set once SteamGridDB refuses the key (401, 403) or asks to slow down (429): no further
+    /// Set once SteamGridDB's API refuses the key (401, 403) or asks to slow down (429): no further
     /// requests this run.
     stopped: Arc<AtomicBool>,
     budget: usize,
@@ -378,7 +380,13 @@ impl Artwork {
     /// Artwork cached under `dir` (`<data dir>/artwork/`), fetched from SteamGridDB if there is a
     /// key.
     pub fn start(dir: PathBuf, key: Option<ApiKey>) -> Artwork {
-        Artwork::new(dir, key, Arc::new(ureq_fetch))
+        // One agent for the whole run, so requests to the same host reuse its connection.
+        let agent = ureq_agent();
+        Artwork::new(
+            dir,
+            key,
+            Arc::new(move |request: &Request| ureq_fetch(&agent, request)),
+        )
     }
 
     /// Like [`Artwork::start`], fetching through `fetch`: tests and screenshot mode pass a fake.
@@ -504,6 +512,14 @@ impl Artwork {
         candidates
     }
 
+    /// Forgets that `game`'s candidate lists failed to arrive, so the next ask tries again. Once
+    /// SteamGridDB has asked for no more requests this run, that ask fails again without one.
+    pub fn retry_failed(&self, game: &GameRow) {
+        self.state.borrow_mut().candidates.retain(|(id, ..), candidates| {
+            *id != game.id || !matches!(candidates, Candidates::Unavailable(Reason::Failed))
+        });
+    }
+
     /// `candidate`'s small preview, fetched on first ask and kept in memory only.
     pub fn preview(&self, candidate: &Candidate) -> Art {
         let Some(dir) = &self.dir else {
@@ -621,9 +637,13 @@ impl Artwork {
                             }
                         }
                     }
-                    Outcome::NoMatch => {
+                    Outcome::NoMatch | Outcome::Searched { .. } => {
+                        let game = match outcome {
+                            Outcome::Searched { game } => Some(game),
+                            _ => None,
+                        };
                         let Key::Game(id, _, title) = &key else { return };
-                        update_record(library, *id, |record| record.searched(title, None));
+                        update_record(library, *id, |record| record.searched(title, game));
                         if current {
                             state.slots.insert(key, Slot::Placeholder);
                         }
@@ -856,7 +876,7 @@ impl DiskJob {
 enum NetJob {
     /// Finds a Game's top result of `key`'s kind: searches `key`'s Display Title unless the
     /// SteamGridDB `game` is known, lists that game's Artwork, then fetches, caches and decodes the
-    /// first.
+    /// first of the top [`FILES_TRIED`] that is any good.
     Lookup { key: Key, job: u64, game: Option<u64> },
     /// Fetches and decodes one file, caching it at `path` if there is one.
     Download {
@@ -924,6 +944,11 @@ enum Outcome {
         picture: Option<Picture>,
     },
     NoMatch,
+    /// The Display Title matched SteamGridDB's `game`, but its files didn't arrive this run: the
+    /// next run fetches them without searching again.
+    Searched {
+        game: u64,
+    },
     /// Couldn't fetch or decode it this run.
     Failed,
 }
@@ -932,6 +957,13 @@ enum Outcome {
 enum Failure {
     NoMatch,
     Failed,
+}
+
+/// Why an Artwork file couldn't be shown.
+enum FileError {
+    Fetch(FetchError),
+    /// Not a file on a SteamGridDB host, or not one that decodes.
+    Unusable,
 }
 
 #[derive(Deserialize)]
@@ -949,8 +981,9 @@ struct FoundGame {
 #[derive(Deserialize)]
 struct ApiArtwork {
     id: u64,
-    url: String,
-    thumb: String,
+    /// `None` (or null) in an entry that is no use: it is skipped.
+    url: Option<String>,
+    thumb: Option<String>,
     #[serde(default)]
     width: u32,
     #[serde(default)]
@@ -1023,25 +1056,35 @@ impl Net {
         let Ok(list) = self.list(kind, game) else {
             return Outcome::Failed;
         };
-        let Some(top) = list.first() else {
-            return Outcome::Found {
-                game,
-                pick: Pick::NoArtwork,
-                picture: None,
-            };
-        };
-        let path = cache_path(&self.dir, kind, top.id, &top.url);
-        match self.download(&top.url, kind, Some(&path)) {
-            Ok(picture) => Outcome::Found {
-                game,
-                pick: Pick::File {
-                    id: top.id,
-                    url: top.url.clone(),
-                    chosen: false,
-                },
-                picture: Some(picture),
-            },
-            Err(_) => Outcome::Failed,
+        // A file that is no good, or that its host won't serve, gives way to the next. If none of
+        // them would ever do, that is recorded as none, so a restart doesn't fetch them again.
+        let mut refused = false;
+        for top in list.iter().take(FILES_TRIED) {
+            let path = cache_path(&self.dir, kind, top.id, &top.url);
+            match self.download(&top.url, kind, Some(&path)) {
+                Ok(picture) => {
+                    return Outcome::Found {
+                        game,
+                        pick: Pick::File {
+                            id: top.id,
+                            url: top.url.clone(),
+                            chosen: false,
+                        },
+                        picture: Some(picture),
+                    };
+                }
+                Err(FileError::Fetch(FetchError::Connect)) => return Outcome::Searched { game },
+                Err(FileError::Fetch(FetchError::Status(_))) => refused = true,
+                Err(FileError::Fetch(FetchError::TooLarge) | FileError::Unusable) => {}
+            }
+        }
+        if refused {
+            return Outcome::Searched { game };
+        }
+        Outcome::Found {
+            game,
+            pick: Pick::NoArtwork,
+            picture: None,
         }
     }
 
@@ -1065,16 +1108,18 @@ impl Net {
         let listed: Vec<ApiArtwork> = self.api(&kind.list_path(game))?;
         let candidates = listed
             .into_iter()
-            .filter(|i| allowed_artwork_url(&i.url) && allowed_artwork_url(&i.thumb))
-            .map(|i| Candidate {
-                id: i.id,
-                kind,
-                url: i.url,
-                preview: i.thumb,
-                width: i.width,
-                height: i.height,
-                author: i.author.and_then(|a| a.name),
-                game,
+            .filter_map(|i| {
+                let (url, preview) = (i.url?, i.thumb?);
+                (allowed_artwork_url(&url) && allowed_artwork_url(&preview)).then(|| Candidate {
+                    id: i.id,
+                    kind,
+                    url,
+                    preview,
+                    width: i.width,
+                    height: i.height,
+                    author: i.author.and_then(|a| a.name),
+                    game,
+                })
             })
             .collect();
         Ok(candidates)
@@ -1097,20 +1142,20 @@ impl Net {
     }
 
     /// Fetches an Artwork file, without the key, and decodes it; caches it at `path` if given.
-    fn download(&self, url: &str, kind: Kind, path: Option<&Path>) -> Result<Picture, Failure> {
+    fn download(&self, url: &str, kind: Kind, path: Option<&Path>) -> Result<Picture, FileError> {
         if !allowed_artwork_url(url) {
-            return Err(Failure::Failed);
+            return Err(FileError::Unusable);
         }
-        let bytes = self.get(url, None, MAX_FILE_BYTES).map_err(|_| Failure::Failed)?;
-        let picture = decode(&bytes, kind).ok_or(Failure::Failed)?;
+        let bytes = self.get(url, None, MAX_FILE_BYTES).map_err(FileError::Fetch)?;
+        let picture = decode(&bytes, kind).ok_or(FileError::Unusable)?;
         if let Some(path) = path {
             save(path, &bytes);
         }
         Ok(picture)
     }
 
-    /// One request, unless SteamGridDB has asked for no more this run. A refused key or a rate
-    /// limit stops every further request.
+    /// One request, unless SteamGridDB has asked for no more this run. The API refusing the key or
+    /// asking to slow down stops every further request; a file host's error fails only that file.
     fn get(&self, url: &str, api_key: Option<&ApiKey>, max_bytes: u64) -> Result<Vec<u8>, FetchError> {
         if self.stopped.load(Ordering::Relaxed) {
             return Err(FetchError::Connect);
@@ -1120,16 +1165,18 @@ impl Net {
             api_key,
             max_bytes,
         });
-        if let Err(FetchError::Status(401 | 403 | 429)) = result {
+        if let Err(FetchError::Status(401 | 403 | 429)) = result
+            && api_key.is_some()
+        {
             self.stopped.store(true, Ordering::Relaxed);
         }
         result
     }
 }
 
-/// The production fetcher: `ureq` over rustls, https only, 30 s per step and a minute for the
-/// body. Redirects are not followed, so no host outside NFR-5 is ever reached.
-fn ureq_fetch(request: &Request) -> Result<Vec<u8>, FetchError> {
+/// The production agent: `ureq` over rustls, https only, 30 s per step and a minute for the body.
+/// Redirects are not followed, so no host outside NFR-5 is ever reached.
+fn ureq_agent() -> ureq::Agent {
     let step = Some(Duration::from_secs(30));
     let config = ureq::Agent::config_builder()
         .https_only(true)
@@ -1141,7 +1188,11 @@ fn ureq_fetch(request: &Request) -> Result<Vec<u8>, FetchError> {
         .max_redirects(0)
         .http_status_as_error(false)
         .build();
-    let agent: ureq::Agent = config.into();
+    config.into()
+}
+
+/// The production fetcher, through `agent` (see [`ureq_agent`]).
+fn ureq_fetch(agent: &ureq::Agent, request: &Request) -> Result<Vec<u8>, FetchError> {
     let mut get = agent.get(request.url);
     if let Some(key) = request.api_key {
         get = get.header("Authorization", format!("Bearer {}", key.expose()));
@@ -1194,6 +1245,21 @@ pub(crate) mod tests {
 
         pub(crate) fn route(&self, prefix: &str, response: Response) -> &Fake {
             self.routes.lock().unwrap().push((prefix.to_owned(), response));
+            self
+        }
+
+        /// Like [`Fake::route`], ahead of every route already there.
+        pub(crate) fn route_first(&self, prefix: &str, response: Response) -> &Fake {
+            self.routes
+                .lock()
+                .unwrap()
+                .insert(0, (prefix.to_owned(), response));
+            self
+        }
+
+        /// Removes the routes for exactly `prefix`.
+        pub(crate) fn unroute(&self, prefix: &str) -> &Fake {
+            self.routes.lock().unwrap().retain(|(p, _)| p != prefix);
             self
         }
 
@@ -1520,6 +1586,141 @@ pub(crate) mod tests {
         assert_eq!(fake.calls(), 1);
         // A refused key is not "no match": the next run tries again.
         assert_eq!(read_record(&library, games[0].id), None);
+    }
+
+    #[test]
+    fn artwork_file_host_refusing_a_file_fails_only_that_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = steamgriddb();
+        // An old S3 object that was removed, or a CDN bot challenge.
+        fake.route_first(&format!("{CDN}/grid/7.png"), Err(FetchError::Status(403)));
+        let (library, games) = library(dir.path());
+        let artwork = artwork(dir.path(), &fake, true);
+        wait(&artwork, &library, &games[0], Kind::Cover);
+        assert!(fake.urls().contains(&format!("{CDN}/grid/7.png")));
+        let calls = fake.calls();
+
+        // The API is still asked: Beta's cover arrives.
+        assert_eq!(
+            size(&wait(&artwork, &library, &games[1], Kind::Cover)),
+            (400, 600)
+        );
+        assert_eq!(fake.urls()[calls], format!("{API}/search/autocomplete/Beta"));
+    }
+
+    #[test]
+    fn artwork_top_file_that_does_not_decode_gives_way_to_the_next_which_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = steamgriddb();
+        fake.route_first(&format!("{CDN}/grid/7.png"), Ok(b"not an image".to_vec()));
+        let (library, games) = library(dir.path());
+        let artwork = artwork(dir.path(), &fake, true);
+        assert_eq!(
+            size(&wait(&artwork, &library, &games[0], Kind::Cover)),
+            (342, 482)
+        );
+        assert_eq!(artwork.chosen(&library, &games[0], Kind::Cover), Some(8));
+        assert!(dir.path().join("artwork/cover/8.png").exists());
+        assert!(!dir.path().join("artwork/cover/7.png").exists());
+        drop((artwork, library));
+
+        let fake = Fake::new();
+        let (library, games) = self::library(dir.path());
+        let artwork = self::artwork(dir.path(), &fake, true);
+        assert_eq!(
+            size(&wait(&artwork, &library, &games[0], Kind::Cover)),
+            (342, 482)
+        );
+        assert_eq!(fake.calls(), 0);
+    }
+
+    #[test]
+    fn artwork_whose_top_files_are_all_no_good_is_remembered_as_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Fake::new();
+        let files: Vec<(u64, String)> = (1..=4).map(|id| (id, format!("{CDN}/grid/{id}.png"))).collect();
+        let files: Vec<(u64, &str)> = files.iter().map(|(id, url)| (*id, url.as_str())).collect();
+        fake.api("/search/autocomplete/Alpha", "[{\"id\":42}]")
+            .api("/grids/game/42?", &listing(&files))
+            .route(&format!("{CDN}/grid/2.png"), Err(FetchError::TooLarge))
+            .route(&format!("{CDN}/grid/"), Ok(b"not an image".to_vec()));
+        let (library, games) = library(dir.path());
+        let artwork = artwork(dir.path(), &fake, true);
+        assert!(is_placeholder(&wait(&artwork, &library, &games[0], Kind::Cover)));
+        let tried: Vec<String> = fake.urls().into_iter().filter(|u| u.starts_with(CDN)).collect();
+        assert_eq!(tried, [1, 2, 3].map(|id| format!("{CDN}/grid/{id}.png")));
+        let record = read_record(&library, games[0].id).unwrap();
+        assert_eq!((record.game, record.cover), (Some(42), Some(Pick::NoArtwork)));
+        drop((artwork, library));
+
+        let fake = Fake::new();
+        let (library, games) = self::library(dir.path());
+        let artwork = self::artwork(dir.path(), &fake, true);
+        assert!(is_placeholder(&artwork.cover(&library, &games[0])));
+        assert_eq!(fake.calls(), 0);
+    }
+
+    #[test]
+    fn artwork_entries_without_a_file_or_preview_are_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = steamgriddb();
+        let rest = listing(&[
+            (7, &format!("{CDN}/grid/7.png")),
+            (8, &format!("{CDN}/grid/8.png")),
+        ]);
+        let list = format!(
+            "[{{\"id\":5,\"url\":\"{CDN}/grid/5.png\",\"thumb\":null}},\
+             {{\"id\":6,\"thumb\":\"{CDN}/thumb/6.jpg\"}},{}",
+            &rest[1..]
+        );
+        let body = format!("{{\"success\":true,\"data\":{list}}}");
+        fake.route_first(&format!("{API}/grids/game/42?"), Ok(body.into_bytes()))
+            .route_first(&format!("{CDN}/grid/5.png"), Ok(png(600, 900)));
+        let (library, games) = library(dir.path());
+        let artwork = artwork(dir.path(), &fake, true);
+        let candidates = wait_candidates(&artwork, &library, &games[0]);
+        assert_eq!(candidates.iter().map(|c| c.id).collect::<Vec<_>>(), [7, 8]);
+        assert_eq!(
+            size(&wait(&artwork, &library, &games[0], Kind::Cover)),
+            (400, 600)
+        );
+        assert_eq!(artwork.chosen(&library, &games[0], Kind::Cover), Some(7));
+    }
+
+    #[test]
+    fn artwork_file_that_fails_to_arrive_is_fetched_next_run_without_searching() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = steamgriddb();
+        fake.route_first(&format!("{CDN}/grid/7.png"), Err(FetchError::Connect));
+        let (library, games) = library(dir.path());
+        let artwork = artwork(dir.path(), &fake, true);
+        assert!(is_placeholder(&wait(&artwork, &library, &games[0], Kind::Cover)));
+        assert!(
+            !fake.urls().contains(&format!("{CDN}/grid/8.png")),
+            "offline: no use trying the next"
+        );
+        let searched = Record {
+            title: Some("Alpha".to_owned()),
+            game: Some(42),
+            ..Record::default()
+        };
+        assert_eq!(read_record(&library, games[0].id), Some(searched));
+        drop((artwork, library));
+
+        let fake = steamgriddb();
+        let (library, games) = self::library(dir.path());
+        let artwork = self::artwork(dir.path(), &fake, true);
+        assert_eq!(
+            size(&wait(&artwork, &library, &games[0], Kind::Cover)),
+            (400, 600)
+        );
+        assert_eq!(
+            fake.urls(),
+            [
+                format!("{API}/grids/game/42?{COVER_QUERY}"),
+                format!("{CDN}/grid/7.png"),
+            ]
+        );
     }
 
     #[test]
