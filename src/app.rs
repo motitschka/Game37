@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use sdl3::event::{Event, WindowEvent};
-use sdl3::gamepad::{Axis, Gamepad};
+use sdl3::gamepad::{Axis, Button, Gamepad};
 use sdl3::joystick::JoystickId;
 use sdl3::keyboard::{Keycode, Mod, Scancode};
 use sdl3::mouse::MouseButton;
@@ -15,9 +15,9 @@ use sdl3::sys::render::SDL_RendererLogicalPresentation;
 use sdl3::{GamepadSubsystem, VideoSubsystem};
 
 use crate::artwork::Artwork;
-use crate::cli::{Options, Screenshot};
+use crate::cli::{Options, Screenshot, ShotScreen};
 use crate::config;
-use crate::ctx::{self, Ctx};
+use crate::ctx::{self, Controller, Ctx};
 use crate::emulators::Emulators;
 use crate::launch::{Launcher, NeverExits, Processes};
 use crate::library::db::Library;
@@ -46,6 +46,7 @@ pub fn run(options: Options) -> Result<(), String> {
         _ => (Ctx::empty(), false),
     };
     ctx.data_dir = data_dir;
+    ctx.config_path = path.clone();
     match options.screenshot {
         Some(shot) => {
             // Scan in the foreground, so the screenshot shows every Game.
@@ -57,7 +58,10 @@ pub fn run(options: Options) -> Result<(), String> {
                 ctx.artwork = artwork(&path, &ctx.data_dir);
             }
             // Setup's folders go under the data dir, never in the real ~/Games.
-            let nav = screens::start(loaded, &ctx.data_dir.join("Games"), &ctx);
+            let mut nav = screens::start(loaded, &ctx.data_dir.join("Games"), &ctx);
+            if shot.screen == Some(ShotScreen::ControllerTest) {
+                open_controller_test(&mut nav, &mut ctx);
+            }
             // Never starts a process: a launch shows the Playing screen for good.
             let launcher = Launcher::new(Box::new(NeverExits::default()), log_dir);
             screenshot(nav, ctx, launcher, shot)
@@ -75,6 +79,34 @@ pub fn run(options: Options) -> Result<(), String> {
             interactive(nav, ctx, watcher, launcher)
         }
     }
+}
+
+/// `--screen controller-test`: the Controller test over Settings, with two fake controllers
+/// connected, as in the mockup. The first, shown one has A and L1 held, its left stick pushed up and
+/// right, and R2 pulled to 60%; the second is idle.
+fn open_controller_test(nav: &mut Nav, ctx: &mut Ctx) {
+    nav.push(Box::new(screens::Stub::new("Settings")));
+    nav.push(Box::new(screens::ControllerTest::new()));
+    let full = i16::MAX as f32;
+    let mut pad = input::PadState {
+        left_x: (0.62 * full) as i16,
+        left_y: (-0.41 * full) as i16,
+        right_trigger: (0.6 * full) as i16,
+        ..Default::default()
+    };
+    pad.press(Button::East);
+    pad.press(Button::LeftShoulder);
+    ctx.controllers = vec![
+        Controller {
+            name: "Xbox Wireless Controller".to_owned(),
+            pad,
+        },
+        Controller {
+            name: "8BitDo Pro 2".to_owned(),
+            pad: input::PadState::default(),
+        },
+    ];
+    ctx.last_controller = Some(0);
 }
 
 /// Artwork cached under `data_dir`, fetched with the key in `secrets.toml` next to the Config at
@@ -152,6 +184,9 @@ fn interactive(
         for event in woken_by.into_iter().chain(events.poll_iter()) {
             feeds.extend(input.event(event, &mut gfx));
         }
+        ctx.controllers = input.controllers();
+        ctx.last_controller = input.last_controller();
+        ctx.ticks = sdl3::timer::ticks();
         if let Some(watcher) = &mut watcher {
             match watcher.poll(&mut ctx.library, ctx::now()) {
                 Ok(changed) => {
@@ -425,10 +460,12 @@ fn draw(gfx: &mut Gfx<'_>, nav: &mut Nav, ctx: &Ctx, view: &View, clock: &str) -
     nav.base().draw(gfx, ctx);
     let labels = nav.tab_labels();
     let library = nav.has_library();
-    let search = library && nav.base().search_pill();
+    let pill = nav.base().search_pill();
+    let search = library && pill;
     let shows_clock = nav.base().clock();
     let bar = TopBar {
-        tabs: labels.as_deref().map(|l| (l, nav.active_tab())),
+        // The Search screen's field takes the tabs' place too.
+        tabs: labels.as_deref().filter(|_| pill).map(|l| (l, nav.active_tab())),
         back: nav.back_title(),
         clock: shows_clock.then_some(clock),
         search,
@@ -510,6 +547,7 @@ fn feed(
     let mut inputs = Vec::new();
     for feed in feeds {
         controls.text = wants_text(nav);
+        controls.raw = nav.top().raw_controller();
         match feed {
             Feed::Quit => return Flow::Quit,
             Feed::Control(at, event) => controls.handle(at, event, &mut inputs),
@@ -536,6 +574,10 @@ fn feed(
 struct InputState {
     subsystem: GamepadSubsystem,
     pads: HashMap<JoystickId, Gamepad>,
+    /// The connected pads and their names, in connection order.
+    connected: Vec<(JoystickId, String)>,
+    /// The pad that last had a button pressed or a stick or trigger pushed past half way.
+    last_used: Option<JoystickId>,
     /// Which pad plays on which port, kept for the app's whole life (FR-EMB-8): player order
     /// follows connection order, and persists across Games.
     ports: Ports<JoystickId>,
@@ -554,6 +596,8 @@ impl InputState {
         InputState {
             subsystem,
             pads: HashMap::new(),
+            connected: Vec::new(),
+            last_used: None,
             ports: Ports::default(),
             controls: Controls::new(kind),
             pointer: None,
@@ -569,6 +613,26 @@ impl InputState {
             .collect()
     }
 
+    /// Every connected pad's name and state this frame, in connection order.
+    fn controllers(&self) -> Vec<Controller> {
+        self.connected
+            .iter()
+            .filter_map(|(id, name)| {
+                let pad = sdl::pad_state(self.pads.get(id)?);
+                Some(Controller {
+                    name: name.clone(),
+                    pad,
+                })
+            })
+            .collect()
+    }
+
+    /// Where the last-used pad is in [`InputState::controllers`].
+    fn last_controller(&self) -> Option<usize> {
+        let last = self.last_used?;
+        self.connected.iter().position(|(id, _)| *id == last)
+    }
+
     fn view(&self) -> View {
         View {
             kind: self.controls.kind,
@@ -578,6 +642,12 @@ impl InputState {
     }
 
     fn event(&mut self, event: Event, gfx: &mut Gfx<'_>) -> Option<Feed> {
+        // Any stick or trigger pushed past half way, as SDL reports each axis on its own.
+        if let Event::GamepadAxisMotion { which, value, .. } = &event
+            && value.unsigned_abs() > i16::MAX as u16 / 2
+        {
+            self.last_used = Some(*which);
+        }
         let control = match event {
             Event::Quit { .. } => return Some(Feed::Quit),
             Event::Window {
@@ -610,6 +680,9 @@ impl InputState {
 
             Event::GamepadAdded { which, .. } => {
                 if let Ok(pad) = self.subsystem.open(which) {
+                    let name = pad.name().unwrap_or_else(|| "Controller".to_owned());
+                    self.connected.retain(|(id, _)| *id != which);
+                    self.connected.push((which, name));
                     self.pads.insert(which, pad);
                     self.ports.connect(which);
                 }
@@ -617,10 +690,12 @@ impl InputState {
             }
             Event::GamepadRemoved { which, .. } => {
                 self.pads.remove(&which);
+                self.connected.retain(|(id, _)| *id != which);
                 self.ports.disconnect(which);
                 ControlEvent::PadRemoved { pad: which }
             }
             Event::GamepadButtonDown { which, button, .. } => {
+                self.last_used = Some(which);
                 ControlEvent::PadButtonDown { pad: which, button }
             }
             Event::GamepadButtonUp { which, button, .. } => ControlEvent::PadButtonUp { pad: which, button },

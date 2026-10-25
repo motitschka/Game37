@@ -57,14 +57,19 @@ pub trait Screen {
     fn entry(&self) -> Option<Entry> {
         None
     }
-    /// Whether the top bar draws the search pill over it. The Search screen draws its own field
-    /// there instead.
+    /// Whether the top bar draws the search pill, and any tabs, over it. The Search screen draws
+    /// its own field there instead.
     fn search_pill(&self) -> bool {
         true
     }
     /// Whether the top bar draws the clock over it. First-run Setup shows its progress there.
     fn clock(&self) -> bool {
         true
+    }
+    /// While the top screen returns true, controller buttons and sticks don't become menu
+    /// [`Input`]s; keyboard and mouse still do.
+    fn raw_controller(&self) -> bool {
+        false
     }
 }
 

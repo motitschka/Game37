@@ -93,4 +93,23 @@ shot m6-setup-emulators "$root/missing.toml" \
     "down,confirm,down,right,confirm,up,right,right,right,right,confirm,settings" --missing-emulators switch,ps2
 shot m6-setup-emulators-all "$root/missing.toml" "sort,settings" --missing-emulators wii,3ds,wiiu,switch,ps2,ps3,ps4
 
+# M6: Controller test
+shot m6-controller-test "$root/cfg.toml" "" --screen controller-test
+
+# M6: Search. Typing (text:) makes the player's input kind the keyboard, and any other action the
+# controller's: the controller shot types on the keyboard, then presses Up, which the field ignores,
+# to show the on-screen keyboard. The empty shot clicks the field to show it as on the keyboard.
+shot m6-search-typed "$root/cfg.toml" "search,text:test"
+shot m6-search-results "$root/cfg.toml" "search,text:test,down,right"
+shot m6-search-empty "$root/cfg.toml" "search,click:1000:68"
+shot m6-search-controller "$root/cfg.toml" "search,text:test,up"
+
+# M6: Settings: Library with the focus on Hidden games, the Hidden games list after hiding a Game
+# from its Options Menu (three downs reach Hide game: an empty Load save state is skipped), the Reset
+# confirmation, About
+shot m6-settings-library "$root/cfg.toml" "settings,right,down,down"
+shot m6-settings-hidden "$root/cfg.toml" "down,down,options,down,down,down,confirm,settings,right,down,down,confirm"
+shot m6-settings-reset "$root/cfg.toml" "settings,right,down,down,down,confirm"
+shot m6-settings-about "$root/cfg.toml" "settings$(printf ',down%.0s' {1..6})"
+
 echo "screenshots in $out"
