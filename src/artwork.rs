@@ -179,7 +179,7 @@ pub struct Artwork {
     dir: Option<PathBuf>,
     key: Option<ApiKey>,
     fetch: Fetch,
-    /// Set once SteamGridDB refuses the key (401, 403) or asks to slow down (429): no further
+    /// Set once SteamGridDB's API refuses the key (401, 403) or asks to slow down (429): no further
     /// requests this run.
     stopped: Arc<AtomicBool>,
     budget: usize,
@@ -1115,8 +1115,8 @@ impl Net {
         Ok(picture)
     }
 
-    /// One request, unless SteamGridDB has asked for no more this run. A refused key or a rate
-    /// limit stops every further request.
+    /// One request, unless SteamGridDB has asked for no more this run. The API refusing the key or
+    /// asking to slow down stops every further request; a file host's error fails only that file.
     fn get(&self, url: &str, api_key: Option<&ApiKey>, max_bytes: u64) -> Result<Vec<u8>, FetchError> {
         if self.stopped.load(Ordering::Relaxed) {
             return Err(FetchError::Connect);
@@ -1126,7 +1126,9 @@ impl Net {
             api_key,
             max_bytes,
         });
-        if let Err(FetchError::Status(401 | 403 | 429)) = result {
+        if let Err(FetchError::Status(401 | 403 | 429)) = result
+            && api_key.is_some()
+        {
             self.stopped.store(true, Ordering::Relaxed);
         }
         result
@@ -1204,6 +1206,15 @@ pub(crate) mod tests {
 
         pub(crate) fn route(&self, prefix: &str, response: Response) -> &Fake {
             self.routes.lock().unwrap().push((prefix.to_owned(), response));
+            self
+        }
+
+        /// Like [`Fake::route`], ahead of every route already there.
+        pub(crate) fn route_first(&self, prefix: &str, response: Response) -> &Fake {
+            self.routes
+                .lock()
+                .unwrap()
+                .insert(0, (prefix.to_owned(), response));
             self
         }
 
@@ -1530,6 +1541,26 @@ pub(crate) mod tests {
         assert_eq!(fake.calls(), 1);
         // A refused key is not "no match": the next run tries again.
         assert_eq!(read_record(&library, games[0].id), None);
+    }
+
+    #[test]
+    fn artwork_file_host_refusing_a_file_fails_only_that_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = steamgriddb();
+        // An old S3 object that was removed, or a CDN bot challenge.
+        fake.route_first(&format!("{CDN}/grid/7.png"), Err(FetchError::Status(403)));
+        let (library, games) = library(dir.path());
+        let artwork = artwork(dir.path(), &fake, true);
+        wait(&artwork, &library, &games[0], Kind::Cover);
+        assert!(fake.urls().contains(&format!("{CDN}/grid/7.png")));
+        let calls = fake.calls();
+
+        // The API is still asked: Beta's cover arrives.
+        assert_eq!(
+            size(&wait(&artwork, &library, &games[1], Kind::Cover)),
+            (400, 600)
+        );
+        assert_eq!(fake.urls()[calls], format!("{API}/search/autocomplete/Beta"));
     }
 
     #[test]
