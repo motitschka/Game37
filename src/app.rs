@@ -46,6 +46,7 @@ pub fn run(options: Options) -> Result<(), String> {
         _ => (Ctx::empty(), false),
     };
     ctx.data_dir = data_dir;
+    ctx.config_path = path.clone();
     match options.screenshot {
         Some(shot) => {
             // Scan in the foreground, so the screenshot shows every Game.
