@@ -17,7 +17,7 @@ use std::path::Path;
 
 use crate::config::{Config, ConfigError};
 use crate::ctx::Ctx;
-use crate::ui::nav::Nav;
+use crate::ui::nav::{Entries, Entry, Nav};
 
 pub use carousel::Carousel;
 pub use game_grid::GameGrid;
@@ -25,22 +25,33 @@ pub use home::Home;
 pub use no_config::NoConfig;
 pub use stub::Stub;
 
-/// Home and Consoles when a Config exists; otherwise the placeholder for First-run Setup, which
-/// isn't built yet.
+/// Home and Consoles, with Search and Settings, when a Config exists; otherwise the placeholder for
+/// First-run Setup, which isn't built yet.
 pub fn start(config: Result<Option<Config>, ConfigError>, path: &Path, ctx: &Ctx) -> Nav {
     match config {
         Ok(Some(_config)) => Nav::with_tabs(vec![
             ("Home", Box::new(Home::new())),
             ("Consoles", Box::new(Carousel::new(&ctx.library))),
-        ]),
+        ])
+        .with_entries(entries()),
         Ok(None) => Nav::single(Box::new(NoConfig::missing(path))),
         Err(e) => Nav::single(Box::new(NoConfig::unreadable(&e))),
+    }
+}
+
+/// The Search and Settings screens the top bar opens.
+fn entries() -> Entries {
+    Entries {
+        search: Box::new(|_| Box::new(Stub::for_entry("Search", Entry::Search))),
+        settings: Box::new(|_| Box::new(Stub::for_entry("Settings", Entry::Settings))),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::input::{Action, Input};
+    use crate::ui::nav::Hits;
     use std::path::PathBuf;
 
     #[test]
@@ -54,6 +65,7 @@ mod tests {
         );
         assert_eq!(nav.tab_labels(), Some(vec!["Home", "Consoles"]));
         assert_eq!(nav.top().title(), "Home");
+        assert!(nav.has_library(), "with Search and Settings");
     }
 
     #[test]
@@ -61,5 +73,32 @@ mod tests {
         let mut nav = start(Ok(None), Path::new("/c.toml"), &Ctx::empty());
         assert_eq!(nav.tab_labels(), None);
         assert_eq!(nav.top().title(), "First-run Setup");
+        assert!(!nav.has_library(), "no Search or Settings");
+    }
+
+    #[test]
+    fn search_and_settings_open_their_placeholders() {
+        let ctx = &mut Ctx::empty();
+        let config = Config {
+            games_root: PathBuf::from("/g"),
+        };
+        let mut nav = start(Ok(Some(config)), Path::new("/c.toml"), ctx);
+        let mut open = |action| {
+            nav.handle(Input::Action(action), &Hits::default(), ctx);
+            let top = nav.top();
+            let seen = (top.title().to_owned(), top.entry(), top.search_pill());
+            nav.handle(Input::Action(Action::Back), &Hits::default(), ctx);
+            assert_eq!(nav.depth(), 1, "Back leaves {}", seen.0);
+            seen
+        };
+        assert_eq!(
+            open(Action::Search),
+            ("Search".to_owned(), Some(Entry::Search), false),
+            "Search draws its own field instead of the pill"
+        );
+        assert_eq!(
+            open(Action::Settings),
+            ("Settings".to_owned(), Some(Entry::Settings), true)
+        );
     }
 }

@@ -497,6 +497,8 @@ impl Screen for Home {
             _ => {}
         }
         hints.push(Hint::new(&[Action::PrevTab, Action::NextTab], "Switch view"));
+        hints.push(Hint::new(&[Action::Search], "Search"));
+        hints.push(Hint::new(&[Action::Settings], "Settings"));
         hints
     }
 }
@@ -529,6 +531,19 @@ mod tests {
         assert_eq!(item_at(5, 5), Item::SeeAll);
         assert_eq!(item_count(0), 1);
         assert_eq!(item_at(0, 0), Item::Hint);
+    }
+
+    #[test]
+    fn the_hints_end_with_search_and_settings() {
+        let hints = Home::new().hints();
+        assert_eq!(
+            hints[hints.len() - 3..],
+            [
+                Hint::new(&[Action::PrevTab, Action::NextTab], "Switch view"),
+                Hint::new(&[Action::Search], "Search"),
+                Hint::new(&[Action::Settings], "Settings"),
+            ]
+        );
     }
 
     #[test]

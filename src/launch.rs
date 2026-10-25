@@ -713,6 +713,7 @@ mod tests {
             tabs: vec![(crate::ui::Rect::new(0.0, 0.0, 100.0, 100.0), 1)],
             back: Some(crate::ui::Rect::new(0.0, 0.0, 100.0, 100.0)),
             hints: Vec::new(),
+            ..Hits::default()
         };
         let inputs = [
             Input::Action(Action::NextTab),
