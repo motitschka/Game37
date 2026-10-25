@@ -1037,6 +1037,7 @@ def screen_settings_cores():
             sv.add(text(r, base, state, 18, 500, fill=C["muted"] if state == "Installed" else C["dim"],
                         anchor="end"))
     hintbar(sv, [(["A"], "Download"), (["B"], "Back")])
+    sv.save()
 
 
 # ---------- Settings: key entry, Controls, Controller test, About (M6) ----------
