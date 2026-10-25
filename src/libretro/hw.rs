@@ -834,9 +834,23 @@ mod tests {
             1,
             "start resets the context once"
         );
+        let before = callbacks::get_current_framebuffer();
         hw.resize((960, 544));
-        callbacks::remove();
-        callbacks::set_loader(None);
+        assert_eq!(
+            FBO_BUILD_COUNT.load(Ordering::SeqCst),
+            2,
+            "resize tried to build a new FBO"
+        );
+        assert_eq!(
+            (hw.fbo.width, hw.fbo.height),
+            (480, 272),
+            "the failed resize keeps the old FBO"
+        );
+        assert_eq!(
+            callbacks::get_current_framebuffer(),
+            before,
+            "the Core keeps drawing into it"
+        );
         assert_eq!(
             CONTEXT_DESTROY_CALLS.load(Ordering::SeqCst),
             1,
@@ -847,6 +861,9 @@ mod tests {
             2,
             "resize resets the context exactly once, even though the new FBO failed"
         );
+        // Stopping clears the process-wide FBO and loader, so no later test inherits them.
+        hw.stop(|| {});
+        callbacks::remove();
     }
 
     #[test]
