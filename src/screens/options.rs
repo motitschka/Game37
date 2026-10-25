@@ -11,7 +11,7 @@ use std::path::Path;
 
 use crate::ctx::{self, Ctx, Play};
 use crate::launch;
-use crate::library::db::{GameRow, Shelf};
+use crate::library::db::GameRow;
 use crate::screens::artwork_picker::ArtworkPicker;
 use crate::session::sdl;
 use crate::session::states::{Rgb, SLOTS, StatePaths};
@@ -110,8 +110,9 @@ pub struct OptionsMenu {
     items: Vec<Item>,
     view: View,
     item: usize,
-    /// The current Favorites, newest first, while the replace picker is open.
-    favorites: Vec<GameRow>,
+    /// Every Favorite, newest first, with whether its file is there, while the replace picker is
+    /// open.
+    favorites: Vec<(GameRow, bool)>,
     /// The Game's Save State slots, slot 1 first, `None` when empty; none for an External System.
     slots: Vec<Option<Slot>>,
     /// Slot screenshots to hand to `Gfx` on the first draw: `None` forgets an old one.
@@ -293,7 +294,8 @@ impl OptionsMenu {
         let id = self.game.id;
         let done = match item {
             Item::Favorite if self.game.favorite => ctx.library.set_favorite(id, false, ctx::now()),
-            Item::Favorite => match ctx.library.shelf(Shelf::Favorites, None) {
+            // Absent Favorites count too: they come back with their file.
+            Item::Favorite => match ctx.library.all_favorites() {
                 Ok(favorites) if favorites.len() >= MAX_FAVORITES => {
                     self.favorites = favorites;
                     self.pick = 0;
@@ -334,7 +336,7 @@ impl OptionsMenu {
 
     /// Replaces the `i`th Favorite with this Game.
     fn replace(&mut self, i: usize, ctx: &mut Ctx) -> Transition {
-        let Some(old) = self.favorites.get(i) else {
+        let Some((old, _)) = self.favorites.get(i) else {
             return Transition::None;
         };
         let now = ctx::now();
@@ -469,7 +471,7 @@ impl OptionsMenu {
         gfx.text(PANEL_X + 48.0, 238.0, "Favorites are full", heading, Align::Left);
         let sub = TextStyle::new(18, Weight::Medium, MUTED);
         gfx.text(PANEL_X + 48.0, 268.0, "Choose one to replace", sub, Align::Left);
-        for (i, game) in self.favorites.iter().enumerate() {
+        for (i, (game, present)) in self.favorites.iter().enumerate() {
             let y = PICK_Y + i as f32 * PICK_PITCH;
             let r = Rect::new(PANEL_X + 24.0, y, PANEL_W - 48.0, 100.0);
             if i == self.pick {
@@ -488,7 +490,12 @@ impl OptionsMenu {
             let label = ellipsize(&game.title, PANEL_W - 180.0, |s| gfx.measure(s, title));
             gfx.text(PANEL_X + 128.0, y + 46.0, &label, title, Align::Left);
             let short = systems::by_id(&game.system).map_or("?", |s| s.short);
-            gfx.text(PANEL_X + 128.0, y + 76.0, short, sub, Align::Left);
+            let line = if *present {
+                short.to_owned()
+            } else {
+                format!("{short}  ·  File not found")
+            };
+            gfx.text(PANEL_X + 128.0, y + 76.0, &line, sub, Align::Left);
             self.pick_hits.push((r, i));
         }
     }
@@ -657,7 +664,7 @@ impl Screen for OptionsMenu {
 mod tests {
     use super::*;
     use crate::library::FoundGame;
-    use crate::library::db::SortOrder;
+    use crate::library::db::{Shelf, SortOrder};
     use crate::ui::input::TextInput;
 
     /// A Ctx with a temporary Games Root holding `n` SNES Games, "G0" to "G<n-1>".
@@ -739,7 +746,7 @@ mod tests {
         ));
         assert_eq!(menu.view(), View::Replace);
         assert_eq!(menu.hints()[0], Hint::new(&[Action::Confirm], "Replace"));
-        let shown: Vec<_> = menu.favorites.iter().map(|g| g.title.as_str()).collect();
+        let shown: Vec<_> = menu.favorites.iter().map(|(g, _)| g.title.as_str()).collect();
         assert_eq!(shown, ["G4", "G3", "G2", "G1", "G0"], "the five, newest first");
         assert!(!fresh(&ctx, &games[5]).favorite, "nothing changes yet");
 
@@ -752,6 +759,77 @@ mod tests {
         let mut want = vec![games[0].id, games[1].id, games[3].id, games[4].id, games[5].id];
         want.sort();
         assert_eq!(favorite_ids(&ctx), want, "G2 made way for G5");
+    }
+
+    /// G0's file is away (a drive unplugged): it still counts towards the five, the picker offers
+    /// it, and when the file returns there are still five Favorites.
+    #[test]
+    fn an_absent_favorite_still_counts_and_the_picker_offers_it() {
+        let (_dir, mut ctx, games, mut menu) = five_favorites();
+        let found = |present: &[usize]| -> Vec<FoundGame> {
+            present
+                .iter()
+                .map(|i| FoundGame {
+                    system: "snes",
+                    rel_path: format!("snes/G{i}.sfc"),
+                    title: format!("G{i}"),
+                })
+                .collect()
+        };
+        ctx.library
+            .sync_system("snes", &found(&[1, 2, 3, 4, 5]), 0)
+            .unwrap();
+        assert_eq!(favorite_ids(&ctx).len(), 4, "Home shows four");
+        assert!(matches!(
+            act(&mut menu, &mut ctx, Action::Confirm),
+            Transition::None
+        ));
+        assert_eq!(menu.view(), View::Replace, "but Favorites are full");
+        let shown: Vec<_> = menu
+            .favorites
+            .iter()
+            .map(|(g, p)| (g.title.as_str(), *p))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("G4", true),
+                ("G3", true),
+                ("G2", true),
+                ("G1", true),
+                ("G0", false)
+            ]
+        );
+        act(&mut menu, &mut ctx, Action::Back);
+        act(&mut menu, &mut ctx, Action::Back);
+        ctx.library
+            .sync_system("snes", &found(&[0, 1, 2, 3, 4, 5]), 0)
+            .unwrap();
+        assert_eq!(
+            favorite_ids(&ctx).len(),
+            MAX_FAVORITES,
+            "G0 is back, and still five"
+        );
+        assert!(!fresh(&ctx, &games[5]).favorite);
+
+        // Replacing the absent G0 makes way for G5.
+        ctx.library
+            .sync_system("snes", &found(&[1, 2, 3, 4, 5]), 0)
+            .unwrap();
+        let mut menu = OptionsMenu::new(fresh(&ctx, &games[5]), &ctx.games_root);
+        act(&mut menu, &mut ctx, Action::Confirm);
+        for _ in 0..4 {
+            act(&mut menu, &mut ctx, Action::Down);
+        }
+        assert!(matches!(
+            act(&mut menu, &mut ctx, Action::Confirm),
+            Transition::Pop
+        ));
+        ctx.library
+            .sync_system("snes", &found(&[0, 1, 2, 3, 4, 5]), 0)
+            .unwrap();
+        assert_eq!(favorite_ids(&ctx).len(), MAX_FAVORITES);
+        assert!(fresh(&ctx, &games[5]).favorite && !fresh(&ctx, &games[0]).favorite);
     }
 
     #[test]
