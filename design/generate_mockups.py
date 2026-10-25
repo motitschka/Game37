@@ -1035,11 +1035,43 @@ def screen_setup_emulators():
     sv.save()
 
 
+def screen_setup_folders():
+    sv = Svg("28-setup-folders", "First-run Setup: folders")
+    setup_frame(sv, 3, "Make your folders", "Game37 finds Games by the folder they're in.")
+    x, y = M, 296
+    sv.add(rect(x, y, SETUP_W, 96, C["surface"], rx=14, stroke=C["line"], sw=1),
+           text(x + 28, y + 36, "GAMES ROOT", 13, 700, fill=C["muted"], ls=1.5),
+           text(x + 28, y + 74, "~/Games", 26, 600, font=MONO))
+    cw = 160
+    sv.add(rect(x + SETUP_W - 24 - cw, y + 18, cw, 60, C["surface2"], rx=30, stroke=C["line"], sw=2),
+           text(x + SETUP_W - 24 - cw / 2, y + 56, "Change", 20, 700, anchor="middle"))
+    folders = [(s, f"~/Games/{s}/", SYS[s][1]) for s in SETUP_TICKED] + [("bios", "~/Games/bios/", "BIOS")]
+    sv.add(text(M, 444, "FOLDERS", 14, 700, fill=C["muted"], ls=1.5),
+           text(M + 120, 444, f"{len(folders)} of {len(folders)} made", 16, 500, fill=C["muted"]))
+    gy = 464
+    sv.add(rect(M, gy, SETUP_W, 3 * 52 + 40, C["surface"], rx=14, stroke=C["line"], sw=1))
+    for i, (_, path, label) in enumerate(folders):
+        c, r = divmod(i, 3)  # down the columns, so System Order reads top to bottom
+        fx, fy = M + 28 + c * 410, gy + 20 + r * 52
+        sv.add(check_path(fx, fy + 18, C["ahead"]),
+               text(fx + 34, fy + 34, path, 20, 500, font=MONO),
+               text(fx + 232, fy + 34, label, 17, 500, fill=C["muted"]))
+    by = 700
+    bw = 280
+    sv.add(rect(M, by, bw, 64, C["surface"], rx=32, stroke=C["line"], sw=2, opacity=0.6),
+           check_path(M + 32, by + 26, C["ahead"]),
+           text(M + 66, by + 40, "Folders created", 22, 700, fill=C["muted"]),
+           text(M + bw + 24, by + 40, "Folders that already exist are left as they are.", 18, 500, fill=C["dim"]))
+    setup_buttons(sv, [("Back", "normal"), ("Continue", "focused")])
+    hintbar(sv, [(["A"], "Choose"), (["+"], "Continue"), (["B"], "Back")])
+    sv.save()
+
+
 if __name__ == "__main__":
     for fn in [screen_home, screen_home_empty, screen_carousel, screen_console_page, screen_details,
                screen_options, screen_pause, screen_ds, screen_console_missing_emulator,
                screen_details_missing_emulator, screen_speedrun_page, screen_splits_editor,
                screen_speedrun_embedded, screen_pause_run, screen_timer_window, screen_details_speedrun,
-               screen_setup_systems, screen_setup_emulators]:
+               screen_setup_systems, screen_setup_emulators, screen_setup_folders]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))
