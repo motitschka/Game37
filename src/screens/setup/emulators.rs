@@ -93,11 +93,22 @@ impl Install {
     /// within `width`. Returns its height.
     fn draw_command(&mut self, gfx: &mut Gfx<'_>, y: f32, width: f32, command: &str) -> f32 {
         let mono = TextStyle::new(18, Weight::Medium, TEXT);
-        let lines = gfx.wrap(command, mono, width - 42.0 - 24.0 - 20.0 - COPY_W - 20.0 - CHECK_W);
-        let text_w = lines.iter().map(|line| gfx.measure(line, mono)).fold(0.0, f32::max);
+        let lines = gfx.wrap(
+            command,
+            mono,
+            width - 42.0 - 24.0 - 20.0 - COPY_W - 20.0 - CHECK_W,
+        );
+        let text_w = lines
+            .iter()
+            .map(|line| gfx.measure(line, mono))
+            .fold(0.0, f32::max);
         let box_w = 42.0 + text_w + 24.0;
         let box_h = BOX_H + (lines.len() - 1) as f32 * LINE_H;
-        gfx.fill_round_rect(Rect::new(M, y, box_w, box_h), 10.0, Colour::hex(0x000000).alpha(0.4));
+        gfx.fill_round_rect(
+            Rect::new(M, y, box_w, box_h),
+            10.0,
+            Colour::hex(0x000000).alpha(0.4),
+        );
         let prompt = TextStyle::new(18, Weight::SemiBold, DIM);
         gfx.text(M + 20.0, y + 31.0, "$", prompt, Align::Left);
         for (i, line) in lines.iter().enumerate() {
@@ -190,7 +201,12 @@ impl Layout {
     fn row(&self, i: usize) -> Rect {
         let (col, row) = (i / self.per_col, i % self.per_col);
         let x = M + col as f32 * (self.row_w + GAP);
-        Rect::new(x, CONTENT_Y + row as f32 * (self.row_h + GAP), self.row_w, self.row_h)
+        Rect::new(
+            x,
+            CONTENT_Y + row as f32 * (self.row_h + GAP),
+            self.row_w,
+            self.row_h,
+        )
     }
 
     fn width(&self) -> f32 {
@@ -218,7 +234,13 @@ fn draw_row(gfx: &mut Gfx<'_>, r: Rect, id_x: f32, system: &System, emulator: &E
     } else {
         ("Not installed", WARN)
     };
-    let w = gfx.text(right, mid + 8.0, state, TextStyle::new(20, Weight::SemiBold, colour), Align::Right);
+    let w = gfx.text(
+        right,
+        mid + 8.0,
+        state,
+        TextStyle::new(20, Weight::SemiBold, colour),
+        Align::Right,
+    );
     if installed {
         tick(gfx, right - w - 32.0, mid - 6.0, SUCCESS);
     } else {
@@ -393,7 +415,9 @@ mod tests {
         let installed = Emulators::from_installed(["org.azahar_emu.Azahar"]);
         assert_eq!(
             install_command(&setup.model, &installed).as_deref(),
-            Some("flatpak install flathub org.DolphinEmu.dolphin-emu io.github.ryubing.Ryujinx net.pcsx2.PCSX2")
+            Some(
+                "flatpak install flathub org.DolphinEmu.dolphin-emu io.github.ryubing.Ryujinx net.pcsx2.PCSX2"
+            )
         );
     }
 
@@ -418,7 +442,10 @@ mod tests {
         let (mut ctx, _) = detecting(&["org.DolphinEmu.dolphin-emu"]);
         let mut setup = ticking(&["gc", "switch", "ps2"]);
         act(&mut setup, &mut ctx, Action::Settings);
-        assert!(setup.hints().iter().any(|h| h.text == "Copy"), "Copy has focus first");
+        assert!(
+            setup.hints().iter().any(|h| h.text == "Copy"),
+            "Copy has focus first"
+        );
         act(&mut setup, &mut ctx, Action::Confirm);
         assert_eq!(
             ctx.clipboard_request.as_deref(),
@@ -450,7 +477,10 @@ mod tests {
         let (mut ctx, _) = detecting(&[]);
         let mut setup = ticking(&["wiiu"]);
         act(&mut setup, &mut ctx, Action::Settings);
-        assert!(matches!(act(&mut setup, &mut ctx, Action::Settings), Transition::None));
+        assert!(matches!(
+            act(&mut setup, &mut ctx, Action::Settings),
+            Transition::None
+        ));
         assert_eq!(setup.step(), 3);
 
         act(&mut setup, &mut ctx, Action::Back);
