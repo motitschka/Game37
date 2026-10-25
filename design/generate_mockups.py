@@ -1104,11 +1104,39 @@ def screen_setup_cores():
     sv.save()
 
 
+def screen_setup_key():
+    sv = Svg("30-setup-key", "First-run Setup: SteamGridDB key")
+    setup_frame(sv, 5, "Add a SteamGridDB key (optional)",
+                "With a free SteamGridDB API key, Game37 fetches covers and banners for your Games. "
+                "Without one, Games show their title and System.")
+    sv.add(text(M, 316, "WHERE TO GET ONE", 14, 700, fill=C["muted"], ls=1.5))
+    x = M
+    for i, part in enumerate(["steamgriddb.com", "Profile", "Preferences", "API"]):
+        if i:
+            sv.add(text(x + 18, 367, "→", 22, 600, fill=C["muted"], anchor="middle"))
+            x += 36
+        w = tw(part, 20, 600) * 1.1 + 40
+        sv.add(rect(x, 336, w, 48, C["surface2"], rx=24, stroke=C["line"], sw=1),
+               text(x + w / 2, 367, part, 20, 600, anchor="middle"))
+        x += w
+    sv.add(text(M, 452, "API KEY", 14, 700, fill=C["muted"], ls=1.5))
+    fx, fy, fw = M, 472, 900
+    masked = "•" * 28 + "3f9a"
+    sv.add(rect(fx, fy, fw, 72, C["surface2"], rx=14, stroke=C["accent"], sw=3),
+           text(fx + 28, fy + 46, masked, 26, 500, font=MONO),
+           rect(fx + 28 + len(masked) * 26 * 0.6 + 4, fy + 20, 3, 32, C["accent"], rx=1))
+    sv.add(text(M, 584, "Saved to ~/.config/game37/secrets.toml on this device only", 18, 500, fill=C["muted"]))
+    setup_buttons(sv, [("Back", "normal"), ("Skip", "normal"), ("Finish", "primary")])
+    hintbar(sv, [(["Ctrl V"], "Paste"), (["Enter"], "Finish"), (["Esc"], "Back")])
+    sv.save()
+
+
 if __name__ == "__main__":
     for fn in [screen_home, screen_home_empty, screen_carousel, screen_console_page, screen_details,
                screen_options, screen_pause, screen_ds, screen_console_missing_emulator,
                screen_details_missing_emulator, screen_speedrun_page, screen_splits_editor,
                screen_speedrun_embedded, screen_pause_run, screen_timer_window, screen_details_speedrun,
-               screen_setup_systems, screen_setup_emulators, screen_setup_folders, screen_setup_cores]:
+               screen_setup_systems, screen_setup_emulators, screen_setup_folders, screen_setup_cores,
+               screen_setup_key]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))
