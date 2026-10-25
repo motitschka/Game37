@@ -378,7 +378,13 @@ impl Artwork {
     /// Artwork cached under `dir` (`<data dir>/artwork/`), fetched from SteamGridDB if there is a
     /// key.
     pub fn start(dir: PathBuf, key: Option<ApiKey>) -> Artwork {
-        Artwork::new(dir, key, Arc::new(ureq_fetch))
+        // One agent for the whole run, so requests to the same host reuse its connection.
+        let agent = ureq_agent();
+        Artwork::new(
+            dir,
+            key,
+            Arc::new(move |request: &Request| ureq_fetch(&agent, request)),
+        )
     }
 
     /// Like [`Artwork::start`], fetching through `fetch`: tests and screenshot mode pass a fake.
@@ -1127,9 +1133,9 @@ impl Net {
     }
 }
 
-/// The production fetcher: `ureq` over rustls, https only, 30 s per step and a minute for the
-/// body. Redirects are not followed, so no host outside NFR-5 is ever reached.
-fn ureq_fetch(request: &Request) -> Result<Vec<u8>, FetchError> {
+/// The production agent: `ureq` over rustls, https only, 30 s per step and a minute for the body.
+/// Redirects are not followed, so no host outside NFR-5 is ever reached.
+fn ureq_agent() -> ureq::Agent {
     let step = Some(Duration::from_secs(30));
     let config = ureq::Agent::config_builder()
         .https_only(true)
@@ -1141,7 +1147,11 @@ fn ureq_fetch(request: &Request) -> Result<Vec<u8>, FetchError> {
         .max_redirects(0)
         .http_status_as_error(false)
         .build();
-    let agent: ureq::Agent = config.into();
+    config.into()
+}
+
+/// The production fetcher, through `agent` (see [`ureq_agent`]).
+fn ureq_fetch(agent: &ureq::Agent, request: &Request) -> Result<Vec<u8>, FetchError> {
     let mut get = agent.get(request.url);
     if let Some(key) = request.api_key {
         get = get.header("Authorization", format!("Bearer {}", key.expose()));
