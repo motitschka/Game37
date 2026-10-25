@@ -31,6 +31,9 @@ pub struct Ctx {
     /// Where the library database and the downloaded Cores live (`config::data_dir()` unless
     /// `--data-dir` overrides it).
     pub data_dir: PathBuf,
+    /// The Config file in use (`config::config_path()` unless `--config` overrides it), for Settings
+    /// to show and rewrite. Empty in tests.
+    pub config_path: PathBuf,
     /// Bumped whenever the library's Games changed on disk, so screens know to reload them.
     pub revision: u64,
     /// Whether screens animate. Off in screenshot mode and tests, so they draw the settled state.
@@ -71,6 +74,7 @@ impl Ctx {
             library,
             games_root,
             data_dir: PathBuf::new(),
+            config_path: PathBuf::new(),
             revision: 0,
             animate: false,
             input_kind: InputKind::Controller,

@@ -51,6 +51,8 @@ pub const ACCENT: Colour = Colour::hex(0x8B7BFF);
 pub const STAR: Colour = Colour::hex(0xFFC84A);
 /// Missing-emulator warnings (FR-CAR-9).
 pub const WARN: Colour = Colour::hex(0xFFB020);
+/// Destructive actions, e.g. Reset Playtime and stats.
+pub const DANGER: Colour = Colour::hex(0xFF8F98);
 
 #[cfg(test)]
 mod tests {

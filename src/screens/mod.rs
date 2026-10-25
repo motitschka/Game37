@@ -11,6 +11,7 @@ mod no_config;
 pub mod options;
 pub mod pause;
 pub mod playing;
+mod settings;
 mod stub;
 
 use std::path::Path;
@@ -23,6 +24,7 @@ pub use carousel::Carousel;
 pub use game_grid::GameGrid;
 pub use home::Home;
 pub use no_config::NoConfig;
+pub use settings::Settings;
 pub use stub::Stub;
 
 /// Home and Consoles, with Search and Settings, when a Config exists; otherwise the placeholder for
@@ -39,11 +41,11 @@ pub fn start(config: Result<Option<Config>, ConfigError>, path: &Path, ctx: &Ctx
     }
 }
 
-/// The Search and Settings screens the top bar opens.
+/// The Search and Settings screens the top bar opens. Search is still a placeholder.
 fn entries() -> Entries {
     Entries {
         search: Box::new(|_| Box::new(Stub::for_entry("Search", Entry::Search))),
-        settings: Box::new(|_| Box::new(Stub::for_entry("Settings", Entry::Settings))),
+        settings: Box::new(|_| Box::new(Settings::new())),
     }
 }
 
