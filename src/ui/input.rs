@@ -16,12 +16,16 @@ pub enum Action {
     Sort,
     PrevTab,
     NextTab,
-    /// Start on a controller; Enter while a text field is active. Finishes text entry.
+    /// Start on a controller while a text field is active; Enter in the field. Finishes text entry.
     Start,
+    /// Opens Search from anywhere (US-21): Ctrl+F or the left stick click.
+    Search,
+    /// Opens Settings: Start on a controller outside a text field, or Ctrl+comma.
+    Settings,
 }
 
 impl Action {
-    pub const ALL: [Action; 11] = [
+    pub const ALL: [Action; 13] = [
         Action::Up,
         Action::Down,
         Action::Left,
@@ -33,6 +37,8 @@ impl Action {
         Action::PrevTab,
         Action::NextTab,
         Action::Start,
+        Action::Search,
+        Action::Settings,
     ];
 
     pub fn is_direction(self) -> bool {
@@ -53,6 +59,8 @@ impl Action {
             Action::PrevTab => "prevtab",
             Action::NextTab => "nexttab",
             Action::Start => "start",
+            Action::Search => "search",
+            Action::Settings => "settings",
         }
     }
 
@@ -125,6 +133,7 @@ pub fn button_action(style: ButtonStyle, button: Button) -> Option<Action> {
         (_, Button::LeftShoulder) => Action::PrevTab,
         (_, Button::RightShoulder) => Action::NextTab,
         (_, Button::Start) => Action::Start,
+        (_, Button::LeftStick) => Action::Search,
         (_, Button::DPadUp) => Action::Up,
         (_, Button::DPadDown) => Action::Down,
         (_, Button::DPadLeft) => Action::Left,
@@ -149,6 +158,16 @@ pub fn key_action(key: Keycode) -> Option<Action> {
         _ => return None,
     };
     Some(action)
+}
+
+/// What a key pressed with Ctrl does, text field or not: Ctrl+F searches and Ctrl+comma opens
+/// Settings (GNOME's Preferences shortcut). Other Ctrl keys act as without it.
+pub fn ctrl_key_action(key: Keycode) -> Option<Action> {
+    match key {
+        Keycode::F => Some(Action::Search),
+        Keycode::Comma => Some(Action::Settings),
+        _ => None,
+    }
 }
 
 /// What a key does while a text field is active: the keys that type text (letters, digits, space,
@@ -199,7 +218,8 @@ pub fn glyph_label(action: Action, kind: InputKind, style: ButtonStyle) -> &'sta
         (InputKind::Controller, ButtonStyle::Nintendo, Action::Sort) => "X",
         (InputKind::Controller, _, Action::PrevTab) => "L1",
         (InputKind::Controller, _, Action::NextTab) => "R1",
-        (InputKind::Controller, ButtonStyle::Nintendo, Action::Start) => "+",
+        (InputKind::Controller, ButtonStyle::Nintendo, Action::Start | Action::Settings) => "+",
+        (InputKind::Controller, _, Action::Search) => "L3",
         (InputKind::Keyboard, _, Action::Confirm) => "Enter",
         (InputKind::Keyboard, _, Action::Back) => "Esc",
         (InputKind::Keyboard, _, Action::Options) => "F",
@@ -207,6 +227,8 @@ pub fn glyph_label(action: Action, kind: InputKind, style: ButtonStyle) -> &'sta
         (InputKind::Keyboard, _, Action::PrevTab) => "Q",
         (InputKind::Keyboard, _, Action::NextTab) => "E",
         (InputKind::Keyboard, _, Action::Start) => "Enter",
+        (InputKind::Keyboard, _, Action::Search) => "Ctrl F",
+        (InputKind::Keyboard, _, Action::Settings) => "Ctrl ,",
     }
 }
 
@@ -368,6 +390,38 @@ mod tests {
             assert_eq!(key_action(key), Some(action), "{key:?}");
         }
         assert_eq!(key_action(Keycode::F11), None);
+    }
+
+    #[test]
+    fn ctrl_f_searches_and_ctrl_comma_opens_settings() {
+        assert_eq!(ctrl_key_action(Keycode::F), Some(Action::Search));
+        assert_eq!(
+            key_action(Keycode::F),
+            Some(Action::Options),
+            "plain F stays Options"
+        );
+        assert_eq!(ctrl_key_action(Keycode::Comma), Some(Action::Settings));
+        assert_eq!(key_action(Keycode::Comma), None);
+        assert_eq!(
+            ctrl_key_action(Keycode::Q),
+            None,
+            "other Ctrl keys act as without it"
+        );
+    }
+
+    #[test]
+    fn the_left_stick_click_searches() {
+        let s = ButtonStyle::Nintendo;
+        assert_eq!(button_action(s, Button::LeftStick), Some(Action::Search));
+    }
+
+    #[test]
+    fn search_and_settings_glyphs() {
+        let s = ButtonStyle::Nintendo;
+        let pad = |a| glyph_label(a, InputKind::Controller, s);
+        let keys = |a| glyph_label(a, InputKind::Keyboard, s);
+        assert_eq!([Action::Search, Action::Settings].map(pad), ["L3", "+"]);
+        assert_eq!([Action::Search, Action::Settings].map(keys), ["Ctrl F", "Ctrl ,"]);
     }
 
     #[test]

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use sdl3::event::{Event, WindowEvent};
 use sdl3::gamepad::{Axis, Gamepad};
 use sdl3::joystick::JoystickId;
-use sdl3::keyboard::{Keycode, Scancode};
+use sdl3::keyboard::{Keycode, Mod, Scancode};
 use sdl3::mouse::MouseButton;
 use sdl3::render::{WindowCanvas, create_renderer};
 use sdl3::sys::render::SDL_RendererLogicalPresentation;
@@ -587,8 +587,13 @@ impl InputState {
             Event::KeyDown {
                 keycode: Some(key),
                 repeat,
+                keymod,
                 ..
-            } => ControlEvent::KeyDown { key, repeat },
+            } => ControlEvent::KeyDown {
+                key,
+                repeat,
+                ctrl: keymod.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD),
+            },
             Event::KeyUp {
                 keycode: Some(key), ..
             } => ControlEvent::KeyUp { key },
@@ -684,7 +689,14 @@ mod tests {
         let mut controls = Controls::new(InputKind::Keyboard);
         let press = |key| {
             [
-                Feed::Control(0, ControlEvent::KeyDown { key, repeat: false }),
+                Feed::Control(
+                    0,
+                    ControlEvent::KeyDown {
+                        key,
+                        repeat: false,
+                        ctrl: false,
+                    },
+                ),
                 Feed::Control(0, ControlEvent::KeyUp { key }),
             ]
         };
