@@ -2418,10 +2418,12 @@ pub(crate) mod tests {
             artwork.cover(&library, earlier);
         }
         artwork.cover(&library, late);
+        // Earlier is asked for last every frame, so the old most-recently-asked order would run
+        // it before Late regardless; only the new order, which goes by first ask, favours Late.
         let ask = || {
             artwork.cover(&library, alpha);
-            artwork.cover(&library, earlier);
             artwork.cover(&library, late);
+            artwork.cover(&library, earlier);
         };
         artwork.poll(&library);
         ask();
