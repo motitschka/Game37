@@ -136,5 +136,7 @@ shot m6-settings-display "$root/cfg.toml" "settings,down,down,down,down,down,rig
 # "Not set"), and the key entry modal with a typed key
 shot m6-settings-artwork "$root/cfg.toml" "settings,down,right"
 shot m6-settings-key "$root/cfg.toml" "settings,down,right,confirm,text:abcdef0123456789"
+# M6: Settings Library: the Games Root entry, prefilled with the current Games Root (not saved)
+shot m6-settings-games-root "$root/cfg.toml" "settings,right,confirm"
 
 echo "screenshots in $out"
