@@ -98,6 +98,12 @@ On Arch Linux:
 sudo pacman -S --needed rust base-devel sdl3 sdl3_ttf fontconfig adwaita-fonts flatpak
 ```
 
+If Flathub isn't set up yet, add it once:
+
+```bash
+flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+```
+
 ## Build and run
 
 ```bash
