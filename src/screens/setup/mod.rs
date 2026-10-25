@@ -4,7 +4,9 @@
 //!
 //! What the player chose lives in one [`Model`] that every step reads and changes, so it survives
 //! going Back and forward. Each step keeps its own focus. A step that doesn't apply to what is
-//! ticked is passed over both ways, and Back from the first step quits Game37.
+//! ticked is passed over both ways, and Back from the first step quits Game37. Finish, on the last
+//! step, writes the Config and leaves it in `Ctx::setup_finished` for `app.rs` to switch to Home;
+//! nothing before it writes the Config, so quitting earlier brings Setup back next time.
 
 mod emulators;
 mod folders;
@@ -12,13 +14,15 @@ mod systems;
 
 use std::path::{Path, PathBuf};
 
+use crate::config::{self, Config, ConfigError};
 use crate::ctx::Ctx;
 use crate::systems::{SYSTEMS, System};
+use crate::ui::cover::ellipsize;
 use crate::ui::gfx::{Align, Gfx, TextStyle};
 use crate::ui::input::{Action, Input, Pointer};
 use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
-use crate::ui::theme::{ACCENT, BG, Colour, DIM, LINE, MUTED, SURFACE, TEXT};
+use crate::ui::theme::{ACCENT, BG, Colour, DANGER, DIM, LINE, MUTED, SURFACE, TEXT};
 use crate::ui::{M, Rect, W, hit};
 
 /// How many steps the header counts, the later ones included.
@@ -101,7 +105,7 @@ trait Step {
     }
 }
 
-/// A step that comes in a later job: it shows its number and title, and only goes Back.
+/// A step that comes in a later job: it shows its number and title, and Continue passes it.
 struct Later {
     title: &'static str,
 }
@@ -116,12 +120,12 @@ impl Step for Later {
     }
 
     fn can_continue(&self, _: &Model) -> bool {
-        false
+        true
     }
 
     fn handle(&mut self, input: Input, _: &mut Model, _: &mut Ctx) -> Go {
         match input {
-            Input::Action(Action::Confirm) => Go::Back,
+            Input::Action(Action::Confirm) => Go::Next,
             _ => Go::Stay,
         }
     }
@@ -133,7 +137,7 @@ impl Step for Later {
     }
 
     fn focused_button(&self) -> Option<Button> {
-        Some(Button::Back)
+        Some(Button::Continue)
     }
 }
 
@@ -143,6 +147,8 @@ pub struct Setup {
     steps: Vec<Box<dyn Step>>,
     at: usize,
     buttons: Vec<(Rect, Button)>,
+    /// Why Finish couldn't write the Config, shown on the last step until it is left.
+    error: Option<String>,
 }
 
 impl Setup {
@@ -158,9 +164,13 @@ impl Setup {
                 Box::new(Later {
                     title: "Download the Cores",
                 }),
+                Box::new(Later {
+                    title: "Add a SteamGridDB key (optional)",
+                }),
             ],
             at: 0,
             buttons: Vec::new(),
+            error: None,
         }
     }
 
@@ -193,13 +203,44 @@ impl Setup {
             },
             Go::Next if self.steps[self.at].can_continue(&self.model) => match self.neighbour(true) {
                 Some(i) => i,
-                None => return Transition::None,
+                None => {
+                    self.finish(ctx);
+                    return Transition::None;
+                }
             },
             Go::Next => return Transition::None,
         };
         self.at = next;
+        self.error = None;
         self.steps[next].enter(&self.model, ctx);
         Transition::None
+    }
+
+    /// Writes the Config with the chosen Games Root and asks `app.rs` to switch to Home, or shows
+    /// why it couldn't and stays.
+    fn finish(&mut self, ctx: &mut Ctx) {
+        let config = Config {
+            games_root: self.model.games_root.clone(),
+        };
+        match config::save(&ctx.config_path, &config) {
+            Ok(()) => {
+                self.error = None;
+                ctx.setup_finished = Some(config);
+            }
+            Err(ConfigError::Write(_, e)) => {
+                self.error = Some(format!("Can't write the Config: {}", folders::reason(&e)));
+            }
+            Err(e) => self.error = Some(format!("Can't write the Config: {e}")),
+        }
+    }
+
+    /// The label of the button that goes on: Finish on the last step.
+    fn continue_label(&self) -> &'static str {
+        if self.neighbour(true).is_some() {
+            "Continue"
+        } else {
+            "Finish"
+        }
     }
 
     fn back_label(&self) -> &'static str {
@@ -272,7 +313,8 @@ impl Screen for Setup {
             (false, focused) => Pill::Disabled { focused },
             (true, focused) => Pill::Primary { focused },
         };
-        let continue_w = pill_width(gfx, "Continue");
+        let continue_label = self.continue_label();
+        let continue_w = pill_width(gfx, continue_label);
         let continue_r = Rect::new(W - M - continue_w, BUTTONS_Y, continue_w, PILL_H);
         let back_w = pill_width(gfx, back_label);
         let back_r = Rect::new(continue_r.x - 16.0 - back_w, BUTTONS_Y, back_w, PILL_H);
@@ -280,7 +322,12 @@ impl Screen for Setup {
             focused: focused == Some(Button::Back),
         };
         pill(gfx, back_r, back_label, back_kind);
-        pill(gfx, continue_r, "Continue", continue_kind);
+        pill(gfx, continue_r, continue_label, continue_kind);
+        if let Some(error) = &self.error {
+            let style = TextStyle::new(20, Weight::Medium, DANGER);
+            let error = ellipsize(error, back_r.x - 32.0 - M, |s| gfx.measure(s, style));
+            gfx.text(M, BUTTONS_Y + PILL_H / 2.0 + 7.0, &error, style, Align::Left);
+        }
         self.buttons = vec![(back_r, Button::Back), (continue_r, Button::Continue)];
     }
 
@@ -290,7 +337,7 @@ impl Screen for Setup {
             return hints;
         }
         if self.steps[self.at].can_continue(&self.model) {
-            hints.push(Hint::new(&[Action::Settings], "Continue"));
+            hints.push(Hint::new(&[Action::Settings], self.continue_label()));
         }
         hints.push(Hint::new(&[Action::Back], self.back_label()));
         hints
@@ -396,6 +443,68 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let setup = Setup::new(root.path().join("Games"));
         assert_eq!(setup.games_root(), root.path().join("Games"));
+    }
+
+    /// Setup on its last step with NES ticked and its folders made under `root`, the Config to be
+    /// written at `config_path`.
+    fn on_last_step(root: &Path, config_path: &Path) -> (Setup, Ctx) {
+        let mut ctx = Ctx::empty();
+        ctx.config_path = config_path.to_path_buf();
+        let mut setup = Setup::new(root.to_path_buf());
+        act(&mut setup, &mut ctx, Action::Confirm);
+        act(&mut setup, &mut ctx, Action::Settings);
+        assert_eq!(setup.step(), 3);
+        act(&mut setup, &mut ctx, Action::Confirm);
+        act(&mut setup, &mut ctx, Action::Settings);
+        assert_eq!(setup.step(), 4);
+        assert_eq!(setup.continue_label(), "Continue");
+        act(&mut setup, &mut ctx, Action::Confirm);
+        assert_eq!(setup.step(), 5, "A on a later step's focused Continue goes on");
+        (setup, ctx)
+    }
+
+    #[test]
+    fn finish_writes_the_config_with_the_chosen_games_root_and_asks_for_home() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, path) = (dir.path().join("Games"), dir.path().join("config/config.toml"));
+        let (mut setup, mut ctx) = on_last_step(&root, &path);
+        assert_eq!(setup.continue_label(), "Finish");
+        assert!(setup.hints().iter().any(|h| h.text == "Finish"));
+        assert!(!path.exists(), "no step before Finish writes the Config");
+        assert_eq!(ctx.setup_finished, None);
+
+        assert!(matches!(
+            act(&mut setup, &mut ctx, Action::Settings),
+            Transition::None
+        ));
+        let config = Config {
+            games_root: root.clone(),
+        };
+        assert_eq!(config::load(&path).unwrap(), Some(config.clone()));
+        assert_eq!(ctx.setup_finished, Some(config));
+        assert_eq!(setup.error, None);
+    }
+
+    #[test]
+    fn a_config_that_cannot_be_written_shows_why_and_stays() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file");
+        std::fs::write(&file, b"").unwrap();
+        let (mut setup, mut ctx) = on_last_step(&dir.path().join("Games"), &file.join("config.toml"));
+        act(&mut setup, &mut ctx, Action::Settings);
+        assert_eq!(setup.step(), 5);
+        assert_eq!(ctx.setup_finished, None);
+        assert_eq!(
+            setup.error.as_deref(),
+            Some("Can't write the Config: Not a directory")
+        );
+
+        act(&mut setup, &mut ctx, Action::Back);
+        assert_eq!(
+            (setup.step(), setup.error.as_deref()),
+            (4, None),
+            "leaving the step clears it"
+        );
     }
 
     #[test]

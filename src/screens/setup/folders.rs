@@ -70,7 +70,7 @@ fn made(model: &Model) -> usize {
 }
 
 /// Why making a folder failed, without the "(os error n)" the system adds.
-fn reason(e: &io::Error) -> String {
+pub(super) fn reason(e: &io::Error) -> String {
     let text = e.to_string();
     match text.find(" (os error") {
         Some(end) => text[..end].to_owned(),
@@ -97,6 +97,8 @@ pub struct Folders {
     focus: Focus,
     /// The Games Root being typed, while Change is open.
     entry: Option<TextEntry>,
+    /// Why the typed Games Root wasn't taken, shown under the field until it is closed.
+    entry_error: Option<&'static str>,
     /// Why each folder that failed on the last "Create folders" wasn't made.
     errors: Vec<(PathBuf, String)>,
     /// What the player last used, as of the last frame, for the text field's hints.
@@ -110,6 +112,7 @@ impl Folders {
         Folders {
             focus: Focus::Create,
             entry: None,
+            entry_error: None,
             errors: Vec::new(),
             kind: InputKind::Controller,
             hits: Vec::new(),
@@ -138,17 +141,28 @@ impl Folders {
             .map(|(_, e)| e.as_str())
     }
 
-    /// Takes the typed Games Root, `~` standing for the home folder. An empty field stays open.
+    /// Takes the typed Games Root, `~` standing for the home folder. An empty field stays open, and
+    /// so does a relative path, saying why.
     fn save(&mut self, model: &mut Model) {
         let typed = self.entry.as_ref().map_or("", |e| e.text()).trim();
         if typed.is_empty() {
             return;
         }
-        model.games_root = config::expand_home(typed);
+        let root = config::expand_home(typed);
+        if root.is_relative() {
+            self.entry_error = Some("Use a full path, starting with / or ~");
+            return;
+        }
+        model.games_root = root;
         model.made.clear();
         self.errors.clear();
-        self.entry = None;
+        self.close_entry();
         self.focus = Focus::Create;
+    }
+
+    fn close_entry(&mut self) {
+        self.entry = None;
+        self.entry_error = None;
     }
 
     fn move_focus(&mut self, action: Action) {
@@ -183,7 +197,11 @@ impl Folders {
         let label = TextStyle::new(14, Weight::Bold, MUTED);
         gfx.text(M, CONTENT_Y + 20.0, "GAMES ROOT", label, Align::Left);
         entry.draw_field(gfx, Rect::new(M, CONTENT_Y + 40.0, KEYBOARD_W, 88.0), "~/Games");
-        entry.draw_keyboard(gfx, M, CONTENT_Y + 160.0);
+        if let Some(error) = self.entry_error {
+            let style = TextStyle::new(18, Weight::Medium, DANGER);
+            gfx.text(M, CONTENT_Y + 162.0, error, style, Align::Left);
+        }
+        entry.draw_keyboard(gfx, M, CONTENT_Y + 188.0);
     }
 
     fn draw_root(&mut self, gfx: &mut Gfx<'_>, root: &Path) {
@@ -302,7 +320,7 @@ impl Step for Folders {
     }
 
     fn enter(&mut self, model: &Model, _: &mut Ctx) {
-        self.entry = None;
+        self.close_entry();
         self.errors.clear();
         self.focus = if self.can_continue(model) {
             Focus::Button(Button::Continue)
@@ -319,7 +337,7 @@ impl Step for Folders {
         if let Some(entry) = &mut self.entry {
             match entry.handle(input) {
                 Outcome::Submit => self.save(model),
-                Outcome::Cancel => self.entry = None,
+                Outcome::Cancel => self.close_entry(),
                 Outcome::None | Outcome::Changed => {}
             }
             return Go::Stay;
@@ -538,6 +556,31 @@ mod tests {
         act(&mut setup, &mut ctx, Action::Start);
         assert!(setup.text_input(), "an empty Games Root isn't taken");
         assert_eq!(setup.games_root(), root.path());
+    }
+
+    #[test]
+    fn a_relative_games_root_is_refused_and_the_field_stays_open() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut setup, mut ctx) = on_folders(root.path(), &["nes"]);
+        for typed in ["Games", "./Games", "~Games"] {
+            type_root(&mut setup, &mut ctx, typed);
+            act(&mut setup, &mut ctx, Action::Start);
+            assert!(setup.text_input(), "{typed:?} stays open");
+            assert_eq!(setup.games_root(), root.path(), "{typed:?} isn't taken");
+            act(&mut setup, &mut ctx, Action::Back);
+        }
+
+        let mut step = Folders::new();
+        let mut model = Model::new(root.path().to_path_buf());
+        step.entry = Some(TextEntry::new("Games", MAX_PATH_CHARS));
+        step.save(&mut model);
+        assert_eq!(step.entry_error, Some("Use a full path, starting with / or ~"));
+        step.handle(Input::Action(Action::Back), &mut model, &mut ctx);
+        assert_eq!(step.entry_error, None, "closing the field clears it");
+        step.entry = Some(TextEntry::new("/mnt/Games", MAX_PATH_CHARS));
+        step.save(&mut model);
+        assert_eq!((step.entry.is_none(), step.entry_error), (true, None));
+        assert_eq!(model.games_root, Path::new("/mnt/Games"));
     }
 
     #[test]
