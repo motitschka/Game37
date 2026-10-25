@@ -895,10 +895,99 @@ def screen_timer_window():
     sv.save()
 
 
+# ---------- First-run Setup (M6) ----------
+
+SETUP_STEPS = 5
+SETUP_W = 1200  # width of the lists and boxes below the title, left-aligned at M
+# The Standalone Emulator each External System needs; every other System is Embedded.
+EXTERNAL = {"gc": "Dolphin", "wii": "Dolphin", "3ds": "Azahar", "wiiu": "Cemu", "switch": "Ryubing",
+            "ps2": "PCSX2", "ps3": "RPCS3", "ps4": "shadPS4"}
+SETUP_TICKED = ["nes", "snes", "gba", "gc", "switch", "ps1", "ps2", "psp"]  # in System Order
+
+
+def setup_frame(sv, step, title, explanation):
+    """The header, title and explanation every First-run Setup step shares."""
+    background(sv)
+    logo(sv)
+    sv.add(text(M + 150, 70, f"Setup · step {step} of {SETUP_STEPS}", 20, 500, fill=C["muted"]))
+    seg, gap = 44, 10
+    x = W - M - SETUP_STEPS * seg - (SETUP_STEPS - 1) * gap
+    for i in range(1, SETUP_STEPS + 1):
+        fill = "#FFFFFF" if i == step else C["accent"] if i < step else C["line"]
+        sv.add(rect(x, 60, seg, 8, fill, rx=4))
+        x += seg + gap
+    sv.add(text(M - 2, 200, title, 44, 800), text(M, 244, explanation, 20, 500, fill=C["muted"]))
+
+
+def setup_buttons(sv, buttons, y=906):
+    """Right-aligned pills above the hint bar. buttons: (label, kind), kind in
+    normal / primary / disabled / focused (a focused primary)."""
+    x = W - M
+    for label, kind in reversed(buttons):
+        w = max(160, tw(label, 22, 700) * 1.1 + 72)
+        x -= w
+        if kind == "focused":  # white, as an accent ring would vanish against the accent fill
+            sv.add(rect(x - 6, y - 6, w + 12, 76, "none", rx=38, stroke="#FFFFFF", sw=3))
+        if kind in ("primary", "focused"):
+            sv.add(rect(x, y, w, 64, C["accent"], rx=32), text(x + w / 2, y + 40, label, 22, 800, anchor="middle"))
+        elif kind == "disabled":
+            sv.add(rect(x, y, w, 64, C["accent"], rx=32, opacity=0.25),
+                   text(x + w / 2, y + 40, label, 22, 800, fill=C["dim"], anchor="middle"))
+        else:
+            sv.add(rect(x, y, w, 64, C["surface"], rx=32, stroke=C["line"], sw=2, opacity=0.85),
+                   text(x + w / 2, y + 40, label, 22, 700, anchor="middle"))
+        x -= 16
+
+
+def system_chip(sv, x, y, size, sysid):
+    """A small swatch in the System's colour, styled like a console_card."""
+    color = SYS[sysid][3]
+    sv.add(rect(x, y, size, size, sv.lin([(0, color), (1, C["bg"])], 0, 0, 0.7, 1), rx=size * 0.2),
+           circle(x + size * 0.7, y + size * 0.3, size * 0.26, "#FFFFFF", 0.1))
+
+
+def check_path(x, y, color, sw=3):
+    """A tick mark about 18 x 13, its top-left at (x, y)."""
+    return (f'<path d="M{x},{y + 7} l6,6 l12,-13" fill="none" stroke="{color}" stroke-width="{sw}"'
+            f' stroke-linecap="round" stroke-linejoin="round"/>')
+
+
+def checkbox(sv, x, y, on, size=30):
+    if on:
+        sv.add(rect(x, y, size, size, C["accent"], rx=8), check_path(x + 6, y + 9, "#FFFFFF"))
+    else:
+        sv.add(rect(x, y, size, size, "none", rx=8, stroke=C["muted"], sw=2))
+
+
+def screen_setup_systems():
+    sv = Svg("26-setup-systems", "First-run Setup: Systems")
+    setup_frame(sv, 1, "Pick your Systems",
+                "Tick the Systems you have Games for. You can add folders for others later.")
+    cols, gap, th, top = 6, 24, 148, 296
+    tile_w = (W - 2 * M - (cols - 1) * gap) / cols
+    for i, (sysid, name, _, _) in enumerate(SYSTEMS):
+        r, c = divmod(i, cols)
+        x, y = M + c * (tile_w + gap), top + r * (th + gap)
+        on = sysid in SETUP_TICKED
+        if sysid == "psp":
+            sv.add(rect(x - 6, y - 6, tile_w + 12, th + 12, "none", rx=20, stroke=C["accent"], sw=4))
+        sv.add(rect(x, y, tile_w, th, C["surface2"] if on else C["surface"], rx=14, stroke=C["line"], sw=1))
+        system_chip(sv, x + 20, y + 20, 52, sysid)
+        checkbox(sv, x + tile_w - 50, y + 31, on)
+        sub = f"Needs {EXTERNAL[sysid]}" if sysid in EXTERNAL else "Plays in Game37"
+        sv.add(text(x + 20, y + 106, name, 21, 700), text(x + 20, y + 132, sub, 16, 500, fill=C["muted"]))
+    w = action_pill(sv, M, 906, "Select all", pad="X")
+    sv.add(text(M + w + 24, 945, f"{len(SETUP_TICKED)} Systems selected", 20, 500, fill=C["muted"]))
+    setup_buttons(sv, [("Quit", "normal"), ("Continue", "primary")])
+    hintbar(sv, [(["A"], "Tick"), (["X"], "Select all"), (["+"], "Continue"), (["B"], "Quit")])
+    sv.save()
+
+
 if __name__ == "__main__":
     for fn in [screen_home, screen_home_empty, screen_carousel, screen_console_page, screen_details,
                screen_options, screen_pause, screen_ds, screen_console_missing_emulator,
                screen_details_missing_emulator, screen_speedrun_page, screen_splits_editor,
-               screen_speedrun_embedded, screen_pause_run, screen_timer_window, screen_details_speedrun]:
+               screen_speedrun_embedded, screen_pause_run, screen_timer_window, screen_details_speedrun,
+               screen_setup_systems]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))
