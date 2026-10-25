@@ -14,8 +14,8 @@ a single console-style menu, with a controller or with mouse and keyboard.
 
 ## Status
 
-Game37 is in development. The library and both ways of playing work today. Artwork, the Details Page,
-Settings, search and First-run Setup are still to come.
+Game37 is in development. The library, both ways of playing, Artwork, the Details Page and the Options
+Menu work today. Settings, search and First-run Setup are still to come.
 
 | Milestone | What it brings | State |
 |---|---|---|
@@ -23,7 +23,7 @@ Settings, search and First-run Setup are still to come.
 | M2 External launching | Standalone Emulators for the 8 newer Systems, Playtime | Done |
 | M3 Embedded player | libretro Cores, Pause Menu, Save States, In-game Saves | Done |
 | M4 OpenGL rendering | N64, DS, PS1 and PSP inside Game37 | Done |
-| M5 Artwork, Details Page, Options Menu | SteamGridDB covers, per-Game page and actions | Planned |
+| M5 Artwork, Details Page, Options Menu | SteamGridDB covers, per-Game page and actions | Done |
 | M6 Settings, search, First-run Setup | Everything a new player needs, without editing files | Planned |
 | M7 Speedrun timer | Your own Splits per Game, LiveSplit-compatible | Planned |
 
@@ -47,6 +47,13 @@ Details are in [docs/milestones.md](docs/milestones.md), and the current state i
   Game, steps aside while you play, and comes back when the emulator closes. If an emulator isn't
   installed, its System says so and shows the install command.
 - **Playtime and last played** are tracked for every Game, embedded and external.
+- **Artwork:** with a SteamGridDB API key, Game37 fetches a cover and a wide hero image for each Game
+  you browse, caches them, and lets you pick different ones. Without a key, Games show their Display
+  Title and System.
+- **Details Page:** selecting a Game opens it, with its hero image, Playtime, last played, Save States,
+  file and size. Play starts it from there.
+- **Options Menu:** on any Game, add it to your five Favorites, start it from a Save State slot, choose
+  its Artwork, rename it (the file keeps its name), hide it, or show its file in the file manager.
 
 ## Systems
 
@@ -137,6 +144,21 @@ Dolphin covers both GameCube and Wii. Some emulators need files from your own co
 the emulator itself rather than in `~/Games`: Switch keys for Ryubing, the PS3 firmware for RPCS3, and
 the PS4 modules for shadPS4.
 
+**6. Optional: add a SteamGridDB API key** for covers and hero images. Get a free key from your
+SteamGridDB profile under Preferences → API, then save it where only you can read it:
+
+```bash
+install -m 600 /dev/null ~/.config/game37/secrets.toml
+```
+
+and put this line in that file:
+
+```toml
+steamgriddb_api_key = "your-key-here"
+```
+
+Game37 reads the key when it starts. Settings will let you enter it from inside Game37 in M6.
+
 The Cores need no setup. Each one downloads from the libretro build server the first time you play its
 System, with a progress screen.
 
@@ -150,6 +172,7 @@ Menus use Nintendo-style buttons: the right face button confirms and the bottom 
 | Confirm | Right face button (A) | Enter or Space | Click |
 | Back | Bottom face button (B) | Esc or Backspace | Mouse back button |
 | Switch between Home and the Carousel | L1 / R1 | Q / E or Tab | Click a tab |
+| Open a Game's Options Menu | Left face button (Y) | F | Right-click |
 | Change the sort order on a Console Page | Top face button (X) | S | |
 | Fullscreen | | F11 | |
 
@@ -177,20 +200,23 @@ players 1 to 4 in the order they connect. Without a controller, the keyboard pla
 | Path | What's there |
 |---|---|
 | `~/.config/game37/config.toml` | The Config: your Games Root |
-| `~/.config/game37/secrets.toml` | Your SteamGridDB API key, from M5 on. Keep it private (`chmod 600`) |
+| `~/.config/game37/secrets.toml` | Your SteamGridDB API key. Keep it private (`chmod 600`) |
 | `~/Games/bios/` | BIOS files |
 | `~/Games/saves/<system>/` | In-game Saves |
 | `~/Games/states/<system>/` | Save States and Resume States |
 | `~/.local/share/game37/cores/` | Downloaded Cores |
-| `~/.local/share/game37/library.db` | The library: Playtime, last played, date added, sort order |
+| `~/.local/share/game37/library.db` | The library: Playtime, last played, date added, Favorites, renames, hidden Games, chosen Artwork, sort order |
+| `~/.local/share/game37/artwork/` | Cached covers and hero images |
 
 All your progress lives in the Games Root, so copying `~/Games` backs up games, saves and states in one
-go. Everything under `~/.local/share/game37/` can be rebuilt.
+go. Cores and cached Artwork download again if deleted, but back up `library.db` too if you want to keep
+your Playtime, Favorites and renames.
 
 ## Privacy
 
-Game37 has no telemetry. It only goes online to download Cores from the libretro build server, and, from
-M5 on, to fetch Artwork from SteamGridDB when you've added a key.
+Game37 has no telemetry. It only goes online to download Cores from the libretro build server, and to
+fetch Artwork from SteamGridDB when you've added a key: only for the Games you look at, a few requests
+a second at most.
 
 ## Known limitations
 
@@ -200,6 +226,10 @@ M5 on, to fetch Artwork from SteamGridDB when you've added a key.
 - Azahar, Ryubing and shadPS4 stay open in their own game list when a game stops, so Playtime keeps
   counting until you close the emulator's window.
 - Two Games in the same folder with the same name but different extensions share their save files.
+- Hidden Games can only be brought back from Settings, which arrives in M6. Hiding a Game also removes it
+  from Favorites.
+- When SteamGridDB has no Artwork for a Game, Game37 remembers that and doesn't ask again unless you
+  rename the Game.
 
 ## Development
 
