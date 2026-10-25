@@ -51,6 +51,9 @@ pub struct Row {
     pub danger: bool,
     /// What Confirm does, for the hint bar.
     pub verb: &'static str,
+    /// Whether `value` is a cycled choice, drawn "‹ value ›" with accent arrows instead of a plain
+    /// right-aligned value; its hint is "← →" Change rather than a Confirm verb.
+    pub choice: bool,
 }
 
 impl Row {
@@ -62,6 +65,7 @@ impl Row {
             opens: false,
             danger: false,
             verb: "Open",
+            choice: false,
         }
     }
 
@@ -89,6 +93,15 @@ impl Row {
 
     pub fn verb(self, verb: &'static str) -> Row {
         Row { verb, ..self }
+    }
+
+    /// Marks `value` as a cycled choice, drawn "‹ value ›" instead of a plain right-aligned value.
+    pub fn choice(self, value: impl Into<String>) -> Row {
+        Row {
+            value: Some(value.into()),
+            choice: true,
+            ..self
+        }
     }
 }
 
@@ -257,17 +270,31 @@ impl Settings {
                 let style = TextStyle::new(16, Weight::Medium, MUTED);
                 gfx.text(RX + 32.0, base + 30.0, sub, style, Align::Left);
             }
-            let mut right = RX + RW - 32.0;
-            if row.opens {
-                let arrow = TextStyle::new(26, Weight::SemiBold, MUTED);
-                gfx.text(right, r.y + r.h / 2.0 + 9.0, "›", arrow, Align::Right);
-                right -= 36.0;
-            }
-            if let Some(value) = &row.value {
-                let style = TextStyle::new(18, Weight::Medium, MUTED);
-                let room = right - (RX + 32.0 + label_w + 48.0);
-                let value = ellipsize(value, room, |s| gfx.measure(s, style));
-                gfx.text(right, r.y + r.h / 2.0 + 7.0, &value, style, Align::Right);
+            let right = RX + RW - 32.0;
+            if row.choice {
+                if let Some(value) = &row.value {
+                    let base = r.y + r.h / 2.0 + 9.0;
+                    let arrow = TextStyle::new(26, Weight::SemiBold, ACCENT);
+                    let value_style = TextStyle::new(20, Weight::SemiBold, TEXT);
+                    gfx.text(right, base, "›", arrow, Align::Right);
+                    let value_x = right - 30.0;
+                    gfx.text(value_x, base - 2.0, value, value_style, Align::Right);
+                    let value_w = gfx.measure(value, value_style);
+                    gfx.text(value_x - value_w - 8.0, base, "‹", arrow, Align::Right);
+                }
+            } else {
+                let mut right = right;
+                if row.opens {
+                    let arrow = TextStyle::new(26, Weight::SemiBold, MUTED);
+                    gfx.text(right, r.y + r.h / 2.0 + 9.0, "›", arrow, Align::Right);
+                    right -= 36.0;
+                }
+                if let Some(value) = &row.value {
+                    let style = TextStyle::new(18, Weight::Medium, MUTED);
+                    let room = right - (RX + 32.0 + label_w + 48.0);
+                    let value = ellipsize(value, room, |s| gfx.measure(s, style));
+                    gfx.text(right, r.y + r.h / 2.0 + 7.0, &value, style, Align::Right);
+                }
             }
         }
     }
@@ -345,11 +372,17 @@ impl Screen for Settings {
     }
 
     fn hints(&self) -> Vec<Hint> {
+        let back = Hint::new(&[Action::Back], "Back");
+        let focused = (self.focus == Focus::Rows)
+            .then(|| self.rows.get(self.row))
+            .flatten();
+        if focused.is_some_and(|r| r.choice) {
+            return vec![Hint::new(&[Action::Left, Action::Right], "Change"), back];
+        }
         let verb = match self.focus {
             Focus::Sections => (!self.rows.is_empty()).then_some("Open"),
-            Focus::Rows => self.rows.get(self.row).map(|r| r.verb),
+            Focus::Rows => focused.map(|r| r.verb),
         };
-        let back = Hint::new(&[Action::Back], "Back");
         match verb {
             Some(verb) => vec![Hint::new(&[Action::Confirm], verb), back],
             None => vec![back],
