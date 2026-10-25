@@ -924,14 +924,19 @@ RW = W - M - RX
 TOP = 240  # first section and first row
 
 
-def settings_page(sv, section):
-    """Settings with `section` open and the focus in its rows: the section stays marked in accent."""
+def settings_page(sv, section, section_focused=False):
+    """Settings with `section` open and the focus in its rows: the section stays marked in accent.
+    With `section_focused`, the focus is on the section itself, drawn as the Options Menu draws it."""
     background(sv)
     topbar(sv, crumb="Home")
     sv.add(text(M, 196, "Settings", 48, 800))
     for i, name in enumerate(SECTIONS):
         y = TOP + i * 76
         on = name == section
+        if on and section_focused:
+            sv.add(rect(M - 24, y, 360, 64, C["surface2"], rx=14), rect(M - 24, y + 12, 5, 40, C["accent"], rx=2))
+            sv.add(text(M, y + 41, name, 24, 700))
+            continue
         if on:
             sv.add(rect(M - 24, y, 360, 64, C["surface"], rx=14))
         sv.add(text(M, y + 41, name, 24, 700 if on else 500, fill=C["accent"] if on else C["muted"]))
@@ -1128,6 +1133,42 @@ def screen_controller_test():
                text(sx, 560, label, 14, 600, fill=C["muted"], anchor="middle"))
     sv.add(text(cx, 920, "Menu buttons don't act here.", 20, 500, fill=C["muted"], anchor="middle"))
     hintbar(sv, [(["B"], "Hold to exit")])
+    sv.save()
+
+
+def screen_settings_controls():
+    sv = Svg("31-settings-controls", "Settings: Controls")
+    settings_page(sv, "Controls")
+    y, h = TOP, 92
+    r = settings_row(sv, y, h, "Menu button style", sub="Right button confirms, bottom button goes back",
+                     focused=True)
+    base = y + h / 2 + 9
+    value = "Nintendo"
+    sv.add(text(r, base, "›", 26, 600, fill=C["accent"], anchor="end"),
+           text(r - 30, base - 2, value, 20, 600, anchor="end"),
+           text(r - 30 - tw(value, 20, 600) - 8, base, "‹", 26, 600, fill=C["accent"], anchor="end"))
+    settings_row(sv, TOP + 104, 76, "Controller test", more=True)
+    hintbar(sv, [(["←", "→"], "Change"), (["B"], "Back")])
+    sv.save()
+
+
+def screen_settings_about():
+    sv = Svg("32-settings-about", "Settings: About")
+    settings_page(sv, "About", section_focused=True)
+    x, vx = RX + 32, RX + 32 + 240
+    sv.add(text(x, TOP + 40, "Game37 0.6.0", 28, 800),
+           text(x, TOP + 80, "Licensed under GPL-3.0", 20, 500, fill=C["muted"]))
+    y = TOP + 168
+    sv.add(text(x, y, "Paths", 22, 700))
+    for i, (label, value) in enumerate([("Config", "~/.config/game37/config.toml"), ("Games Root", "~/Games"),
+                                        ("Data folder", "~/.local/share/game37")]):
+        sv.add(text(x, y + 48 + i * 40, label, 20, 500, fill=C["muted"]),
+               text(vx, y + 48 + i * 40, value, 20, 500, font=MONO))
+    y += 48 + 3 * 40 + 48
+    sv.add(text(x, y, "Credits", 22, 700))
+    for i, line in enumerate(["Cores from the libretro buildbot", "Artwork from SteamGridDB"]):
+        sv.add(text(x, y + 48 + i * 40, line, 20, 500, fill=C["muted"]))
+    hintbar(sv, [(["B"], "Back")])
     sv.save()
 
 
@@ -1492,6 +1533,6 @@ if __name__ == "__main__":
                screen_settings_library, screen_settings_bios, screen_settings_cores, screen_settings_api_key,
                screen_controller_test, screen_search, screen_search_controller, screen_search_results, screen_search_empty,
                screen_setup_systems, screen_setup_emulators, screen_setup_folders, screen_setup_cores,
-               screen_setup_key]:
+               screen_setup_key, screen_settings_controls, screen_settings_about]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))
