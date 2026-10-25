@@ -205,7 +205,8 @@ impl ArtworkPicker {
             ),
             Candidates::Unavailable(Reason::Failed) => notice(
                 "Couldn't reach SteamGridDB",
-                "Check the connection and the API key, then restart Game37 to try again.",
+                "Check the connection and the API key, then open Choose artwork again to retry. \
+                 If that still fails, restart Game37.",
             ),
         }
     }
@@ -462,7 +463,7 @@ impl Screen for ArtworkPicker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::artwork::tests::{Fake, settle, steamgriddb};
+    use crate::artwork::tests::{Fake, settle, steamgriddb, unpaced};
     use crate::artwork::{Artwork, FetchError};
     use crate::config::ApiKey;
     use crate::library::FoundGame;
@@ -485,7 +486,7 @@ mod tests {
         let games = library.system_games("snes", SortOrder::AZ).unwrap();
         let mut ctx = Ctx::new(library, dir.join("Games"));
         let key = key.then(|| ApiKey::new("0123456789abcdef0123456789abcdef"));
-        ctx.artwork = Artwork::new(dir.join("artwork"), key, fake.fetch());
+        ctx.artwork = unpaced(Artwork::new(dir.join("artwork"), key, fake.fetch()));
         (ctx, games)
     }
 
@@ -785,6 +786,10 @@ mod tests {
         fake.route("https://www.steamgriddb.com/", Err(FetchError::Connect));
         let (failed, ..) = notice_for(&fake, true);
         assert_eq!(failed.heading, "Couldn't reach SteamGridDB");
+        assert!(
+            failed.body.contains("open Choose artwork again") && failed.body.contains("restart Game37"),
+            "reopening tries again; once requests have stopped for the run, a restart does: {failed:?}"
+        );
 
         let dir = tempfile::tempdir().unwrap();
         let (mut ctx, games) = world(dir.path(), &steamgriddb(), true);

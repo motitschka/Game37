@@ -374,13 +374,17 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
 /// with a cap in case it never does. Without `--artwork` nothing is ever loading.
 fn draw_settled(gfx: &mut Gfx<'_>, nav: &mut Nav, ctx: &Ctx, view: &View, clock: &str) -> Hits {
     let mut hits = draw(gfx, nav, ctx, view, clock);
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut drawn = Instant::now();
+    let deadline = drawn + Duration::from_secs(60);
     while ctx.artwork.busy() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(1));
         ctx.artwork.poll(&ctx.library);
-        // Drawing again may ask for more, which the loop then waits for too.
-        if !ctx.artwork.busy() {
+        // Drawing again may ask for more, which the loop then waits for too. It also draws a frame's
+        // worth of time apart while waiting, as the interactive loop would: Artwork drops queued work
+        // that isn't asked for again.
+        if !ctx.artwork.busy() || drawn.elapsed() >= FRAME {
             hits = draw(gfx, nav, ctx, view, clock);
+            drawn = Instant::now();
         }
     }
     hits

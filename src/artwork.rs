@@ -4,14 +4,19 @@
 //!
 //! Screens ask for a Game's Artwork while drawing. The first ask queues the work and answers
 //! [`Art::Loading`]; later asks answer from memory. Two background threads do the work: one reads
-//! cached files, the other talks to SteamGridDB one request at a time. [`Artwork::poll`], once a
-//! frame, collects their results and records what was found in the library (FR-LIB-7), so a restart
-//! with everything cached makes no network requests at all (FR-ART-4).
+//! cached files, the other talks to SteamGridDB one request at a time, at most four a second.
+//! [`Artwork::poll`], once a frame, collects their results and records what was found in the library
+//! (FR-LIB-7), so a restart with everything cached makes no network requests at all (FR-ART-4).
+//!
+//! The queues stay on the main thread, and `poll` hands each worker its next job only once it is
+//! free: candidate lists first, then previews, then Games' Artwork, the most recently asked for
+//! first. A queued job that hasn't been asked for in about a second is dropped unrun, so Games
+//! scrolled past are never fetched, and at most [`MAX_QUEUED_NET`] network jobs wait at once.
 //!
 //! Only Games a screen asks about are looked up, never the whole library: SteamGridDB's terms forbid
 //! bulk loading. Only SteamGridDB hosts are contacted (NFR-5), and the API key only goes to the API.
 
-use std::cell::{OnceCell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{Cursor, Write};
@@ -21,7 +26,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -49,6 +54,17 @@ const MAX_DIMENSION: u32 = 8192;
 /// How many bytes of decoded Artwork are kept in memory. Beyond it, the least recently asked for
 /// is dropped and read again from the cache (not the network) when next asked for.
 const MEMORY_BUDGET: usize = 256 * 1024 * 1024;
+/// How many polls (frames: about a second) a queued job waits to be asked for again before it is
+/// dropped unrun.
+const STALE_POLLS: u64 = 60;
+/// A cap on queued network jobs. Beyond it, the least recently asked for is dropped.
+const MAX_QUEUED_NET: usize = 64;
+/// How many cached files the disk worker is given at once.
+const DISK_IN_FLIGHT: usize = 8;
+/// The least time between the starts of two requests to SteamGridDB.
+const REQUEST_GAP: Duration = Duration::from_millis(250);
+/// How many requests in a row that can't connect stop every further request this run.
+const MAX_CONNECT_FAILURES: u32 = 3;
 
 /// Which of a Game's Artwork.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -181,10 +197,12 @@ pub struct Artwork {
     dir: Option<PathBuf>,
     key: Option<ApiKey>,
     fetch: Fetch,
-    /// Set once SteamGridDB's API refuses the key (401, 403) or asks to slow down (429): no further
-    /// requests this run.
+    /// Set once SteamGridDB's API refuses the key (401, 403) or asks to slow down (429), or
+    /// [`MAX_CONNECT_FAILURES`] requests in a row can't connect: no further requests this run.
     stopped: Arc<AtomicBool>,
     budget: usize,
+    /// The least time between the starts of two requests.
+    gap: Duration,
     /// Started on first use, so a `Ctx` that never shows Artwork starts no threads.
     workers: OnceCell<Workers>,
     state: RefCell<State>,
@@ -203,13 +221,36 @@ impl fmt::Debug for Artwork {
 struct State {
     slots: HashMap<Key, Slot>,
     /// By library id, kind and the Display Title they were listed for.
-    candidates: HashMap<(i64, Kind, String), Candidates>,
+    candidates: HashMap<(i64, Kind, String), Listing>,
     /// The last job id handed out.
     jobs: u64,
     /// Ticks on every ask, for dropping the least recently asked for.
     clock: u64,
+    /// Counts polls, for dropping queued jobs no longer asked for.
+    polls: u64,
+    /// Jobs not given to a worker yet, in no order: `poll` picks which goes next.
+    disk: Vec<DiskJob>,
+    net: Vec<NetJob>,
+    /// Jobs given to a worker whose results haven't been collected.
+    disk_running: usize,
+    net_running: bool,
     /// Decoded bytes held by `Slot::Ready`.
     bytes: usize,
+}
+
+/// When a loading slot or candidate list was last asked for: in which poll, to drop what is no
+/// longer asked for, and at which clock tick, to run the most recently asked for first.
+#[derive(Debug, Clone, Copy, Default)]
+struct Asked {
+    poll: u64,
+    tick: u64,
+}
+
+/// A Game's candidate list of one kind, as far as it has got.
+struct Listing {
+    candidates: Candidates,
+    /// Only matters while loading.
+    asked: Asked,
 }
 
 impl State {
@@ -218,8 +259,126 @@ impl State {
         self.jobs
     }
 
+    /// Ticks the clock for an ask made now.
+    fn ask(&mut self) -> Asked {
+        self.clock += 1;
+        Asked {
+            poll: self.polls,
+            tick: self.clock,
+        }
+    }
+
     fn is_current(&self, key: &Key, job: u64) -> bool {
-        matches!(self.slots.get(key), Some(Slot::Loading(j)) if *j == job)
+        self.slot_asked(key, job).is_some()
+    }
+
+    /// When `key`'s slot was last asked for, if it is still waiting for `job`.
+    fn slot_asked(&self, key: &Key, job: u64) -> Option<Asked> {
+        match self.slots.get(key) {
+            Some(Slot::Loading { job: j, asked }) if *j == job => Some(*asked),
+            _ => None,
+        }
+    }
+
+    /// When what `job` is for was last asked for, if it is still waiting for it.
+    fn net_asked(&self, job: &NetJob) -> Option<Asked> {
+        match job {
+            NetJob::Lookup { key, job, .. } | NetJob::Download { key, job, .. } => self.slot_asked(key, *job),
+            NetJob::Candidates {
+                game_id, kind, title, ..
+            } => match self.candidates.get(&(*game_id, *kind, title.clone())) {
+                Some(Listing {
+                    candidates: Candidates::Loading,
+                    asked,
+                }) => Some(*asked),
+                _ => None,
+            },
+        }
+    }
+
+    /// Forgets what the dropped `job` was for, so the next ask queues it again.
+    fn forget(&mut self, job: &NetJob) {
+        match job {
+            NetJob::Lookup { key, job, .. } | NetJob::Download { key, job, .. } => {
+                if self.is_current(key, *job) {
+                    self.slots.remove(key);
+                }
+            }
+            NetJob::Candidates {
+                game_id, kind, title, ..
+            } => {
+                let key = (*game_id, *kind, title.clone());
+                if let Some(Listing {
+                    candidates: Candidates::Loading,
+                    ..
+                }) = self.candidates.get(&key)
+                {
+                    self.candidates.remove(&key);
+                }
+            }
+        }
+    }
+
+    /// Queues `job`, first dropping the least recently asked for queued job if there are
+    /// [`MAX_QUEUED_NET`].
+    fn queue_net(&mut self, job: NetJob) {
+        if self.net.len() >= MAX_QUEUED_NET {
+            let oldest = (0..self.net.len()).min_by_key(|&i| self.net_asked(&self.net[i]).map(|a| a.tick));
+            if let Some(i) = oldest {
+                let dropped = self.net.swap_remove(i);
+                self.forget(&dropped);
+            }
+        }
+        self.net.push(job);
+    }
+
+    /// Drops the queued jobs whose Artwork or list hasn't been asked for in [`STALE_POLLS`] polls,
+    /// or no longer waits for them.
+    fn drop_stale(&mut self) {
+        let polls = self.polls;
+        let fresh = |asked: Option<Asked>| asked.is_some_and(|a| polls - a.poll <= STALE_POLLS);
+        let (keep, stale): (Vec<NetJob>, Vec<NetJob>) = std::mem::take(&mut self.net)
+            .into_iter()
+            .partition(|job| fresh(self.net_asked(job)));
+        self.net = keep;
+        for job in &stale {
+            self.forget(job);
+        }
+        let disk = std::mem::take(&mut self.disk);
+        for job in disk {
+            if fresh(self.slot_asked(&job.key, job.job)) {
+                self.disk.push(job);
+            } else if self.is_current(&job.key, job.job) {
+                self.slots.remove(&job.key);
+            }
+        }
+    }
+
+    /// The queued network job to run next: a candidate list first, then a preview, then a Game's
+    /// Artwork; within each, the most recently asked for.
+    fn next_net(&mut self) -> Option<NetJob> {
+        let rank = |job: &NetJob| match job {
+            NetJob::Candidates { .. } => 2,
+            NetJob::Download {
+                key: Key::Preview(..),
+                ..
+            } => 1,
+            _ => 0,
+        };
+        let next = (0..self.net.len()).max_by_key(|&i| {
+            let job = &self.net[i];
+            (rank(job), self.net_asked(job).map(|a| a.tick))
+        })?;
+        Some(self.net.swap_remove(next))
+    }
+
+    /// The queued cached file to read next: the most recently asked for.
+    fn next_disk(&mut self) -> Option<DiskJob> {
+        let next = (0..self.disk.len()).max_by_key(|&i| {
+            let job = &self.disk[i];
+            self.slot_asked(&job.key, job.job).map(|a| a.tick)
+        })?;
+        Some(self.disk.swap_remove(next))
     }
 
     fn remove(&mut self, key: &Key) {
@@ -267,7 +426,7 @@ enum Key {
 }
 
 enum Slot {
-    Loading(u64),
+    Loading { job: u64, asked: Asked },
     Ready { picture: Arc<Picture>, used: u64 },
     Placeholder,
 }
@@ -397,6 +556,7 @@ impl Artwork {
             fetch,
             stopped: Arc::new(AtomicBool::new(false)),
             budget: MEMORY_BUDGET,
+            gap: REQUEST_GAP,
             workers: OnceCell::new(),
             state: RefCell::new(State::default()),
         }
@@ -422,6 +582,7 @@ impl Artwork {
                 self.key.clone(),
                 Arc::clone(&self.fetch),
                 Arc::clone(&self.stopped),
+                self.gap,
             )
         })
     }
@@ -444,39 +605,38 @@ impl Artwork {
         };
         let key = Key::Game(game.id, kind, game.title.clone());
         let mut state = self.state.borrow_mut();
-        state.clock += 1;
-        let now = state.clock;
+        let asked = state.ask();
         if let Some(slot) = state.slots.get_mut(&key) {
-            return slot.art(now);
+            return slot.art(asked);
         }
         let record = read_record(library, game.id).unwrap_or_default();
         let search = record.search(&game.title);
         let mut slot = match (record.pick(kind, &game.title), search) {
             (Some(Pick::File { id, url, .. }), _) => {
                 let job = state.next_job();
-                self.workers(dir).disk(DiskJob {
+                state.disk.push(DiskJob {
                     key: key.clone(),
                     job,
                     kind,
                     path: cache_path(dir, kind, *id, url),
                     url: url.clone(),
                 });
-                Slot::Loading(job)
+                Slot::Loading { job, asked }
             }
             // Searched this Display Title before: nothing of this kind, or no match.
             (Some(Pick::NoArtwork), _) | (None, Some(None)) => Slot::Placeholder,
             _ if self.online() => {
                 let job = state.next_job();
-                self.workers(dir).net(NetJob::Lookup {
+                state.queue_net(NetJob::Lookup {
                     key: key.clone(),
                     job,
                     game: search.flatten(),
                 });
-                Slot::Loading(job)
+                Slot::Loading { job, asked }
             }
             _ => Slot::Placeholder,
         };
-        let art = slot.art(now);
+        let art = slot.art(asked);
         state.slots.insert(key, slot);
         art
     }
@@ -484,19 +644,21 @@ impl Artwork {
     /// The SteamGridDB results of `kind` for `game` to choose from (FR-ART-2): queues the lookup
     /// on first ask and answers `Loading` until it arrives.
     pub fn candidates(&self, library: &Library, game: &GameRow, kind: Kind) -> Candidates {
-        let Some(dir) = &self.dir else {
+        if self.dir.is_none() {
             return Candidates::Unavailable(Reason::NoKey);
-        };
+        }
         let mut state = self.state.borrow_mut();
+        let asked = state.ask();
         let key = (game.id, kind, game.title.clone());
-        if let Some(candidates) = state.candidates.get(&key) {
-            return candidates.clone();
+        if let Some(listing) = state.candidates.get_mut(&key) {
+            listing.asked = asked;
+            return listing.candidates.clone();
         }
         let search = read_record(library, game.id).and_then(|r| r.search(&game.title));
         let candidates = match search {
             Some(None) => Candidates::Unavailable(Reason::NoMatch),
             _ if self.online() => {
-                self.workers(dir).net(NetJob::Candidates {
+                state.queue_net(NetJob::Candidates {
                     game_id: game.id,
                     kind,
                     title: game.title.clone(),
@@ -508,43 +670,46 @@ impl Artwork {
             // SteamGridDB refused the key or asked to slow down earlier this run.
             _ => Candidates::Unavailable(Reason::Failed),
         };
-        state.candidates.insert(key, candidates.clone());
+        let listing = Listing {
+            candidates: candidates.clone(),
+            asked,
+        };
+        state.candidates.insert(key, listing);
         candidates
     }
 
     /// Forgets that `game`'s candidate lists failed to arrive, so the next ask tries again. Once
     /// SteamGridDB has asked for no more requests this run, that ask fails again without one.
     pub fn retry_failed(&self, game: &GameRow) {
-        self.state.borrow_mut().candidates.retain(|(id, ..), candidates| {
-            *id != game.id || !matches!(candidates, Candidates::Unavailable(Reason::Failed))
+        self.state.borrow_mut().candidates.retain(|(id, ..), listing| {
+            *id != game.id || !matches!(listing.candidates, Candidates::Unavailable(Reason::Failed))
         });
     }
 
     /// `candidate`'s small preview, fetched on first ask and kept in memory only.
     pub fn preview(&self, candidate: &Candidate) -> Art {
-        let Some(dir) = &self.dir else {
+        if self.dir.is_none() {
             return Art::Placeholder;
-        };
+        }
         let key = Key::Preview(candidate.preview.clone(), candidate.kind);
         let mut state = self.state.borrow_mut();
-        state.clock += 1;
-        let now = state.clock;
+        let asked = state.ask();
         if let Some(slot) = state.slots.get_mut(&key) {
-            return slot.art(now);
+            return slot.art(asked);
         }
         let mut slot = if self.online() {
             let job = state.next_job();
-            self.workers(dir).net(NetJob::Download {
+            state.queue_net(NetJob::Download {
                 key: key.clone(),
                 job,
                 url: candidate.preview.clone(),
                 path: None,
             });
-            Slot::Loading(job)
+            Slot::Loading { job, asked }
         } else {
             Slot::Placeholder
         };
-        let art = slot.art(now);
+        let art = slot.art(asked);
         state.slots.insert(key, slot);
         art
     }
@@ -579,16 +744,51 @@ impl Artwork {
         Ok(())
     }
 
-    /// Collects finished background work and records it in `library`. Never blocks; call it once a
-    /// frame. Returns whether anything arrived.
+    /// Collects finished background work and records it in `library`, drops queued work no longer
+    /// asked for, and gives the workers their next jobs. Never blocks; call it once a frame.
+    /// Returns whether anything arrived.
     pub fn poll(&self, library: &Library) -> bool {
-        let Some(workers) = self.workers.get() else {
+        let Some(dir) = &self.dir else {
             return false;
         };
+        let mut state = self.state.borrow_mut();
+        state.polls += 1;
         let mut arrived = false;
-        while let Ok(done) = workers.done.try_recv() {
-            arrived = true;
-            self.finish(library, workers, done);
+        if let Some(workers) = self.workers.get() {
+            while let Ok(done) = workers.disk_done.try_recv() {
+                arrived = true;
+                state.disk_running -= 1;
+                self.finish(&mut state, library, done);
+            }
+            while let Ok(done) = workers.net_done.try_recv() {
+                arrived = true;
+                state.net_running = false;
+                self.finish(&mut state, library, done);
+            }
+        }
+        // Once there are no more requests this run, what is queued fails without one.
+        if self.stopped.load(Ordering::Relaxed) {
+            for job in std::mem::take(&mut state.net) {
+                arrived = true;
+                self.finish(&mut state, library, job.failed());
+            }
+        }
+        state.drop_stale();
+        if state.disk.is_empty() && state.net.is_empty() {
+            return arrived;
+        }
+        let workers = self.workers(dir);
+        while state.disk_running < DISK_IN_FLIGHT
+            && let Some(job) = state.next_disk()
+        {
+            state.disk_running += 1;
+            workers.disk(job);
+        }
+        if !state.net_running
+            && let Some(job) = state.next_net()
+        {
+            state.net_running = true;
+            workers.net(job);
         }
         arrived
     }
@@ -596,22 +796,21 @@ impl Artwork {
     /// Whether any Artwork or candidate list asked for is still on its way.
     pub fn busy(&self) -> bool {
         let state = self.state.borrow();
-        state.slots.values().any(|s| matches!(s, Slot::Loading(_)))
+        state.slots.values().any(|s| matches!(s, Slot::Loading { .. }))
             || state
                 .candidates
                 .values()
-                .any(|c| matches!(c, Candidates::Loading))
+                .any(|l| matches!(l.candidates, Candidates::Loading))
     }
 
-    fn finish(&self, library: &Library, workers: &Workers, done: Done) {
-        let mut state = self.state.borrow_mut();
+    fn finish(&self, state: &mut State, library: &Library, done: Done) {
         match done {
             Done::Art { key, job, outcome } => {
                 let current = state.is_current(&key, job);
                 match outcome {
                     Outcome::Loaded(picture) if current => state.ready(key, picture, self.budget),
                     Outcome::Unreadable { url, path } if current && self.online() => {
-                        workers.net(NetJob::Download {
+                        state.queue_net(NetJob::Download {
                             key,
                             job,
                             url,
@@ -671,18 +870,25 @@ impl Artwork {
                     }
                     Err(Failure::Failed) => Candidates::Unavailable(Reason::Failed),
                 };
-                state.candidates.insert((game_id, kind, title), candidates);
+                let listing = Listing {
+                    candidates,
+                    asked: Asked::default(),
+                };
+                state.candidates.insert((game_id, kind, title), listing);
             }
         }
     }
 }
 
 impl Slot {
-    fn art(&mut self, now: u64) -> Art {
+    fn art(&mut self, now: Asked) -> Art {
         match self {
-            Slot::Loading(_) => Art::Loading,
+            Slot::Loading { asked, .. } => {
+                *asked = now;
+                Art::Loading
+            }
             Slot::Ready { picture, used } => {
-                *used = now;
+                *used = now.tick;
                 Art::Ready(Arc::clone(picture))
             }
             Slot::Placeholder => Art::Placeholder,
@@ -790,17 +996,24 @@ fn save(path: &Path, bytes: &[u8]) {
 struct Workers {
     disk: Sender<DiskJob>,
     net: Sender<NetJob>,
-    done: Receiver<Done>,
+    disk_done: Receiver<Done>,
+    net_done: Receiver<Done>,
 }
 
 impl Workers {
     /// Starts the two worker threads. They are detached and end once the `Artwork` is dropped and
-    /// their current job is done.
-    fn spawn(dir: PathBuf, key: Option<ApiKey>, fetch: Fetch, stopped: Arc<AtomicBool>) -> Workers {
-        let (done_tx, done) = mpsc::channel();
+    /// their current job is done. [`Artwork::poll`] gives them only a few jobs at a time.
+    fn spawn(
+        dir: PathBuf,
+        key: Option<ApiKey>,
+        fetch: Fetch,
+        stopped: Arc<AtomicBool>,
+        gap: Duration,
+    ) -> Workers {
+        let (disk_tx, disk_done) = mpsc::channel();
+        let (done_tx, net_done) = mpsc::channel();
         let (disk, disk_rx) = mpsc::channel::<DiskJob>();
         let (net, net_rx) = mpsc::channel::<NetJob>();
-        let disk_done = done_tx.clone();
         thread::spawn(move || {
             for job in disk_rx {
                 let fallback = Done::Art {
@@ -809,7 +1022,7 @@ impl Workers {
                     outcome: Outcome::Failed,
                 };
                 let done = panic::catch_unwind(AssertUnwindSafe(|| job.run())).unwrap_or(fallback);
-                if disk_done.send(done).is_err() {
+                if disk_tx.send(done).is_err() {
                     break;
                 }
             }
@@ -821,6 +1034,9 @@ impl Workers {
                 fetch,
                 stopped,
                 searched: HashMap::new(),
+                gap,
+                last: Cell::new(None),
+                connect_failures: Cell::new(0),
             };
             for job in net_rx {
                 let fallback = job.failed();
@@ -830,7 +1046,12 @@ impl Workers {
                 }
             }
         });
-        Workers { disk, net, done }
+        Workers {
+            disk,
+            net,
+            disk_done,
+            net_done,
+        }
     }
 
     /// Queues `job`. The threads only end once `Workers` is dropped, so sending can't fail.
@@ -1005,6 +1226,12 @@ struct Net {
     stopped: Arc<AtomicBool>,
     /// Display Title searches done this run, so a Game's cover and hero search once.
     searched: HashMap<String, Option<u64>>,
+    /// The least time between the starts of two requests.
+    gap: Duration,
+    /// When the last request started.
+    last: Cell<Option<Instant>>,
+    /// Requests in a row that couldn't connect.
+    connect_failures: Cell<u32>,
 }
 
 impl Net {
@@ -1154,20 +1381,33 @@ impl Net {
         Ok(picture)
     }
 
-    /// One request, unless SteamGridDB has asked for no more this run. The API refusing the key or
-    /// asking to slow down stops every further request; a file host's error fails only that file.
+    /// One request, at least `gap` after the last one started, unless there are to be no more this
+    /// run. The API refusing the key or asking to slow down stops every further request, and so do
+    /// [`MAX_CONNECT_FAILURES`] requests in a row that can't connect; a file host's error fails only
+    /// that file.
     fn get(&self, url: &str, api_key: Option<&ApiKey>, max_bytes: u64) -> Result<Vec<u8>, FetchError> {
         if self.stopped.load(Ordering::Relaxed) {
             return Err(FetchError::Connect);
         }
+        if let Some(last) = self.last.get() {
+            let wait = self.gap.saturating_sub(last.elapsed());
+            if !wait.is_zero() {
+                thread::sleep(wait);
+            }
+        }
+        self.last.set(Some(Instant::now()));
         let result = (self.fetch)(&Request {
             url,
             api_key,
             max_bytes,
         });
-        if let Err(FetchError::Status(401 | 403 | 429)) = result
-            && api_key.is_some()
-        {
+        let failures = match result {
+            Err(FetchError::Connect) => self.connect_failures.get() + 1,
+            _ => 0,
+        };
+        self.connect_failures.set(failures);
+        let refused = matches!(result, Err(FetchError::Status(401 | 403 | 429))) && api_key.is_some();
+        if refused || failures >= MAX_CONNECT_FAILURES {
             self.stopped.store(true, Ordering::Relaxed);
         }
         result
@@ -1231,6 +1471,8 @@ pub(crate) mod tests {
     pub(crate) struct Fake {
         routes: Arc<Mutex<Vec<(String, Response)>>>,
         log: Arc<Mutex<Vec<(String, bool)>>>,
+        /// When each logged request arrived.
+        times: Arc<Mutex<Vec<Instant>>>,
         gate: Arc<(Mutex<bool>, Condvar)>,
     }
 
@@ -1239,6 +1481,7 @@ pub(crate) mod tests {
             Fake {
                 routes: Arc::default(),
                 log: Arc::default(),
+                times: Arc::default(),
                 gate: Arc::new((Mutex::new(true), Condvar::new())),
             }
         }
@@ -1277,6 +1520,7 @@ pub(crate) mod tests {
                     is_open = opened.wait(is_open).unwrap();
                 }
                 drop(is_open);
+                fake.times.lock().unwrap().push(Instant::now());
                 let url = request.url.to_owned();
                 fake.log
                     .lock()
@@ -1377,7 +1621,40 @@ pub(crate) mod tests {
 
     fn artwork(dir: &Path, fake: &Fake, key: bool) -> Artwork {
         let key = key.then(|| ApiKey::new("0123456789abcdef0123456789abcdef"));
-        Artwork::new(dir.join("artwork"), key, fake.fetch())
+        unpaced(Artwork::new(dir.join("artwork"), key, fake.fetch()))
+    }
+
+    /// `artwork` without the gap between requests, so tests don't wait for it.
+    pub(crate) fn unpaced(artwork: Artwork) -> Artwork {
+        Artwork {
+            gap: Duration::ZERO,
+            ..artwork
+        }
+    }
+
+    /// A library file in `dir` with `n` SNES Games "Game 0000", "Game 0001", …, in that order.
+    fn many(dir: &Path, n: usize) -> (Library, Vec<GameRow>) {
+        let mut library = Library::open(&dir.join("library.db")).unwrap();
+        let found: Vec<FoundGame> = (0..n)
+            .map(|i| FoundGame {
+                system: "snes",
+                rel_path: format!("snes/Game {i:04}.sfc"),
+                title: format!("Game {i:04}"),
+            })
+            .collect();
+        library.sync_system("snes", &found, 0).unwrap();
+        let games = library.system_games("snes", SortOrder::AZ).unwrap();
+        assert_eq!(games.len(), n);
+        (library, games)
+    }
+
+    /// A SteamGridDB that matches every Display Title to game 42, whose only cover is 7.
+    fn any_title() -> Fake {
+        let fake = Fake::new();
+        fake.api("/search/autocomplete/", "[{\"id\":42}]")
+            .api("/grids/game/42?", &listing(&[(7, &format!("{CDN}/grid/7.png"))]))
+            .route(&format!("{CDN}/grid/7.png"), Ok(png(60, 90)));
+        fake
     }
 
     /// Asks for `ask` every few milliseconds, polling in between, until it is no longer loading.
@@ -1901,6 +2178,8 @@ pub(crate) mod tests {
         let alpha = &games[0];
         fake.set_gate(false);
         assert!(matches!(artwork.cover(&library, alpha), Art::Loading));
+        // The lookup starts, and waits at the gate.
+        artwork.poll(&library);
         let eight = Candidate {
             id: 8,
             kind: Kind::Cover,
@@ -1964,6 +2243,196 @@ pub(crate) mod tests {
         size(&wait(&artwork, &library, &games[0], Kind::Cover));
         assert!(artwork.state.borrow().bytes <= artwork.budget);
         assert_eq!(fake.calls(), 0);
+    }
+
+    #[test]
+    fn artwork_scrolled_past_is_never_fetched() {
+        // Holding Down through a large Console Page on a first run asks for every cover once.
+        let dir = tempfile::tempdir().unwrap();
+        let fake = any_title();
+        let (library, games) = many(dir.path(), 3000);
+        let artwork = artwork(dir.path(), &fake, true);
+        fake.set_gate(false);
+        for game in &games {
+            assert!(matches!(artwork.cover(&library, game), Art::Loading));
+        }
+        // The player stops at the last ten, so only they are asked for from now on. The gate stays
+        // shut for longer than a queued job waits, so nothing scrolled past can run first.
+        let shown = &games[games.len() - 10..];
+        let ask = || {
+            for game in shown {
+                artwork.cover(&library, game);
+            }
+        };
+        for _ in 0..=STALE_POLLS + 1 {
+            artwork.poll(&library);
+            ask();
+        }
+        fake.set_gate(true);
+        let busy = || {
+            ask();
+            artwork.busy()
+        };
+        settle(&artwork, &library, busy, |busy| *busy);
+
+        for game in shown {
+            assert_eq!(size(&artwork.cover(&library, game)), (60, 90));
+        }
+        let mut searched: Vec<String> = fake
+            .urls()
+            .into_iter()
+            .filter(|u| u.contains("/search/"))
+            .collect();
+        searched.sort();
+        let wanted: Vec<String> = shown
+            .iter()
+            .map(|g| format!("{API}/search/autocomplete/{}", encode(&g.title)))
+            .collect();
+        assert_eq!(searched, wanted);
+        assert_eq!(
+            fake.calls(),
+            3 * shown.len(),
+            "a search, a listing and a file each"
+        );
+    }
+
+    #[test]
+    fn artwork_queue_holds_at_most_its_cap_dropping_the_least_recently_asked_for() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = any_title();
+        let (library, games) = many(dir.path(), 100);
+        let artwork = artwork(dir.path(), &fake, true);
+        fake.set_gate(false);
+        for game in &games {
+            artwork.cover(&library, game);
+            assert!(artwork.state.borrow().net.len() <= MAX_QUEUED_NET);
+        }
+        let state = artwork.state.borrow();
+        assert_eq!(state.net.len(), MAX_QUEUED_NET);
+        let loading = |g: &GameRow| {
+            state
+                .slots
+                .contains_key(&Key::Game(g.id, Kind::Cover, g.title.clone()))
+        };
+        let dropped = games.len() - MAX_QUEUED_NET;
+        assert!(
+            games[..dropped].iter().all(|g| !loading(g)),
+            "the first asked for are dropped"
+        );
+        assert!(games[dropped..].iter().all(loading));
+        drop(state);
+
+        // Asked for again, a dropped Game is queued and fetched.
+        fake.set_gate(true);
+        assert_eq!(size(&wait(&artwork, &library, &games[0], Kind::Cover)), (60, 90));
+    }
+
+    #[test]
+    fn artwork_no_longer_asked_for_is_dropped_unrun_and_fetched_once_asked_for_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = steamgriddb();
+        let (library, games) = library(dir.path());
+        let artwork = artwork(dir.path(), &fake, true);
+        let (alpha, beta) = (&games[0], &games[1]);
+        fake.set_gate(false);
+        artwork.cover(&library, beta);
+        // Beta's lookup starts, and waits at the gate.
+        artwork.poll(&library);
+        // Alpha is drawn once, then scrolled away from.
+        artwork.cover(&library, alpha);
+        for _ in 0..=STALE_POLLS {
+            artwork.poll(&library);
+            artwork.cover(&library, beta);
+        }
+        fake.set_gate(true);
+        assert_eq!(size(&wait(&artwork, &library, beta, Kind::Cover)), (400, 600));
+        settle(&artwork, &library, || artwork.busy(), |busy| *busy);
+        assert!(
+            !fake.urls().iter().any(|u| u.contains("Alpha")),
+            "{:?}",
+            fake.urls()
+        );
+
+        assert_eq!(size(&wait(&artwork, &library, alpha, Kind::Cover)), (400, 600));
+        assert!(fake.urls().contains(&format!("{API}/search/autocomplete/Alpha")));
+    }
+
+    #[test]
+    fn artwork_candidate_lists_go_ahead_of_queued_lookups() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = steamgriddb();
+        let (library, games) = library(dir.path());
+        let artwork = artwork(dir.path(), &fake, true);
+        let (alpha, beta) = (&games[0], &games[1]);
+        fake.set_gate(false);
+        artwork.cover(&library, beta);
+        // Beta's lookup starts, and waits at the gate.
+        artwork.poll(&library);
+        // Alpha's cover is queued first and then asked for last, every frame: it still waits for the
+        // list the player opened "Choose artwork" for.
+        artwork.cover(&library, alpha);
+        artwork.candidates(&library, alpha, Kind::Hero);
+        let ask = || {
+            artwork.candidates(&library, alpha, Kind::Hero);
+            artwork.cover(&library, alpha);
+        };
+        artwork.poll(&library);
+        ask();
+        fake.set_gate(true);
+        let busy = || {
+            ask();
+            artwork.busy()
+        };
+        settle(&artwork, &library, busy, |busy| *busy);
+        assert_eq!(
+            fake.urls()[3..],
+            [
+                format!("{API}/search/autocomplete/Alpha"),
+                format!("{API}/heroes/game/42?{HERO_QUERY}"),
+                format!("{API}/grids/game/42?{COVER_QUERY}"),
+                format!("{CDN}/grid/7.png"),
+            ]
+        );
+    }
+
+    #[test]
+    fn artwork_requests_are_spaced_by_the_gap() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = steamgriddb();
+        let (library, games) = library(dir.path());
+        let gap = Duration::from_millis(50);
+        let artwork = Artwork {
+            gap,
+            ..artwork(dir.path(), &fake, true)
+        };
+        size(&wait(&artwork, &library, &games[0], Kind::Cover));
+        let times = fake.times.lock().unwrap().clone();
+        assert_eq!(times.len(), 3, "a search, a listing and a file");
+        for pair in times.windows(2) {
+            // Less a little for the fake's own bookkeeping after the request started.
+            assert!(pair[1] - pair[0] >= gap - Duration::from_millis(10), "{times:?}");
+        }
+    }
+
+    #[test]
+    fn artwork_requests_that_cannot_connect_three_times_in_a_row_stop_every_further_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Fake::new();
+        fake.route(API, Err(FetchError::Connect));
+        let (library, games) = library(dir.path());
+        let artwork = artwork(dir.path(), &fake, true);
+        let (alpha, beta) = (&games[0], &games[1]);
+        for (game, kind) in [(alpha, Kind::Cover), (alpha, Kind::Hero), (beta, Kind::Cover)] {
+            assert!(is_placeholder(&wait(&artwork, &library, game, kind)));
+        }
+        assert_eq!(fake.calls(), 3);
+        assert!(is_placeholder(&artwork.hero(&library, beta)));
+        assert!(matches!(
+            artwork.candidates(&library, beta, Kind::Cover),
+            Candidates::Unavailable(Reason::Failed)
+        ));
+        assert!(!artwork.busy());
+        assert_eq!(fake.calls(), 3);
     }
 
     /// Renames library Game `game` to `title` and reads it back, as screens do after a rename.
