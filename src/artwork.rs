@@ -512,6 +512,14 @@ impl Artwork {
         candidates
     }
 
+    /// Forgets that `game`'s candidate lists failed to arrive, so the next ask tries again. Once
+    /// SteamGridDB has asked for no more requests this run, that ask fails again without one.
+    pub fn retry_failed(&self, game: &GameRow) {
+        self.state.borrow_mut().candidates.retain(|(id, ..), candidates| {
+            *id != game.id || !matches!(candidates, Candidates::Unavailable(Reason::Failed))
+        });
+    }
+
     /// `candidate`'s small preview, fetched on first ask and kept in memory only.
     pub fn preview(&self, candidate: &Candidate) -> Art {
         let Some(dir) = &self.dir else {
@@ -1246,6 +1254,12 @@ pub(crate) mod tests {
                 .lock()
                 .unwrap()
                 .insert(0, (prefix.to_owned(), response));
+            self
+        }
+
+        /// Removes the routes for exactly `prefix`.
+        pub(crate) fn unroute(&self, prefix: &str) -> &Fake {
+            self.routes.lock().unwrap().retain(|(p, _)| p != prefix);
             self
         }
 

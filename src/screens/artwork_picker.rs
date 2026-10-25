@@ -5,6 +5,7 @@
 //! to the Options Menu, which shows it; Back changes nothing. Without results it says why
 //! (FR-ART-3).
 
+use std::cell::Cell;
 use std::sync::Arc;
 
 use crate::artwork::{Art, Candidate, Candidates, Kind, Reason};
@@ -102,6 +103,9 @@ pub struct ArtworkPicker {
     reveal: bool,
     /// Whether the open tab had previews to choose from, as of the last look, for the hints.
     choosable: bool,
+    /// Whether the candidates were asked for yet: the first ask tries again lists that failed to
+    /// arrive when the picker was open before.
+    asked: Cell<bool>,
     cell_hits: Vec<(Rect, usize)>,
     tab_hits: Vec<(Rect, Kind)>,
 }
@@ -119,6 +123,7 @@ impl ArtworkPicker {
             placed: [false; 2],
             reveal: false,
             choosable: false,
+            asked: Cell::new(false),
             cell_hits: Vec::new(),
             tab_hits: Vec::new(),
         }
@@ -135,6 +140,9 @@ impl ArtworkPicker {
 
     /// The open tab's SteamGridDB results; asking queues the lookup the first time.
     pub fn candidates(&self, ctx: &Ctx) -> Candidates {
+        if !self.asked.replace(true) {
+            ctx.artwork.retry_failed(&self.game);
+        }
         ctx.artwork.candidates(&ctx.library, &self.game, self.tab)
     }
 
@@ -687,6 +695,31 @@ mod tests {
         ));
         let notice = picker.notice(&ctx).expect("a notice");
         (notice, fake.calls(), picker.hints())
+    }
+
+    #[test]
+    fn picker_reopened_after_a_list_failed_to_arrive_asks_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = steamgriddb();
+        let search = "https://www.steamgriddb.com/api/v2/search/";
+        fake.route_first(search, Err(FetchError::Connect));
+        let (ctx, games) = world(dir.path(), &fake, true);
+        let picker = ArtworkPicker::new(games[0].clone());
+        assert!(matches!(
+            settled(&picker, &ctx),
+            Candidates::Unavailable(Reason::Failed)
+        ));
+
+        // Back online: the open picker keeps its answer, a reopened one asks again.
+        fake.unroute(search);
+        let calls = fake.calls();
+        assert!(matches!(
+            picker.candidates(&ctx),
+            Candidates::Unavailable(Reason::Failed)
+        ));
+        assert_eq!(fake.calls(), calls);
+        let reopened = ArtworkPicker::new(games[0].clone());
+        assert_eq!(ids(&reopened, &ctx), [7, 8]);
     }
 
     #[test]
