@@ -1067,11 +1067,48 @@ def screen_setup_folders():
     sv.save()
 
 
+def screen_setup_cores():
+    sv = Svg("29-setup-cores", "First-run Setup: Cores")
+    setup_frame(sv, 4, "Download the Cores",
+                "Embedded Systems play inside Game37 with a libretro Core from the libretro buildbot.")
+    rows = [("nes", "Mesen", "installed"), ("snes", "bsnes", "downloaded"), ("gba", "mGBA", 0.45),
+            ("ps1", "Beetle PSX HW", "waiting"), ("psp", "PPSSPP  ·  plus PPSSPP's assets", "waiting")]
+    for i, (sysid, core, state) in enumerate(rows):
+        x, y = M, 296 + i * 96
+        sv.add(rect(x, y, SETUP_W, 84, C["surface"], rx=14, stroke=C["line"], sw=1))
+        system_chip(sv, x + 22, y + 20, 44, sysid)
+        sv.add(text(x + 90, y + 38, SYS[sysid][1], 22, 700), text(x + 90, y + 64, core, 17, 500, fill=C["muted"]))
+        bx, bw, r = x + 520, 440, x + SETUP_W - 28
+        if state != "installed":
+            sv.add(rect(bx, y + 37, bw, 10, C["surface2"], rx=5))
+        if state == "installed":
+            sv.add(text(r, y + 49, "Installed", 19, 600, fill=C["muted"], anchor="end"),
+                   check_path(r - tw("Installed", 19, 600) * 1.1 - 30, y + 35, C["muted"]))
+        elif state == "downloaded":
+            sv.add(rect(bx, y + 37, bw, 10, C["ahead"], rx=5),
+                   text(r, y + 49, "Downloaded", 19, 600, fill=C["ahead"], anchor="end"),
+                   check_path(r - tw("Downloaded", 19, 600) * 1.1 - 30, y + 35, C["ahead"]))
+        elif state == "waiting":
+            sv.add(text(r, y + 49, "Waiting", 19, 600, fill=C["dim"], anchor="end"))
+        else:
+            sv.add(rect(bx, y + 37, bw * state, 10, C["accent"], rx=5),
+                   text(r, y + 49, f"{round(state * 100)}%", 19, 700, anchor="end"))
+    ny = 796
+    sv.add(rect(M, ny, SETUP_W, 64, WARN, rx=14, opacity=0.1),
+           rect(M, ny, SETUP_W, 64, "none", rx=14, stroke=WARN, sw=2, opacity=0.55),
+           circle(M + 34, ny + 32, 15, WARN), text(M + 34, ny + 39, "!", 19, 800, fill=C["bg"], anchor="middle"),
+           text(M + 64, ny + 39, "PlayStation needs a BIOS file: put scph5500.bin, scph5501.bin or scph5502.bin "
+                                 "in ~/Games/bios/.", 19, 500, fill=WARN))
+    setup_buttons(sv, [("Back", "normal"), ("Continue", "disabled")])
+    hintbar(sv, [(["B"], "Back")])
+    sv.save()
+
+
 if __name__ == "__main__":
     for fn in [screen_home, screen_home_empty, screen_carousel, screen_console_page, screen_details,
                screen_options, screen_pause, screen_ds, screen_console_missing_emulator,
                screen_details_missing_emulator, screen_speedrun_page, screen_splits_editor,
                screen_speedrun_embedded, screen_pause_run, screen_timer_window, screen_details_speedrun,
-               screen_setup_systems, screen_setup_emulators, screen_setup_folders]:
+               screen_setup_systems, screen_setup_emulators, screen_setup_folders, screen_setup_cores]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))
