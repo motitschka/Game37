@@ -37,7 +37,8 @@ its rows, and Left or Back goes back to the sections. Back on the sections leave
 |---|---|
 | Library | Games Root location (shows the path) · Rescan library (shows the Game count) · Hidden games (shows how many) · Reset Playtime and stats |
 | Artwork | SteamGridDB API key (shows "Not set", or "Set · ends in ab12") · Remove key (only when one is set) |
-| Systems | BIOS status (all 17 Systems in System Order) · Cores (every Core, its state, Update all) |
+| BIOS | BIOS status, one row per System (all 17, in System Order) |
+| Cores | Update all · one row per Core: its state |
 | Controls | Menu button style (Nintendo / Xbox / PlayStation) · Controller test |
 | Display | Startup window mode (Remember last / Always fullscreen / Always windowed) |
 | About | Version, license (GPL-3.0), the paths in use (Config, Games Root, data folder), credits (libretro Cores from the libretro buildbot, Artwork from SteamGridDB) |
