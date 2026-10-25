@@ -22,9 +22,52 @@ pub fn background_tinted(gfx: &mut Gfx<'_>, colour: Colour, opacity: f32) {
 const GLYPH_LABEL: TextStyle = TextStyle::new(14, Weight::Bold, TEXT);
 const GLYPH_LETTER: TextStyle = TextStyle::new(16, Weight::Bold, TEXT);
 
-/// Face-button letters are drawn round, everything else as a key cap.
+/// Face-button letters and symbols, and Xbox's menu button, are drawn round, everything else as a
+/// key cap.
 pub fn is_round(label: &str) -> bool {
-    matches!(label, "A" | "B" | "X" | "Y")
+    matches!(label, "A" | "B" | "X" | "Y") || is_symbol(label)
+}
+
+/// The labels [`symbol`] draws as shapes: Adwaita Sans has no ✕ or ≡, and its ○ □ △ don't match
+/// them.
+pub fn is_symbol(label: &str) -> bool {
+    matches!(label, "✕" | "○" | "□" | "△" | "≡")
+}
+
+/// Draws a PlayStation face-button symbol or Xbox's menu button ≡ in `ink`, about `size` across and
+/// centred on (`cx`, `cy`), over a button filled with `fill`. Draws nothing for other labels.
+pub fn symbol(gfx: &mut Gfx<'_>, cx: f32, cy: f32, size: f32, label: &str, ink: Colour, fill: Colour) {
+    let stroke = size * 0.18;
+    let h = size / 2.0;
+    match label {
+        "✕" => {
+            let d = h * 0.8;
+            gfx.line(cx - d, cy - d, cx + d, cy + d, stroke, ink);
+            gfx.line(cx - d, cy + d, cx + d, cy - d, stroke, ink);
+        }
+        "○" => gfx.stroke_circle(cx, cy, h * 0.9, stroke, ink),
+        "□" => {
+            let d = h * 0.8;
+            gfx.stroke_round_rect(Rect::new(cx - d, cy - d, 2.0 * d, 2.0 * d), 1.0, stroke, ink);
+        }
+        "△" => {
+            // An outline as a filled triangle with the button's fill inset by the stroke; centred
+            // by its height, so the centroid sits a quarter of the circumradius below the centre.
+            let r = h * 1.05;
+            let tri = |r: f32| {
+                let (cy, sin, cos) = (cy + h * 1.05 / 4.0, 0.866 * r, 0.5 * r);
+                [(cx, cy - r), (cx + sin, cy + cos), (cx - sin, cy + cos)]
+            };
+            gfx.fill_polygon(&tri(r), ink);
+            gfx.fill_polygon(&tri(r - 2.0 * stroke), fill);
+        }
+        "≡" => {
+            for dy in [-0.6 * h, 0.0, 0.6 * h] {
+                gfx.line(cx - h * 0.8, cy + dy, cx + h * 0.8, cy + dy, stroke, ink);
+            }
+        }
+        _ => {}
+    }
 }
 
 pub fn glyph_width(gfx: &mut Gfx<'_>, label: &str) -> f32 {
@@ -40,7 +83,11 @@ pub fn glyph(gfx: &mut Gfx<'_>, x: f32, cy: f32, label: &str) -> f32 {
     if is_round(label) {
         gfx.fill_circle(x + 16.0, cy, 16.0, SURFACE2);
         gfx.stroke_circle(x + 16.0, cy, 16.0, 2.0, TEXT);
-        gfx.text(x + 16.0, cy + 6.0, label, GLYPH_LETTER, Align::Centre);
+        if is_symbol(label) {
+            symbol(gfx, x + 16.0, cy, 13.0, label, TEXT, SURFACE2);
+        } else {
+            gfx.text(x + 16.0, cy + 6.0, label, GLYPH_LETTER, Align::Centre);
+        }
         return 32.0;
     }
     let w = glyph_width(gfx, label);

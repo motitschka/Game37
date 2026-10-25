@@ -523,6 +523,24 @@ mod tests {
     }
 
     #[test]
+    fn the_style_is_read_per_press() {
+        let mut controls = Controls::new(InputKind::Controller);
+        let mut out = Vec::new();
+        let press = |controls: &mut Controls, button, out: &mut Vec<Input>| {
+            controls.handle(0, ControlEvent::PadButtonDown { pad: PAD, button }, out);
+            controls.handle(1, ControlEvent::PadButtonUp { pad: PAD, button }, out);
+        };
+        press(&mut controls, Button::East, &mut out);
+        controls.style = ButtonStyle::PlayStation;
+        press(&mut controls, Button::East, &mut out);
+        press(&mut controls, Button::South, &mut out);
+        assert_eq!(
+            out,
+            [Action::Confirm, Action::Back, Action::Confirm].map(Input::Action)
+        );
+    }
+
+    #[test]
     fn start_opens_settings_outside_a_text_field_and_finishes_one_inside() {
         let mut controls = Controls::new(InputKind::Keyboard);
         assert_eq!(start(&mut controls), [Input::Action(Action::Settings)]);

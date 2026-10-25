@@ -14,6 +14,8 @@ use unicode_normalization::char::is_combining_mark;
 
 use super::FoundGame;
 use crate::systems;
+use crate::ui::gfx::WindowMode;
+use crate::ui::input::ButtonStyle;
 
 /// How many Games a Shelf shows on Home (FR-HOME-3).
 pub const SHELF_SIZE: usize = 20;
@@ -584,6 +586,43 @@ impl Library {
         self.set_setting("last_system", system)
     }
 
+    /// The menus' button style (FR-UI-2); Nintendo until changed, or if the stored one is unknown.
+    pub fn button_style(&self) -> Result<ButtonStyle, DbError> {
+        Ok(self
+            .setting("button_style")?
+            .as_deref()
+            .and_then(ButtonStyle::from_id)
+            .unwrap_or_default())
+    }
+
+    pub fn set_button_style(&self, style: ButtonStyle) -> Result<(), DbError> {
+        self.set_setting("button_style", style.id())
+    }
+
+    /// Whether the window opens fullscreen (FR-UI-3); Remember last until changed, or if the stored
+    /// one is unknown.
+    pub fn window_mode(&self) -> Result<WindowMode, DbError> {
+        Ok(self
+            .setting("window_mode")?
+            .as_deref()
+            .and_then(WindowMode::from_id)
+            .unwrap_or_default())
+    }
+
+    pub fn set_window_mode(&self, mode: WindowMode) -> Result<(), DbError> {
+        self.set_setting("window_mode", mode.id())
+    }
+
+    /// Whether the window was fullscreen when Game37 last quit or F11 last toggled it, for Remember
+    /// last; windowed if never stored.
+    pub fn last_fullscreen(&self) -> Result<bool, DbError> {
+        Ok(self.setting("last_fullscreen")?.as_deref() == Some("1"))
+    }
+
+    pub fn set_last_fullscreen(&self, fullscreen: bool) -> Result<(), DbError> {
+        self.set_setting("last_fullscreen", if fullscreen { "1" } else { "0" })
+    }
+
     fn setting(&self, key: &str) -> Result<Option<String>, DbError> {
         let value = self
             .conn
@@ -1062,6 +1101,49 @@ mod tests {
         let lib = Library::open_in_memory().unwrap();
         lib.set_last_system("dreamcast").unwrap();
         assert_eq!(lib.last_system().unwrap(), "nes");
+    }
+
+    #[test]
+    fn button_style_defaults_to_nintendo_and_round_trips() {
+        let lib = Library::open_in_memory().unwrap();
+        assert_eq!(lib.button_style().unwrap(), ButtonStyle::Nintendo);
+        for style in ButtonStyle::ALL {
+            lib.set_button_style(style).unwrap();
+            assert_eq!(lib.button_style().unwrap(), style);
+        }
+        assert_eq!(
+            lib.setting("button_style").unwrap().as_deref(),
+            Some("playstation")
+        );
+    }
+
+    #[test]
+    fn unknown_button_style_reads_as_nintendo() {
+        let lib = Library::open_in_memory().unwrap();
+        lib.set_setting("button_style", "sega").unwrap();
+        assert_eq!(lib.button_style().unwrap(), ButtonStyle::Nintendo);
+    }
+
+    #[test]
+    fn window_mode_defaults_to_remember_last_and_round_trips() {
+        let lib = Library::open_in_memory().unwrap();
+        assert_eq!(lib.window_mode().unwrap(), WindowMode::RememberLast);
+        for mode in WindowMode::ALL {
+            lib.set_window_mode(mode).unwrap();
+            assert_eq!(lib.window_mode().unwrap(), mode);
+        }
+        lib.set_setting("window_mode", "kiosk").unwrap();
+        assert_eq!(lib.window_mode().unwrap(), WindowMode::RememberLast);
+    }
+
+    #[test]
+    fn last_fullscreen_defaults_to_windowed_and_round_trips() {
+        let lib = Library::open_in_memory().unwrap();
+        assert!(!lib.last_fullscreen().unwrap());
+        lib.set_last_fullscreen(true).unwrap();
+        assert!(lib.last_fullscreen().unwrap());
+        lib.set_last_fullscreen(false).unwrap();
+        assert!(!lib.last_fullscreen().unwrap());
     }
 
     #[test]
