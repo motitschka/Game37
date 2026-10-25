@@ -102,6 +102,14 @@ impl Stick {
         self.dir = stick_direction(self.x, self.y);
         self.dir
     }
+
+    /// Records an axis value without taking a direction, while raw controller input is on.
+    fn track(&mut self, axis: StickAxis, value: i16) {
+        match axis {
+            StickAxis::X => self.x = value,
+            StickAxis::Y => self.y = value,
+        }
+    }
 }
 
 /// Whether the stick at (`fx`, `fy`) still holds `dir`.
@@ -122,6 +130,9 @@ pub struct Controls {
     pub style: ButtonStyle,
     /// Whether a text field is active: keys then type rather than act (see [`text_key`]).
     pub text: bool,
+    /// Whether the top screen wants raw controller input (see [`super::nav::Screen::raw_controller`]):
+    /// while on, pad buttons and stick motion are tracked but never become menu actions.
+    pub raw: bool,
     /// Whether the last key went down with Ctrl held: text typed after it is dropped, so Ctrl+F
     /// or Ctrl+comma never types an "f" or a ",", whatever the system's input method sends.
     ctrl: bool,
@@ -129,6 +140,8 @@ pub struct Controls {
     held: Vec<(Source, Action)>,
     sticks: HashMap<JoystickId, Stick>,
     repeat: Repeat,
+    /// `raw` as last synced by [`Self::sync_raw`], to notice when it turns on.
+    synced_raw: bool,
 }
 
 impl Controls {
@@ -137,15 +150,35 @@ impl Controls {
             kind,
             style: ButtonStyle::default(),
             text: false,
+            raw: false,
             ctrl: false,
             held: Vec::new(),
             sticks: HashMap::new(),
             repeat: Repeat::default(),
+            synced_raw: false,
+        }
+    }
+
+    /// Drops pad-sourced held directions when `raw` turns on, so a direction held as the screen
+    /// opens never repeats; stick directions are cleared the same way, through [`Self::follow`].
+    fn sync_raw(&mut self, at: u64) {
+        if self.raw == self.synced_raw {
+            return;
+        }
+        self.synced_raw = self.raw;
+        if self.raw {
+            let driver = self.held.last().copied();
+            self.held.retain(|(source, _)| source.pad().is_none());
+            self.follow(driver, at);
+            for stick in self.sticks.values_mut() {
+                stick.dir = None;
+            }
         }
     }
 
     /// Handles an event that happened at `at` milliseconds, pushing the inputs it makes to `out`.
     pub fn handle(&mut self, at: u64, event: ControlEvent, out: &mut Vec<Input>) {
+        self.sync_raw(at);
         if let ControlEvent::KeyDown {
             key,
             repeat: false,
@@ -204,17 +237,27 @@ impl Controls {
             }
             ControlEvent::PadButtonDown { pad, button } => {
                 self.kind = InputKind::Controller;
+                if self.raw {
+                    return;
+                }
                 if let Some(action) = self.button_action(button) {
                     self.press(Source::DPad(pad), action, at, out);
                 }
             }
             ControlEvent::PadButtonUp { pad, button } => {
+                if self.raw {
+                    return;
+                }
                 if let Some(action) = self.button_action(button) {
                     self.release(Source::DPad(pad), action, at);
                 }
             }
             ControlEvent::StickMotion { pad, axis, value } => {
                 let stick = self.sticks.entry(pad).or_default();
+                if self.raw {
+                    stick.track(axis, value);
+                    return;
+                }
                 let old = stick.dir;
                 let new = stick.moved(axis, value);
                 if new != old {
@@ -254,6 +297,7 @@ impl Controls {
 
     /// The repeat of the held direction due at `now`, if any.
     pub fn poll(&mut self, now: u64) -> Option<Input> {
+        self.sync_raw(now);
         self.repeat.poll(now).map(Input::Action)
     }
 
@@ -647,5 +691,73 @@ mod tests {
             out,
             [Input::Action(Action::Right), Input::Action(Action::Confirm)]
         );
+    }
+
+    #[test]
+    fn raw_controller_swallows_pad_input_while_keyboard_still_acts() {
+        let mut controls = Controls::new(InputKind::Keyboard);
+        controls.raw = true;
+        let mut out = Vec::new();
+        let (pad, button) = (PAD, Button::South);
+        controls.handle(0, ControlEvent::PadButtonDown { pad, button }, &mut out);
+        controls.handle(10, ControlEvent::PadButtonUp { pad, button }, &mut out);
+        controls.handle(20, stick(StickAxis::X, 0.9), &mut out);
+        assert_eq!(out, [], "no pad input while raw");
+
+        controls.handle(30, key_down(Keycode::Escape), &mut out);
+        assert_eq!(out, [Input::Action(Action::Back)], "Esc still acts");
+        out.clear();
+        controls.handle(40, key_down(Keycode::Right), &mut out);
+        assert_eq!(out, [Input::Action(Action::Right)], "arrows still act");
+    }
+
+    #[test]
+    fn a_direction_held_when_raw_turns_on_does_not_repeat() {
+        let mut controls = Controls::new(InputKind::Controller);
+        let mut out = Vec::new();
+        controls.handle(
+            0,
+            ControlEvent::PadButtonDown {
+                pad: PAD,
+                button: Button::DPadRight,
+            },
+            &mut out,
+        );
+        assert_eq!(out, [Input::Action(Action::Right)]);
+        controls.raw = true;
+        out.clear();
+        for now in 1..400 {
+            out.extend(controls.poll(now));
+        }
+        assert_eq!(out, [], "the held direction never repeats once raw is on");
+    }
+
+    #[test]
+    fn b_pressed_raw_and_released_after_raw_goes_off_fires_nothing_below() {
+        let mut controls = Controls::new(InputKind::Controller);
+        controls.raw = true;
+        let mut out = Vec::new();
+        let (pad, button) = (PAD, Button::South);
+        controls.handle(0, ControlEvent::PadButtonDown { pad, button }, &mut out);
+        controls.raw = false;
+        controls.handle(10, ControlEvent::PadButtonUp { pad, button }, &mut out);
+        assert_eq!(out, [], "no Back leaks to the screen below");
+    }
+
+    #[test]
+    fn a_raw_pad_press_still_sets_the_input_kind_to_controller() {
+        let mut controls = Controls::new(InputKind::Keyboard);
+        controls.raw = true;
+        let mut out = Vec::new();
+        controls.handle(
+            0,
+            ControlEvent::PadButtonDown {
+                pad: PAD,
+                button: Button::South,
+            },
+            &mut out,
+        );
+        assert_eq!(controls.kind, InputKind::Controller);
+        assert_eq!(out, []);
     }
 }

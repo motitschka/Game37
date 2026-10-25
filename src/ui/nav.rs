@@ -62,6 +62,11 @@ pub trait Screen {
     fn search_pill(&self) -> bool {
         true
     }
+    /// While the top screen returns true, controller buttons and sticks don't become menu
+    /// [`Input`]s; keyboard and mouse still do.
+    fn raw_controller(&self) -> bool {
+        false
+    }
 }
 
 /// The screens the top bar opens from anywhere in the library: Search (US-21) and Settings.

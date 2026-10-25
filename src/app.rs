@@ -510,6 +510,7 @@ fn feed(
     let mut inputs = Vec::new();
     for feed in feeds {
         controls.text = wants_text(nav);
+        controls.raw = nav.top().raw_controller();
         match feed {
             Feed::Quit => return Flow::Quit,
             Feed::Control(at, event) => controls.handle(at, event, &mut inputs),
