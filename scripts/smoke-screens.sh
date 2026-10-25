@@ -107,4 +107,10 @@ shot m6-settings-hidden "$root/cfg.toml" "down,down,options,down,down,down,confi
 shot m6-settings-reset "$root/cfg.toml" "settings,right,down,down,down,confirm"
 shot m6-settings-about "$root/cfg.toml" "settings$(printf ',down%.0s' {1..6})"
 
+# M6: Settings Controls and Display: the Controls rows, Controls after switching the style to Xbox
+# (its hint glyphs show Xbox labels), and the Display row
+shot m6-settings-controls "$root/cfg.toml" "settings,down,down,down,down,right"
+shot m6-settings-xbox "$root/cfg.toml" "settings,down,down,down,down,right,right"
+shot m6-settings-display "$root/cfg.toml" "settings,down,down,down,down,down,right"
+
 echo "screenshots in $out"
