@@ -1145,6 +1145,241 @@ def screen_search_empty():
     hintbar(sv, [(["Esc"], "Close")])
     sv.save()
 
+# ---------- First-run Setup (M6) ----------
+
+SETUP_STEPS = 5
+SETUP_W = 1200  # width of the lists and boxes below the title, left-aligned at M
+# The Standalone Emulator each External System needs; every other System is Embedded.
+EXTERNAL = {"gc": "Dolphin", "wii": "Dolphin", "3ds": "Azahar", "wiiu": "Cemu", "switch": "Ryubing",
+            "ps2": "PCSX2", "ps3": "RPCS3", "ps4": "shadPS4"}
+SETUP_TICKED = ["nes", "snes", "gba", "gc", "switch", "ps1", "ps2", "psp"]  # in System Order
+
+
+def setup_frame(sv, step, title, explanation):
+    """The header, title and explanation every First-run Setup step shares."""
+    background(sv)
+    logo(sv)
+    sv.add(text(M + 150, 70, f"Setup · step {step} of {SETUP_STEPS}", 20, 500, fill=C["muted"]))
+    seg, gap = 44, 10
+    x = W - M - SETUP_STEPS * seg - (SETUP_STEPS - 1) * gap
+    for i in range(1, SETUP_STEPS + 1):
+        fill = "#FFFFFF" if i == step else C["accent"] if i < step else C["line"]
+        sv.add(rect(x, 60, seg, 8, fill, rx=4))
+        x += seg + gap
+    sv.add(text(M - 2, 200, title, 44, 800), text(M, 244, explanation, 20, 500, fill=C["muted"]))
+
+
+def setup_buttons(sv, buttons, y=906):
+    """Right-aligned pills above the hint bar. buttons: (label, kind), kind in
+    normal / primary / disabled / focused (a focused primary)."""
+    x = W - M
+    for label, kind in reversed(buttons):
+        w = max(160, tw(label, 22, 700) * 1.1 + 72)
+        x -= w
+        if kind == "focused":  # white, as an accent ring would vanish against the accent fill
+            sv.add(rect(x - 6, y - 6, w + 12, 76, "none", rx=38, stroke="#FFFFFF", sw=3))
+        if kind in ("primary", "focused"):
+            sv.add(rect(x, y, w, 64, C["accent"], rx=32), text(x + w / 2, y + 40, label, 22, 800, anchor="middle"))
+        elif kind == "disabled":
+            sv.add(rect(x, y, w, 64, C["accent"], rx=32, opacity=0.25),
+                   text(x + w / 2, y + 40, label, 22, 800, fill=C["dim"], anchor="middle"))
+        else:
+            sv.add(rect(x, y, w, 64, C["surface"], rx=32, stroke=C["line"], sw=2, opacity=0.85),
+                   text(x + w / 2, y + 40, label, 22, 700, anchor="middle"))
+        x -= 16
+
+
+def system_chip(sv, x, y, size, sysid):
+    """A small swatch in the System's colour, styled like a console_card."""
+    color = SYS[sysid][3]
+    sv.add(rect(x, y, size, size, sv.lin([(0, color), (1, C["bg"])], 0, 0, 0.7, 1), rx=size * 0.2),
+           circle(x + size * 0.7, y + size * 0.3, size * 0.26, "#FFFFFF", 0.1))
+
+
+def check_path(x, y, color, sw=3):
+    """A tick mark about 18 x 13, its top-left at (x, y)."""
+    return (f'<path d="M{x},{y + 7} l6,6 l12,-13" fill="none" stroke="{color}" stroke-width="{sw}"'
+            f' stroke-linecap="round" stroke-linejoin="round"/>')
+
+
+def checkbox(sv, x, y, on, size=30):
+    if on:
+        sv.add(rect(x, y, size, size, C["accent"], rx=8), check_path(x + 6, y + 9, "#FFFFFF"))
+    else:
+        sv.add(rect(x, y, size, size, "none", rx=8, stroke=C["muted"], sw=2))
+
+
+def screen_setup_systems():
+    sv = Svg("26-setup-systems", "First-run Setup: Systems")
+    setup_frame(sv, 1, "Pick your Systems",
+                "Tick the Systems you have Games for. You can add folders for others later.")
+    cols, gap, th, top = 6, 24, 148, 296
+    tile_w = (W - 2 * M - (cols - 1) * gap) / cols
+    for i, (sysid, name, _, _) in enumerate(SYSTEMS):
+        r, c = divmod(i, cols)
+        x, y = M + c * (tile_w + gap), top + r * (th + gap)
+        on = sysid in SETUP_TICKED
+        if sysid == "psp":
+            sv.add(rect(x - 6, y - 6, tile_w + 12, th + 12, "none", rx=20, stroke=C["accent"], sw=4))
+        sv.add(rect(x, y, tile_w, th, C["surface2"] if on else C["surface"], rx=14, stroke=C["line"], sw=1))
+        system_chip(sv, x + 20, y + 20, 52, sysid)
+        checkbox(sv, x + tile_w - 50, y + 31, on)
+        sub = f"Needs {EXTERNAL[sysid]}" if sysid in EXTERNAL else "Plays in Game37"
+        sv.add(text(x + 20, y + 106, name, 21, 700), text(x + 20, y + 132, sub, 16, 500, fill=C["muted"]))
+    w = action_pill(sv, M, 906, "Select all", pad="X")
+    sv.add(text(M + w + 24, 945, f"{len(SETUP_TICKED)} Systems selected", 20, 500, fill=C["muted"]))
+    setup_buttons(sv, [("Quit", "normal"), ("Continue", "primary")])
+    hintbar(sv, [(["A"], "Tick"), (["X"], "Select all"), (["+"], "Continue"), (["B"], "Quit")])
+    sv.save()
+
+
+def command_box(sv, x, y, cmd, focus="Copy"):
+    """The copyable command line with Copy and Check again, as on 09-console-page-emulator-missing."""
+    bw = 42 + tw(cmd, 18) / 0.54 * 0.6 * 1.1 + 24  # MONO is 0.6 em a character
+    sv.add(rect(x, y, bw, 48, "#000000", rx=10, opacity=0.4),
+           text(x + 20, y + 31, "$", 18, 600, fill=C["dim"], font=MONO),
+           text(x + 42, y + 31, cmd, 18, 500, font=MONO))
+    bx = x + bw + 20
+    cw = 130
+    if focus == "Copy":
+        sv.add(rect(bx - 5, y - 5, cw + 10, 58, "none", rx=15, stroke=C["accent"], sw=3))
+    sv.add(rect(bx, y, cw, 48, C["surface2"], rx=10),
+           rect(bx + 22, y + 13, 14, 17, "none", rx=3, stroke=C["text"], sw=2),
+           rect(bx + 27, y + 18, 14, 17, C["surface2"], rx=3, stroke=C["text"], sw=2),
+           text(bx + 56, y + 31, "Copy", 18, 600))
+    bx2 = bx + cw + 20
+    sv.add(rect(bx2, y, 168, 48, "none", rx=10, stroke=C["line"], sw=2),
+           f'<path d="M{bx2 + 34},{y + 16} a9,9 0 1,0 3,7" fill="none" stroke="{C["text"]}" stroke-width="2.4"'
+           f' stroke-linecap="round"/>',
+           f'<path d="M{bx2 + 30},{y + 11} l5,5 l-6,3" fill="none" stroke="{C["text"]}" stroke-width="2.4"'
+           f' stroke-linecap="round" stroke-linejoin="round"/>',
+           text(bx2 + 52, y + 31, "Check again", 18, 600))
+
+
+def screen_setup_emulators():
+    sv = Svg("27-setup-emulators", "First-run Setup: emulators")
+    setup_frame(sv, 2, "Install the emulators", "These Systems run in their own emulator, installed with Flatpak.")
+    rows = [("gc", "org.DolphinEmu.dolphin-emu", True), ("switch", "io.github.ryubing.Ryujinx", False),
+            ("ps2", "net.pcsx2.PCSX2", False)]
+    for i, (sysid, app_id, installed) in enumerate(rows):
+        x, y = M, 296 + i * 112
+        sv.add(rect(x, y, SETUP_W, 96, C["surface"], rx=14, stroke=C["line"], sw=1))
+        system_chip(sv, x + 24, y + 22, 52, sysid)
+        sv.add(text(x + 100, y + 44, SYS[sysid][1], 24, 700),
+               text(x + 100, y + 74, EXTERNAL[sysid], 18, 500, fill=C["muted"]),
+               text(x + 440, y + 56, app_id, 18, 500, fill=C["muted"], font=MONO))
+        r = x + SETUP_W - 28
+        if installed:
+            sv.add(text(r, y + 56, "Installed", 20, 600, fill=C["ahead"], anchor="end"),
+                   check_path(r - tw("Installed", 20, 600) * 1.1 - 32, y + 42, C["ahead"]))
+        else:
+            sv.add(text(r, y + 56, "Not installed", 20, 600, fill=WARN, anchor="end"),
+                   circle(r - tw("Not installed", 20, 600) * 1.1 - 18, y + 49, 6, WARN))
+    missing = [app_id for _, app_id, installed in rows if not installed]
+    sv.add(text(M, 676, "INSTALL THE MISSING ONES", 14, 700, fill=C["muted"], ls=1.5))
+    command_box(sv, M, 696, "flatpak install flathub " + " ".join(missing))
+    sv.add(text(M, 800, "You can continue now and install them later. Missing emulators show on the Carousel.",
+                18, 500, fill=C["muted"]))
+    setup_buttons(sv, [("Back", "normal"), ("Continue", "primary")])
+    hintbar(sv, [(["A"], "Copy"), (["Y"], "Check again"), (["+"], "Continue"), (["B"], "Back")])
+    sv.save()
+
+
+def screen_setup_folders():
+    sv = Svg("28-setup-folders", "First-run Setup: folders")
+    setup_frame(sv, 3, "Make your folders", "Game37 finds Games by the folder they're in.")
+    x, y = M, 296
+    sv.add(rect(x, y, SETUP_W, 96, C["surface"], rx=14, stroke=C["line"], sw=1),
+           text(x + 28, y + 36, "GAMES ROOT", 13, 700, fill=C["muted"], ls=1.5),
+           text(x + 28, y + 74, "~/Games", 26, 600, font=MONO))
+    cw = 160
+    sv.add(rect(x + SETUP_W - 24 - cw, y + 18, cw, 60, C["surface2"], rx=30, stroke=C["line"], sw=2),
+           text(x + SETUP_W - 24 - cw / 2, y + 56, "Change", 20, 700, anchor="middle"))
+    folders = [(s, f"~/Games/{s}/", SYS[s][1]) for s in SETUP_TICKED] + [("bios", "~/Games/bios/", "BIOS")]
+    sv.add(text(M, 444, "FOLDERS", 14, 700, fill=C["muted"], ls=1.5),
+           text(M + 120, 444, f"{len(folders)} of {len(folders)} made", 16, 500, fill=C["muted"]))
+    gy = 464
+    sv.add(rect(M, gy, SETUP_W, 3 * 52 + 40, C["surface"], rx=14, stroke=C["line"], sw=1))
+    for i, (_, path, label) in enumerate(folders):
+        c, r = divmod(i, 3)  # down the columns, so System Order reads top to bottom
+        fx, fy = M + 28 + c * 410, gy + 20 + r * 52
+        sv.add(check_path(fx, fy + 18, C["ahead"]),
+               text(fx + 34, fy + 34, path, 20, 500, font=MONO),
+               text(fx + 232, fy + 34, label, 17, 500, fill=C["muted"]))
+    by = 700
+    bw = 280
+    sv.add(rect(M, by, bw, 64, C["surface"], rx=32, stroke=C["line"], sw=2, opacity=0.6),
+           check_path(M + 32, by + 26, C["ahead"]),
+           text(M + 66, by + 40, "Folders created", 22, 700, fill=C["muted"]),
+           text(M + bw + 24, by + 40, "Folders that already exist are left as they are.", 18, 500, fill=C["dim"]))
+    setup_buttons(sv, [("Back", "normal"), ("Continue", "focused")])
+    hintbar(sv, [(["A"], "Choose"), (["+"], "Continue"), (["B"], "Back")])
+    sv.save()
+
+
+def screen_setup_cores():
+    sv = Svg("29-setup-cores", "First-run Setup: Cores")
+    setup_frame(sv, 4, "Download the Cores",
+                "Embedded Systems play inside Game37 with a libretro Core from the libretro buildbot.")
+    rows = [("nes", "Mesen", "installed"), ("snes", "bsnes", "downloaded"), ("gba", "mGBA", 0.45),
+            ("ps1", "Beetle PSX HW", "waiting"), ("psp", "PPSSPP  ·  plus PPSSPP's assets", "waiting")]
+    for i, (sysid, core, state) in enumerate(rows):
+        x, y = M, 296 + i * 96
+        sv.add(rect(x, y, SETUP_W, 84, C["surface"], rx=14, stroke=C["line"], sw=1))
+        system_chip(sv, x + 22, y + 20, 44, sysid)
+        sv.add(text(x + 90, y + 38, SYS[sysid][1], 22, 700), text(x + 90, y + 64, core, 17, 500, fill=C["muted"]))
+        bx, bw, r = x + 520, 440, x + SETUP_W - 28
+        if state != "installed":
+            sv.add(rect(bx, y + 37, bw, 10, C["surface2"], rx=5))
+        if state == "installed":
+            sv.add(text(r, y + 49, "Installed", 19, 600, fill=C["muted"], anchor="end"),
+                   check_path(r - tw("Installed", 19, 600) * 1.1 - 30, y + 35, C["muted"]))
+        elif state == "downloaded":
+            sv.add(rect(bx, y + 37, bw, 10, C["ahead"], rx=5),
+                   text(r, y + 49, "Downloaded", 19, 600, fill=C["ahead"], anchor="end"),
+                   check_path(r - tw("Downloaded", 19, 600) * 1.1 - 30, y + 35, C["ahead"]))
+        elif state == "waiting":
+            sv.add(text(r, y + 49, "Waiting", 19, 600, fill=C["dim"], anchor="end"))
+        else:
+            sv.add(rect(bx, y + 37, bw * state, 10, C["accent"], rx=5),
+                   text(r, y + 49, f"{round(state * 100)}%", 19, 700, anchor="end"))
+    ny = 796
+    sv.add(rect(M, ny, SETUP_W, 64, WARN, rx=14, opacity=0.1),
+           rect(M, ny, SETUP_W, 64, "none", rx=14, stroke=WARN, sw=2, opacity=0.55),
+           circle(M + 34, ny + 32, 15, WARN), text(M + 34, ny + 39, "!", 19, 800, fill=C["bg"], anchor="middle"),
+           text(M + 64, ny + 39, "PlayStation needs a BIOS file: put scph5500.bin, scph5501.bin or scph5502.bin "
+                                 "in ~/Games/bios/.", 19, 500, fill=WARN))
+    setup_buttons(sv, [("Back", "normal"), ("Continue", "disabled")])
+    hintbar(sv, [(["B"], "Back")])
+    sv.save()
+
+
+def screen_setup_key():
+    sv = Svg("30-setup-key", "First-run Setup: SteamGridDB key")
+    setup_frame(sv, 5, "Add a SteamGridDB key (optional)",
+                "With a free SteamGridDB API key, Game37 fetches covers and banners for your Games. "
+                "Without one, Games show their title and System.")
+    sv.add(text(M, 316, "WHERE TO GET ONE", 14, 700, fill=C["muted"], ls=1.5))
+    x = M
+    for i, part in enumerate(["steamgriddb.com", "Profile", "Preferences", "API"]):
+        if i:
+            sv.add(text(x + 18, 367, "→", 22, 600, fill=C["muted"], anchor="middle"))
+            x += 36
+        w = tw(part, 20, 600) * 1.1 + 40
+        sv.add(rect(x, 336, w, 48, C["surface2"], rx=24, stroke=C["line"], sw=1),
+               text(x + w / 2, 367, part, 20, 600, anchor="middle"))
+        x += w
+    sv.add(text(M, 452, "API KEY", 14, 700, fill=C["muted"], ls=1.5))
+    fx, fy, fw = M, 472, 900
+    masked = "•" * 28 + "3f9a"
+    sv.add(rect(fx, fy, fw, 72, C["surface2"], rx=14, stroke=C["accent"], sw=3),
+           text(fx + 28, fy + 46, masked, 26, 500, font=MONO),
+           rect(fx + 28 + len(masked) * 26 * 0.6 + 4, fy + 20, 3, 32, C["accent"], rx=1))
+    sv.add(text(M, 584, "Saved to ~/.config/game37/secrets.toml on this device only", 18, 500, fill=C["muted"]))
+    setup_buttons(sv, [("Back", "normal"), ("Skip", "normal"), ("Finish", "primary")])
+    hintbar(sv, [(["Ctrl V"], "Paste"), (["Enter"], "Finish"), (["Esc"], "Back")])
+    sv.save()
+
 
 if __name__ == "__main__":
     for fn in [screen_home, screen_home_empty, screen_carousel, screen_console_page, screen_details,
@@ -1152,6 +1387,8 @@ if __name__ == "__main__":
                screen_details_missing_emulator, screen_speedrun_page, screen_splits_editor,
                screen_speedrun_embedded, screen_pause_run, screen_timer_window, screen_details_speedrun,
                screen_settings_library, screen_settings_bios, screen_settings_cores,
-               screen_search, screen_search_controller, screen_search_results, screen_search_empty]:
+               screen_search, screen_search_controller, screen_search_results, screen_search_empty,
+               screen_setup_systems, screen_setup_emulators, screen_setup_folders, screen_setup_cores,
+               screen_setup_key]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))
