@@ -2,6 +2,7 @@
 
 pub mod artwork_picker;
 mod carousel;
+pub mod controller_test;
 pub mod details;
 pub mod download_core;
 pub mod game_grid;
@@ -20,6 +21,7 @@ use crate::ctx::Ctx;
 use crate::ui::nav::{Entries, Entry, Nav};
 
 pub use carousel::Carousel;
+pub use controller_test::ControllerTest;
 pub use game_grid::GameGrid;
 pub use home::Home;
 pub use no_config::NoConfig;
