@@ -10,6 +10,7 @@
 
 mod emulators;
 mod folders;
+mod key;
 mod systems;
 
 use std::path::{Path, PathBuf};
@@ -89,6 +90,9 @@ trait Step {
     }
     /// Called each time the step is shown.
     fn enter(&mut self, _model: &Model, _ctx: &mut Ctx) {}
+    /// Called when the step is left, forward or back, so a step holding something sensitive (the
+    /// typed SteamGridDB key, say) can clear it.
+    fn leave(&mut self) {}
     fn can_continue(&self, model: &Model) -> bool;
     /// Handles input other than Back and Continue (+), which the frame handles. Confirm on a
     /// focused [`Button`] returns its [`Go`].
@@ -98,6 +102,11 @@ trait Step {
     fn hints(&self, model: &Model) -> Vec<Hint>;
     /// Which of the bottom buttons has focus, if one does.
     fn focused_button(&self) -> Option<Button>;
+    /// Runs just before Finish writes the Config; `Err` shows why and keeps the step, writing no
+    /// Config (default: nothing to do).
+    fn before_finish(&mut self, _model: &Model, _ctx: &mut Ctx) -> Result<(), String> {
+        Ok(())
+    }
     /// Whether a text field is open: it then takes all input and its hints, and the bottom
     /// buttons are hidden.
     fn text_input(&self) -> bool {
@@ -164,9 +173,7 @@ impl Setup {
                 Box::new(Later {
                     title: "Download the Cores",
                 }),
-                Box::new(Later {
-                    title: "Add a SteamGridDB key (optional)",
-                }),
+                Box::new(key::Key::new()),
             ],
             at: 0,
             buttons: Vec::new(),
@@ -210,6 +217,7 @@ impl Setup {
             },
             Go::Next => return Transition::None,
         };
+        self.steps[self.at].leave();
         self.at = next;
         self.error = None;
         self.steps[next].enter(&self.model, ctx);
@@ -217,8 +225,13 @@ impl Setup {
     }
 
     /// Writes the Config with the chosen Games Root and asks `app.rs` to switch to Home, or shows
-    /// why it couldn't and stays.
+    /// why it couldn't and stays. First gives the current step a chance to object (the key step
+    /// saving a bad or unwritable SteamGridDB key, say), writing no Config either.
     fn finish(&mut self, ctx: &mut Ctx) {
+        if let Err(e) = self.steps[self.at].before_finish(&self.model, ctx) {
+            self.error = Some(e);
+            return;
+        }
         let config = Config {
             games_root: self.model.games_root.clone(),
         };
