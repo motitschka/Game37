@@ -8,6 +8,7 @@
 //! modal, which goes back to the menu when done.
 
 use std::path::Path;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 use crate::ctx::{self, Ctx, Play};
 use crate::launch;
@@ -104,6 +105,9 @@ struct Slot {
     has_thumb: bool,
 }
 
+/// A slot as read on a thread: `None` when empty, else its time and screenshot.
+type ReadSlot = Option<(Slot, Option<Rgb>)>;
+
 pub struct OptionsMenu {
     game: GameRow,
     /// "<System> · <Playtime> played".
@@ -114,8 +118,15 @@ pub struct OptionsMenu {
     /// Every Favorite, newest first, with whether its file is there, while the replace picker is
     /// open.
     favorites: Vec<(GameRow, bool)>,
-    /// The Game's Save State slots, slot 1 first, `None` when empty; none for an External System.
+    /// Whether each Save State slot is filled, slot 1 first; none for an External System.
+    filled: Vec<bool>,
+    /// Where the Game's Save States are.
+    states: StatePaths,
+    /// The slots' times and screenshots, slot 1 first, `None` when empty: read on a thread when
+    /// the slot picker first opens (NFR-3), and empty until then.
     slots: Vec<Option<Slot>>,
+    /// The slots being read.
+    reading: Option<Receiver<Vec<ReadSlot>>>,
     /// Slot screenshots to hand to `Gfx` on the first draw: `None` forgets an old one.
     uploads: Vec<(usize, Option<Rgb>)>,
     /// The focused entry of the replace or slot picker.
@@ -152,28 +163,12 @@ impl OptionsMenu {
         .filter(|&i| i != Item::LoadSaveState || embedded)
         .collect();
         let states = StatePaths::new(games_root, &game.system, Path::new(&game.rel_path));
-        let infos = if embedded {
-            sdl::slot_infos(&states)
+        // Cheap enough to do here; the screenshots wait for the slot picker.
+        let filled = if embedded {
+            (1..=SLOTS).map(|n| states.slot(n).is_file()).collect()
         } else {
             Vec::new()
         };
-        let (slots, uploads) = infos
-            .into_iter()
-            .enumerate()
-            .map(|(i, info)| match info {
-                Some(info) => {
-                    let has_thumb = info.thumb.is_some();
-                    (
-                        Some(Slot {
-                            when: info.when,
-                            has_thumb,
-                        }),
-                        (i, info.thumb),
-                    )
-                }
-                None => (None, (i, None)),
-            })
-            .unzip();
         OptionsMenu {
             game,
             meta,
@@ -181,8 +176,11 @@ impl OptionsMenu {
             view: View::List,
             item: 0,
             favorites: Vec::new(),
-            slots,
-            uploads,
+            filled,
+            states,
+            slots: Vec::new(),
+            reading: None,
+            uploads: Vec::new(),
             pick: 0,
             item_hits: Vec::new(),
             pick_hits: Vec::new(),
@@ -202,7 +200,49 @@ impl OptionsMenu {
 
     /// How many Save State slots are filled.
     fn filled(&self) -> usize {
-        self.slots.iter().filter(|s| s.is_some()).count()
+        self.filled.iter().filter(|&&f| f).count()
+    }
+
+    /// Reads the slots' times and screenshots on a thread, once.
+    fn read_slots(&mut self) {
+        if !self.slots.is_empty() || self.reading.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let states = self.states.clone();
+        std::thread::spawn(move || {
+            let slots = sdl::slot_infos(&states).into_iter().map(|info| {
+                info.map(|info| {
+                    let slot = Slot {
+                        when: info.when,
+                        has_thumb: info.thumb.is_some(),
+                    };
+                    (slot, info.thumb)
+                })
+            });
+            let _ = tx.send(slots.collect());
+        });
+        self.reading = Some(rx);
+    }
+
+    /// Takes the slots once read, with their screenshots to upload.
+    fn poll_slots(&mut self) {
+        let Some(rx) = &self.reading else { return };
+        match rx.try_recv() {
+            Ok(read) => {
+                self.reading = None;
+                (self.slots, self.uploads) = read
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, slot)| match slot {
+                        Some((slot, thumb)) => (Some(slot), (i, thumb)),
+                        None => (None, (i, None)),
+                    })
+                    .unzip();
+            }
+            Err(TryRecvError::Disconnected) => self.reading = None,
+            Err(TryRecvError::Empty) => {}
+        }
     }
 
     /// The focused entry of the replace or slot picker.
@@ -239,7 +279,7 @@ impl OptionsMenu {
         match self.view {
             View::List | View::Rename => false,
             View::Replace => i < self.favorites.len(),
-            View::Load => self.slots.get(i).is_some_and(Option::is_some),
+            View::Load => self.filled.get(i).copied().unwrap_or(false),
         }
     }
 
@@ -248,7 +288,7 @@ impl OptionsMenu {
         let len = match self.view {
             View::List | View::Rename => 0,
             View::Replace => self.favorites.len(),
-            View::Load => self.slots.len(),
+            View::Load => self.filled.len(),
         };
         let mut i = self.pick as isize + dir;
         while (0..len as isize).contains(&i) {
@@ -326,6 +366,7 @@ impl OptionsMenu {
                 return Transition::None;
             }
             Item::LoadSaveState => {
+                self.read_slots();
                 self.view = View::Load;
                 self.pick = (0..SLOTS).find(|&n| self.pickable(n)).unwrap_or(0);
                 return Transition::None;
@@ -438,11 +479,13 @@ impl OptionsMenu {
         gfx.text(PANEL_X + 48.0, 238.0, "Load save state", heading, Align::Left);
         let sub = TextStyle::new(18, Weight::Medium, MUTED);
         gfx.text(PANEL_X + 48.0, 268.0, "Choose a slot", sub, Align::Left);
-        for (i, slot) in self.slots.iter().enumerate() {
+        for (i, &filled) in self.filled.iter().enumerate() {
+            // A filled slot not read yet shows no time or screenshot for now.
+            let slot = self.slots.get(i).and_then(Option::as_ref);
             let y = SLOT_Y + i as f32 * SLOT_PITCH;
             let r = Rect::new(PANEL_X + 24.0, y, PANEL_W - 48.0, SLOT_ROW_H);
-            let fade = if slot.is_some() { 1.0 } else { 0.4 };
-            if i == self.pick && slot.is_some() {
+            let fade = if filled { 1.0 } else { 0.4 };
+            if i == self.pick && filled {
                 gfx.fill_round_rect(r, 14.0, SURFACE2);
                 let bar_y = y + (SLOT_ROW_H - 40.0) / 2.0;
                 gfx.fill_round_rect(Rect::new(r.x, bar_y, 5.0, 40.0), 2.0, ACCENT);
@@ -452,11 +495,11 @@ impl OptionsMenu {
                 Some(s) if s.has_thumb && gfx.draw_image(THUMB_KEYS[i], thumb) => {
                     gfx.stroke_round_rect(thumb, 10.0, 2.0, LINE);
                 }
-                Some(_) => {
+                _ if filled => {
                     gfx.fill_round_rect(thumb, 10.0, SURFACE2);
                     gfx.stroke_round_rect(thumb, 10.0, 2.0, LINE);
                 }
-                None => {
+                _ => {
                     gfx.fill_round_rect(thumb, 10.0, SURFACE2.alpha(fade));
                     gfx.stroke_round_rect_dashed(thumb, 10.0, 2.0, 10.0, 8.0, LINE.alpha(fade));
                 }
@@ -464,7 +507,11 @@ impl OptionsMenu {
             let x = thumb.x + THUMB_W + 24.0;
             let name = TextStyle::new(22, Weight::Bold, TEXT.alpha(fade));
             gfx.text(x, y + 68.0, &format!("Slot {}", i + 1), name, Align::Left);
-            let when = slot.as_ref().map_or("Empty", |s| s.when.as_str());
+            let when = match slot {
+                Some(s) => s.when.as_str(),
+                None if filled => "…",
+                None => "Empty",
+            };
             let style = TextStyle::new(18, Weight::Medium, MUTED.alpha(fade));
             gfx.text(x, y + 100.0, when, style, Align::Left);
             self.pick_hits.push((r, i));
@@ -601,8 +648,18 @@ impl Screen for OptionsMenu {
         Transition::None
     }
 
+    fn tick(&mut self, _: &mut Ctx) -> Transition {
+        self.poll_slots();
+        Transition::None
+    }
+
+    fn busy(&self) -> bool {
+        self.reading.is_some()
+    }
+
     fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
         self.kind = ctx.input_kind;
+        self.poll_slots();
         for (i, thumb) in self.uploads.drain(..) {
             gfx.set_image(THUMB_KEYS[i], thumb.as_ref());
         }
@@ -977,6 +1034,37 @@ mod tests {
         menu.handle(Input::Pointer(Pointer::Click { x, y }), ctx)
     }
 
+    /// Ticks `menu` until its slots are read, as the app does every frame.
+    fn wait_for_slots(menu: &mut OptionsMenu, ctx: &mut Ctx) {
+        for _ in 0..5000 {
+            menu.tick(ctx);
+            if !menu.busy() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("the slots were never read");
+    }
+
+    /// Opening the menu decodes no screenshot (NFR-3): the slot picker reads them on a thread,
+    /// and its input is handled meanwhile.
+    #[test]
+    fn slot_screenshots_are_read_off_the_ui_thread_once_the_slot_picker_opens() {
+        let (_dir, mut ctx, games) = world(1);
+        fill_slots(&ctx, &games[0], &[2, 3]);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        assert_eq!(menu.filled(), 2, "the count needs no screenshot");
+        assert!(menu.slots.is_empty() && menu.uploads.is_empty() && !menu.busy());
+        act(&mut menu, &mut ctx, Action::Down);
+        act(&mut menu, &mut ctx, Action::Confirm);
+        assert_eq!((menu.view(), menu.picked()), (View::Load, 1));
+        act(&mut menu, &mut ctx, Action::Down);
+        assert_eq!(menu.picked(), 2, "input is handled while reading");
+        wait_for_slots(&mut menu, &mut ctx);
+        let uploads: Vec<_> = menu.uploads.iter().map(|(i, t)| (*i, t.is_some())).collect();
+        assert_eq!(uploads, [(0, false), (1, true), (2, true)]);
+    }
+
     #[test]
     fn load_save_state_cant_be_chosen_without_a_filled_slot() {
         let (_dir, mut ctx, games) = world(1);
@@ -1007,6 +1095,7 @@ mod tests {
         ));
         assert_eq!((menu.view(), menu.picked()), (View::Load, 0));
         assert_eq!(menu.hints()[0], Hint::new(&[Action::Confirm], "Load"));
+        wait_for_slots(&mut menu, &mut ctx);
         let shown: Vec<_> = menu
             .slots
             .iter()
