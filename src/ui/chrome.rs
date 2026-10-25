@@ -160,7 +160,8 @@ pub struct TopBar<'a> {
     pub tabs: Option<(&'a [&'a str], usize)>,
     /// Title of the screen Back returns to, for the "‹ title" affordance.
     pub back: Option<&'a str>,
-    pub clock: &'a str,
+    /// The time, when the clock shows.
+    pub clock: Option<&'a str>,
     /// Whether the search pill shows: only with a library, and not under the Search screen, which
     /// draws its own field there.
     pub search: bool,
@@ -250,13 +251,10 @@ pub fn topbar(gfx: &mut Gfx<'_>, bar: &TopBar<'_>) -> TopBarHits {
         button
     });
 
-    gfx.text(
-        W - M,
-        76.0,
-        bar.clock,
-        TextStyle::new(24, Weight::SemiBold, TEXT),
-        Align::Right,
-    );
+    if let Some(clock) = bar.clock {
+        let style = TextStyle::new(24, Weight::SemiBold, TEXT);
+        gfx.text(W - M, 76.0, clock, style, Align::Right);
+    }
     TopBarHits {
         tabs,
         back,

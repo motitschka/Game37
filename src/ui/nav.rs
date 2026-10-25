@@ -62,6 +62,10 @@ pub trait Screen {
     fn search_pill(&self) -> bool {
         true
     }
+    /// Whether the top bar draws the clock over it. First-run Setup shows its progress there.
+    fn clock(&self) -> bool {
+        true
+    }
     /// While the top screen returns true, controller buttons and sticks don't become menu
     /// [`Input`]s; keyboard and mouse still do.
     fn raw_controller(&self) -> bool {

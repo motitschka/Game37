@@ -88,6 +88,22 @@ shot m5-rename "$root/cfg.toml" \
 # M6: top bar entries
 shot m6-search-open "$root/cfg.toml" "down,down,search"
 shot m6-settings-open "$root/cfg.toml" "settings"
+# First-run Setup step 2: GameCube, Switch and PlayStation 2 ticked, then every System
+shot m6-setup-emulators "$root/missing.toml" \
+    "down,confirm,down,right,confirm,up,right,right,right,right,confirm,settings" --missing-emulators switch,ps2
+shot m6-setup-emulators-all "$root/missing.toml" "sort,settings" --missing-emulators wii,3ds,wiiu,switch,ps2,ps3,ps4
+# First-run Setup step 3: NES, GameCube, Switch and PlayStation 2 ticked, on through step 2, then
+# Create folders, under the Games Root that screenshot mode puts in the data dir
+shot m6-setup-folders "$root/missing.toml" \
+    "confirm,down,confirm,down,right,confirm,up,right,right,right,right,confirm,settings,settings,confirm" \
+    --missing-emulators switch,ps2
+# First-run Setup's Finish: NES ticked, step 2 passed over, Create folders on step 3, on through
+# the placeholder steps 4 and 5, then Finish, which writes its own Config in the smoke dir and
+# switches to Home. The shots above share missing.toml, so check no Finish wrote it.
+shot m6-setup-finish "$root/setup-finish.toml" "confirm,settings,confirm,settings,settings,settings,wait:5"
+[ -f "$root/setup-finish.toml" ] || echo "FAIL m6-setup-finish (Finish wrote no Config)"
+[ ! -e "$root/missing.toml" ] || echo "FAIL $root/missing.toml exists, so the no-Config shots had a Config"
+
 # M6: Controller test
 shot m6-controller-test "$root/cfg.toml" "" --screen controller-test
 

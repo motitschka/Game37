@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use crate::artwork::Artwork;
+use crate::config::Config;
 use crate::cores::{CoreInfo, Download};
 use crate::emulators::Emulators;
 use crate::library::db::{DbError, GameRow, Library};
@@ -72,6 +73,9 @@ pub struct Ctx {
     /// A Game of an Embedded System a screen asked to play; `app.rs` takes it and starts it on
     /// its Core.
     pub play: Option<Play>,
+    /// The Config First-run Setup's Finish wrote (FR-CFG-4); `app.rs` takes it and switches to Home
+    /// as if Game37 had started with it.
+    pub setup_finished: Option<Config>,
     /// Starts downloading a Core (FR-EMB-2): `Download::start` in production; tests and
     /// screenshot mode's offline cases swap it so they never hit the network.
     pub start_download: Box<dyn Fn(&'static CoreInfo, PathBuf) -> Download>,
@@ -108,6 +112,7 @@ impl Ctx {
             show_file_request: None,
             launch: None,
             play: None,
+            setup_finished: None,
             start_download: Box::new(Download::start),
             start_assets_download: Box::new(Download::start_assets),
             artwork: Artwork::off(),

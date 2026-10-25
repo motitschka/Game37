@@ -160,7 +160,8 @@ pub fn load(path: &Path) -> Result<Option<Config>, ConfigError> {
     Ok(Some(Config { games_root }))
 }
 
-fn expand_home(path: &str) -> PathBuf {
+/// `path` with a leading `~` standing for the home folder; anything else as given.
+pub fn expand_home(path: &str) -> PathBuf {
     match path.strip_prefix("~/") {
         Some(rest) => dirs::home_dir().expect("no home directory").join(rest),
         None if path == "~" => dirs::home_dir().expect("no home directory"),
