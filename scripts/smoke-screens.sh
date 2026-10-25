@@ -107,4 +107,9 @@ shot m6-settings-hidden "$root/cfg.toml" "down,down,options,down,down,down,confi
 shot m6-settings-reset "$root/cfg.toml" "settings,right,down,down,down,confirm"
 shot m6-settings-about "$root/cfg.toml" "settings$(printf ',down%.0s' {1..6})"
 
+# M6: Settings Artwork: the key row with no key set (screenshot mode runs Artwork off, so it shows
+# "Not set"), and the key entry modal with a typed key
+shot m6-settings-artwork "$root/cfg.toml" "settings,down,right"
+shot m6-settings-key "$root/cfg.toml" "settings,down,right,confirm,text:abcdef0123456789"
+
 echo "screenshots in $out"
