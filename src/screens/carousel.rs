@@ -421,6 +421,8 @@ impl Screen for Carousel {
         vec![
             Hint::new(&[Action::Confirm], "Open"),
             Hint::new(&[Action::PrevTab, Action::NextTab], "Switch view"),
+            Hint::new(&[Action::Search], "Search"),
+            Hint::new(&[Action::Settings], "Settings"),
         ]
     }
 }
@@ -529,6 +531,19 @@ mod tests {
         assert_eq!(slot(-2.0).size, 210.0);
         assert_eq!(slot(0.5).size, 405.0);
         assert_eq!(slot(-0.5).cx, 715.0);
+    }
+
+    #[test]
+    fn the_hints_end_with_search_and_settings() {
+        let hints = Carousel::new(&Ctx::empty().library).hints();
+        assert_eq!(
+            hints[hints.len() - 3..],
+            [
+                Hint::new(&[Action::PrevTab, Action::NextTab], "Switch view"),
+                Hint::new(&[Action::Search], "Search"),
+                Hint::new(&[Action::Settings], "Settings"),
+            ]
+        );
     }
 
     #[test]

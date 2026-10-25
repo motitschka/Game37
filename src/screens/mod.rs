@@ -17,7 +17,7 @@ use std::path::Path;
 
 use crate::config::{Config, ConfigError};
 use crate::ctx::Ctx;
-use crate::ui::nav::{Entries, Nav};
+use crate::ui::nav::{Entries, Entry, Nav};
 
 pub use carousel::Carousel;
 pub use game_grid::GameGrid;
@@ -42,14 +42,16 @@ pub fn start(config: Result<Option<Config>, ConfigError>, path: &Path, ctx: &Ctx
 /// The Search and Settings screens the top bar opens.
 fn entries() -> Entries {
     Entries {
-        search: Box::new(|_| Box::new(Stub::new("Search"))),
-        settings: Box::new(|_| Box::new(Stub::new("Settings"))),
+        search: Box::new(|_| Box::new(Stub::for_entry("Search", Entry::Search))),
+        settings: Box::new(|_| Box::new(Stub::for_entry("Settings", Entry::Settings))),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::input::{Action, Input};
+    use crate::ui::nav::Hits;
     use std::path::PathBuf;
 
     #[test]
@@ -72,5 +74,31 @@ mod tests {
         assert_eq!(nav.tab_labels(), None);
         assert_eq!(nav.top().title(), "First-run Setup");
         assert!(!nav.has_library(), "no Search or Settings");
+    }
+
+    #[test]
+    fn search_and_settings_open_their_placeholders() {
+        let ctx = &mut Ctx::empty();
+        let config = Config {
+            games_root: PathBuf::from("/g"),
+        };
+        let mut nav = start(Ok(Some(config)), Path::new("/c.toml"), ctx);
+        let mut open = |action| {
+            nav.handle(Input::Action(action), &Hits::default(), ctx);
+            let top = nav.top();
+            let seen = (top.title().to_owned(), top.entry(), top.search_pill());
+            nav.handle(Input::Action(Action::Back), &Hits::default(), ctx);
+            assert_eq!(nav.depth(), 1, "Back leaves {}", seen.0);
+            seen
+        };
+        assert_eq!(
+            open(Action::Search),
+            ("Search".to_owned(), Some(Entry::Search), false),
+            "Search draws its own field instead of the pill"
+        );
+        assert_eq!(
+            open(Action::Settings),
+            ("Settings".to_owned(), Some(Entry::Settings), true)
+        );
     }
 }
