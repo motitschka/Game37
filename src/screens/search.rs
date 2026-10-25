@@ -10,10 +10,10 @@ use crate::library::db::GameRow;
 use crate::systems;
 use crate::ui::cover::{self, COVER_GAP, COVER_H, COVER_W, RING_REACH};
 use crate::ui::gfx::{Align, Gfx, TextStyle};
-use crate::ui::input::{Action, Input, Pointer};
+use crate::ui::input::{Action, Input, InputKind, Pointer};
 use crate::ui::nav::{Entry, Hint, Screen, Transition};
 use crate::ui::text::Weight;
-use crate::ui::text_entry::{Outcome, TextEntry};
+use crate::ui::text_entry::{KEYBOARD_H, KEYBOARD_W, Outcome, TextEntry};
 use crate::ui::theme::{ACCENT, BG, LINE, MUTED, SURFACE, TEXT};
 use crate::ui::{M, Rect, W, hit, scroll};
 
@@ -37,6 +37,10 @@ const WHEEL_STEP: f32 = PITCH_Y / 2.0;
 const CAPTION_H: f32 = 76.0;
 /// Where the empty-query hint and the no-match message go.
 const MESSAGE_Y: f32 = 520.0;
+/// The tray the on-screen keyboard is docked in (FR-SRCH-2), just above the hint bar, with the
+/// keyboard centred in it.
+const TRAY_PAD: f32 = 24.0;
+const TRAY_Y: f32 = BOTTOM - TRAY_PAD - KEYBOARD_H - TRAY_PAD;
 
 /// What has focus: the field, being typed into, or the results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +62,9 @@ pub struct Search {
     grid_focus: usize,
     scroll: f32,
     hits: Vec<(Rect, usize)>,
+    /// What the player last used, as of the last input or frame: on a controller the field has
+    /// the on-screen keyboard.
+    kind: InputKind,
 }
 
 impl Search {
@@ -72,6 +79,7 @@ impl Search {
             grid_focus: 0,
             scroll: 0.0,
             hits: Vec::new(),
+            kind: ctx.input_kind,
         };
         search.reload(ctx);
         search
@@ -126,9 +134,15 @@ impl Search {
         }
     }
 
-    /// Where the grid ends.
+    /// Whether the on-screen keyboard is docked at the bottom: while the field has focus on a
+    /// controller.
+    fn keyboard_shown(&self) -> bool {
+        self.focus == Focus::Field && self.kind == InputKind::Controller
+    }
+
+    /// Where the grid ends: above the on-screen keyboard while it shows.
     fn bottom(&self) -> f32 {
-        BOTTOM
+        if self.keyboard_shown() { TRAY_Y } else { BOTTOM }
     }
 
     fn content_h(&self) -> f32 {
@@ -188,6 +202,18 @@ impl Search {
         match input {
             Input::Action(Action::Back) => return self.back_from_field(ctx),
             Input::Action(Action::Search) => {}
+            Input::Pointer(Pointer::Click { x, y } | Pointer::RightClick { x, y })
+                if self.focus_at(x, y) || FIELD.contains(x, y) =>
+            {
+                return self.handle_pointer(input, ctx);
+            }
+            Input::Pointer(Pointer::Wheel { .. }) => return self.handle_pointer(input, ctx),
+            // The on-screen keyboard takes the rest: its keys, Y, X, and Start or Done to finish.
+            _ if self.keyboard_shown() => match self.entry.handle(input) {
+                Outcome::Changed => self.requery(ctx),
+                Outcome::Submit => self.enter_results(),
+                Outcome::None | Outcome::Cancel => {}
+            },
             Input::Action(Action::Down | Action::Start) => self.enter_results(),
             Input::Text(_) => {
                 if self.entry.handle(input) == Outcome::Changed {
@@ -285,7 +311,13 @@ impl Search {
     /// A muted line centred in the space for the results.
     fn draw_message(&self, gfx: &mut Gfx<'_>, message: &str) {
         let style = TextStyle::new(26, Weight::Medium, MUTED);
-        gfx.text(W / 2.0, MESSAGE_Y, message, style, Align::Centre);
+        // Above the on-screen keyboard, centred between it and the field.
+        let y = if self.keyboard_shown() {
+            (FIELD.y + FIELD.h + TRAY_Y) / 2.0 + 9.0
+        } else {
+            MESSAGE_Y
+        };
+        gfx.text(W / 2.0, y, message, style, Align::Centre);
     }
 
     /// The count line and the covers, the focused one with its Display Title and System name under
@@ -373,6 +405,7 @@ impl Screen for Search {
     }
 
     fn handle(&mut self, input: Input, ctx: &mut Ctx) -> Transition {
+        self.kind = ctx.input_kind;
         self.reload_if_changed(ctx);
         match self.focus {
             Focus::Field => self.handle_field(input, ctx),
@@ -381,6 +414,7 @@ impl Screen for Search {
     }
 
     fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
+        self.kind = ctx.input_kind;
         self.reload_if_changed(ctx);
         self.hits.clear();
         self.draw_field(gfx);
@@ -389,11 +423,27 @@ impl Screen for Search {
         } else {
             self.draw_results(gfx, ctx);
         }
+        if self.keyboard_shown() {
+            gfx.fill_rect(Rect::new(0.0, TRAY_Y, W, BOTTOM - TRAY_Y), SURFACE);
+            gfx.fill_rect(Rect::new(0.0, TRAY_Y, W, 1.0), LINE);
+            self.entry
+                .draw_keyboard(gfx, (W - KEYBOARD_W) / 2.0, TRAY_Y + TRAY_PAD);
+        }
     }
 
     fn hints(&self) -> Vec<Hint> {
         let mut hints = Vec::new();
         match self.focus {
+            // The on-screen keyboard's own hints, but Start goes to the results, and only when
+            // there are any, and Back closes as everywhere else on Search.
+            Focus::Field if self.keyboard_shown() => {
+                let keys = TextEntry::hints(InputKind::Controller, "Results");
+                hints.extend(keys.into_iter().filter(|h| match h.actions {
+                    [Action::Back] => false,
+                    [Action::Start] => !self.games.is_empty(),
+                    _ => true,
+                }));
+            }
             Focus::Field => {
                 if !self.games.is_empty() {
                     hints.push(Hint::new(&[Action::Down], "Results"));
@@ -425,7 +475,8 @@ impl Screen for Search {
 mod tests {
     use super::*;
     use crate::library::FoundGame;
-    use crate::ui::input::{InputKind, TextInput};
+    use crate::ui::input::TextInput;
+    use crate::ui::text_entry::Key;
 
     /// A library with these SNES Games, in a temp Games Root, the player on the keyboard.
     fn ctx_with(titles: &[&str]) -> (tempfile::TempDir, Ctx) {
@@ -604,6 +655,112 @@ mod tests {
             "the results reload when the library changes"
         );
         assert_eq!(Search::new(&ctx).total, 1, "nor counts in the empty query's hint");
+    }
+
+    /// The same library with the player on a controller.
+    fn pad_ctx_with(titles: &[&str]) -> (tempfile::TempDir, Ctx) {
+        let (dir, mut ctx) = ctx_with(titles);
+        ctx.input_kind = InputKind::Controller;
+        (dir, ctx)
+    }
+
+    #[test]
+    fn on_a_controller_the_field_types_with_the_on_screen_keyboard() {
+        let (_dir, mut ctx) = pad_ctx_with(&["Quest", "Q Bert"]);
+        let mut search = Search::new(&ctx);
+        assert!(search.keyboard_shown() && search.text_input());
+        assert_eq!(search.bottom(), TRAY_Y, "the results end above the keyboard");
+        act(&mut search, Action::Confirm, &mut ctx);
+        assert_eq!(search.query(), "q", "A types the focused key");
+        assert_eq!(titles(&search), ["Q Bert", "Quest"]);
+        act(&mut search, Action::Sort, &mut ctx);
+        assert_eq!(search.query(), "q ", "X types a space");
+        act(&mut search, Action::Options, &mut ctx);
+        assert_eq!(search.query(), "q", "Y erases");
+        act(&mut search, Action::Down, &mut ctx);
+        assert!(search.keyboard_shown(), "Down moves over the keys");
+        assert_eq!(search.entry.focused(), Key::Char('a'));
+    }
+
+    #[test]
+    fn start_or_done_moves_into_the_results_and_up_from_the_top_row_brings_the_keyboard_back() {
+        let (_dir, mut ctx) = pad_ctx_with(&["Quest"]);
+        let mut search = Search::new(&ctx);
+        act(&mut search, Action::Confirm, &mut ctx);
+        act(&mut search, Action::Start, &mut ctx);
+        assert!(
+            !search.keyboard_shown() && !search.text_input(),
+            "Start finishes typing"
+        );
+        assert_eq!(search.bottom(), BOTTOM);
+        act(&mut search, Action::Up, &mut ctx);
+        assert!(
+            search.keyboard_shown(),
+            "Up from the top row brings the keyboard back"
+        );
+        // Down to the bottom row, then round to Done.
+        for dir in [Action::Down, Action::Down, Action::Down, Action::Left] {
+            act(&mut search, dir, &mut ctx);
+        }
+        assert_eq!(search.entry.focused(), Key::Done);
+        act(&mut search, Action::Confirm, &mut ctx);
+        assert!(
+            !search.keyboard_shown() && !search.text_input(),
+            "Done finishes typing"
+        );
+    }
+
+    #[test]
+    fn done_with_no_results_stays_in_the_field() {
+        let (_dir, mut ctx) = pad_ctx_with(&["Quest"]);
+        let mut search = Search::new(&ctx);
+        act(&mut search, Action::Start, &mut ctx);
+        assert!(search.keyboard_shown());
+    }
+
+    #[test]
+    fn back_on_the_on_screen_keyboard_clears_then_closes() {
+        let (_dir, mut ctx) = pad_ctx_with(&["Quest"]);
+        let mut search = Search::new(&ctx);
+        act(&mut search, Action::Confirm, &mut ctx);
+        assert!(matches!(
+            act(&mut search, Action::Back, &mut ctx),
+            Transition::None
+        ));
+        assert_eq!(search.query(), "");
+        assert!(matches!(
+            act(&mut search, Action::Back, &mut ctx),
+            Transition::Pop
+        ));
+    }
+
+    #[test]
+    fn the_keyboard_follows_the_input_kind_mid_way() {
+        let (_dir, mut ctx) = pad_ctx_with(&["Quest"]);
+        let mut search = Search::new(&ctx);
+        act(&mut search, Action::Confirm, &mut ctx);
+        ctx.input_kind = InputKind::Keyboard;
+        act(&mut search, Action::Down, &mut ctx);
+        assert!(!search.text_input(), "on the keyboard Down goes into the results");
+        act(&mut search, Action::Up, &mut ctx);
+        assert!(search.text_input() && !search.keyboard_shown());
+        ctx.input_kind = InputKind::Controller;
+        act(&mut search, Action::Down, &mut ctx);
+        assert!(
+            search.keyboard_shown(),
+            "back on the controller Down moves over the keys"
+        );
+    }
+
+    #[test]
+    fn the_on_screen_keyboard_hints_end_with_results_and_close() {
+        let (_dir, mut ctx) = pad_ctx_with(&["Quest"]);
+        let mut search = Search::new(&ctx);
+        let texts = |search: &Search| search.hints().iter().map(|h| h.text).collect::<Vec<_>>();
+        assert_eq!(texts(&search), ["Type", "Backspace", "Space", "Close"]);
+        act(&mut search, Action::Confirm, &mut ctx);
+        assert_eq!(texts(&search), ["Type", "Backspace", "Space", "Results", "Close"]);
+        assert_eq!(search.hints()[3], Hint::new(&[Action::Start], "Results"));
     }
 
     #[test]
