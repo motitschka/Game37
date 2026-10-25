@@ -51,6 +51,8 @@ pub struct Row {
     pub danger: bool,
     /// What Confirm does, for the hint bar.
     pub verb: &'static str,
+    /// Confirm does nothing on it, so the hint bar names no verb.
+    pub inert: bool,
 }
 
 impl Row {
@@ -62,6 +64,7 @@ impl Row {
             opens: false,
             danger: false,
             verb: "Open",
+            inert: false,
         }
     }
 
@@ -90,6 +93,10 @@ impl Row {
     pub fn verb(self, verb: &'static str) -> Row {
         Row { verb, ..self }
     }
+
+    pub fn inert(self) -> Row {
+        Row { inert: true, ..self }
+    }
 }
 
 /// One section of Settings. A section with no rows (About) only shows text and can't be entered.
@@ -110,6 +117,21 @@ pub trait Section {
     }
     /// What a section without rows shows in the rows column.
     fn draw_body(&mut self, _gfx: &mut Gfx<'_>, _ctx: &Ctx) {}
+    /// Called when the section gets the focus, so it re-checks what it shows.
+    fn shown(&mut self, _ctx: &Ctx) {}
+    /// Called once a frame for every section, focused or not, so a download goes on meanwhile.
+    fn tick(&mut self, _ctx: &mut Ctx) {}
+    /// Where each of `rows` is drawn, with its index, for the mouse: the cards of [`row_rects`]
+    /// unless the section lays out its rows itself.
+    fn layout(&self, rows: &[Row]) -> Vec<(Rect, usize)> {
+        row_rects(rows)
+    }
+    /// Draws `rows` in the section's own [`Section::layout`] and returns true, for a table the cards
+    /// don't fit. `focused` is the focused row while the focus is in the rows. The default draws
+    /// nothing and returns false, so Settings draws the cards.
+    fn draw_rows(&mut self, _gfx: &mut Gfx<'_>, _ctx: &Ctx, _rows: &[Row], _focused: Option<usize>) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,8 +160,8 @@ impl Settings {
         Settings::with_sections(vec![
             Box::new(library::Library::default()),
             Box::new(artwork::Artwork),
-            Box::new(bios::Bios),
-            Box::new(cores::Cores),
+            Box::new(bios::Bios::default()),
+            Box::new(cores::Cores::default()),
             Box::new(controls::Controls),
             Box::new(display::Display),
             Box::new(about::About),
@@ -183,6 +205,7 @@ impl Settings {
         if i != self.section {
             self.section = i;
             self.row = 0;
+            self.sections[i].shown(ctx);
         }
         self.focus = Focus::Sections;
         self.refresh(ctx);
@@ -209,7 +232,7 @@ impl Settings {
             } else {
                 self.focus_section(i, ctx);
             }
-        } else if let Some(i) = hit(&row_rects(&self.rows), x, y) {
+        } else if let Some(i) = hit(&self.sections[self.section].layout(&self.rows), x, y) {
             if i == self.row && self.focus == Focus::Rows {
                 return self.sections[self.section].confirm(i, ctx);
             }
@@ -337,17 +360,25 @@ impl Screen for Settings {
         );
         self.draw_sections(gfx);
         gfx.fill_rect(Rect::new(M + 400.0, TOP, 1.0, 740.0), LINE);
+        let focused = (self.focus == Focus::Rows).then_some(self.row);
         if self.rows.is_empty() {
             self.sections[self.section].draw_body(gfx, ctx);
-        } else {
+        } else if !self.sections[self.section].draw_rows(gfx, ctx, &self.rows, focused) {
             self.draw_rows(gfx);
         }
+    }
+
+    fn tick(&mut self, ctx: &mut Ctx) -> Transition {
+        for section in &mut self.sections {
+            section.tick(ctx);
+        }
+        Transition::None
     }
 
     fn hints(&self) -> Vec<Hint> {
         let verb = match self.focus {
             Focus::Sections => (!self.rows.is_empty()).then_some("Open"),
-            Focus::Rows => self.rows.get(self.row).map(|r| r.verb),
+            Focus::Rows => self.rows.get(self.row).filter(|r| !r.inert).map(|r| r.verb),
         };
         let back = Hint::new(&[Action::Back], "Back");
         match verb {
