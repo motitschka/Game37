@@ -797,27 +797,48 @@ mod tests {
     }
 
     /// Held arrow keys reach port 0's left stick only on a stick-mode System (N64, PSP), as
-    /// `tick` wires `apply_keyboard_stick` in.
+    /// `Session::tick` wires `apply_keyboard_stick` in: checked on what a real Core receives. bsnes
+    /// reads the d-pad; its session then plays as a stick-mode one would.
     #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
     fn held_arrow_keys_reach_port_0s_left_stick_only_on_stick_mode_systems() {
-        use crate::libretro::InputState;
-
+        let _serial = serial();
+        let root = TempDir::new().unwrap();
+        let rel = "snes/240p Test Suite (World).sfc";
+        fs::create_dir_all(root.path().join("snes")).unwrap();
+        fs::copy(Path::new(TESTDATA).join("games").join(rel), root.path().join(rel)).unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = root.path().to_path_buf();
+        ctx.data_dir = Path::new(TESTDATA).join("data");
+        let game = GameRow {
+            id: 1,
+            system: "snes".into(),
+            rel_path: rel.into(),
+            title: "240p Test Suite".into(),
+            date_added: 0,
+            last_played: None,
+            playtime_secs: 0,
+            favorite: false,
+        };
+        let mut session =
+            Session::start(&Play::resume(game), &ctx, None, None, None).unwrap_or_else(|e| panic!("{e}"));
         let left_held = |k: Scancode| k == Scancode::Left;
-
-        let mut input = InputState::default();
-        apply_keyboard_stick(&mut input, left_held, false);
+        // A tick of 20 ms runs at least one Core frame.
+        let stick = |session: &mut Session| {
+            assert!(!session.tick(&mut NoPicture, 0.02, &[], Mouse::default(), left_held));
+            session.core.last_input().stick(0, Stick::Left)
+        };
+        assert!(session.stick_dpad);
         assert_eq!(
-            input.stick(0, Stick::Left),
-            (-0x7fff, 0),
-            "a stick-mode System (N64, PSP) gets the held Left on port 0's left stick"
-        );
-
-        let mut input = InputState::default();
-        apply_keyboard_stick(&mut input, left_held, true);
-        assert_eq!(
-            input.stick(0, Stick::Left),
+            stick(&mut session),
             (0, 0),
             "a d-pad System leaves the stick centred: its own d-pad press is enough"
+        );
+        session.stick_dpad = false;
+        assert_eq!(
+            stick(&mut session),
+            (-0x7fff, 0),
+            "a stick-mode System (N64, PSP) gets the held Left on port 0's left stick"
         );
     }
 

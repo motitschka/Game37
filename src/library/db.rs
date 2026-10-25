@@ -374,6 +374,47 @@ impl Library {
         Ok(())
     }
 
+    /// Every Favorite, newest first, each with whether its file is there: the limit of 5
+    /// (FR-HOME-6) counts them all, so a Favorite whose file is away for now (a drive unplugged)
+    /// keeps its place, and the replace picker offers it too.
+    pub fn all_favorites(&self) -> Result<Vec<(GameRow, bool)>, DbError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, system, rel_path, COALESCE(renamed_title, title), date_added, last_played,
+                    playtime_secs, favorited_at, present
+             FROM games WHERE favorited_at IS NOT NULL",
+        )?;
+        let mut games = stmt
+            .query_map([], |r| Ok((Fetched::from_row(r)?, r.get::<_, bool>(8)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        games.sort_by_cached_key(|(g, _)| (Shelf::Favorites.key(g), g.row.title.to_lowercase(), g.row.id));
+        Ok(games.into_iter().map(|(g, present)| (g.row, present)).collect())
+    }
+
+    /// Unfavorites `old` and favorites `new` in one transaction, so a failure leaves both as they
+    /// were.
+    pub fn replace_favorite(&mut self, old: i64, new: i64, now: i64) -> Result<(), DbError> {
+        let tx = self.conn.transaction()?;
+        tx.execute("UPDATE games SET favorited_at = NULL WHERE id = ?1", [old])?;
+        tx.execute(
+            "UPDATE games SET favorited_at = COALESCE(favorited_at, ?2) WHERE id = ?1",
+            [new, now],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Makes favoriting Game `id` fail, for tests of what a failed write does.
+    #[cfg(test)]
+    pub(crate) fn fail_favoriting(&self, id: i64) {
+        self.conn
+            .execute_batch(&format!(
+                "CREATE TEMP TRIGGER fail_favoriting BEFORE UPDATE OF favorited_at ON games
+                 WHEN NEW.id = {id} AND NEW.favorited_at IS NOT NULL
+                 BEGIN SELECT RAISE(ABORT, 'favoriting fails'); END"
+            ))
+            .unwrap();
+    }
+
     /// Records a play session that ended at `ended_at` and lasted `secs`.
     pub fn record_play(&self, id: i64, ended_at: i64, secs: u64) -> Result<(), DbError> {
         let secs = i64::try_from(secs).unwrap_or(i64::MAX);
@@ -677,6 +718,44 @@ mod tests {
         assert_eq!(titles(&shelf), ["Beta", "Alpha", "Delta", "eps"]);
         assert!(shelf.iter().all(|r| r.favorite));
         assert_eq!(lib.shelf_count(Shelf::Favorites).unwrap(), 4);
+    }
+
+    #[test]
+    fn all_favorites_include_absent_ones_newest_first() {
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_system("snes", &games("snes", &["A", "B", "C"]), 0)
+            .unwrap();
+        let (a, b) = (id_of(&lib, "snes", "A"), id_of(&lib, "snes", "B"));
+        lib.set_favorite(a, true, 1).unwrap();
+        lib.set_favorite(b, true, 2).unwrap();
+        lib.sync_system("snes", &games("snes", &["B", "C"]), 0).unwrap();
+        let all: Vec<_> = lib
+            .all_favorites()
+            .unwrap()
+            .into_iter()
+            .map(|(g, present)| (g.title, present))
+            .collect();
+        assert_eq!(all, [("B".to_owned(), true), ("A".to_owned(), false)]);
+        assert_eq!(
+            lib.shelf_count(Shelf::Favorites).unwrap(),
+            1,
+            "the Shelf shows B only"
+        );
+    }
+
+    #[test]
+    fn a_failed_favorite_replacement_changes_nothing() {
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_system("snes", &games("snes", &["A", "B"]), 0).unwrap();
+        let (a, b) = (id_of(&lib, "snes", "A"), id_of(&lib, "snes", "B"));
+        lib.set_favorite(a, true, 1).unwrap();
+        lib.fail_favoriting(b);
+        assert!(lib.replace_favorite(a, b, 2).is_err());
+        assert_eq!(
+            titles(&lib.shelf(Shelf::Favorites, None).unwrap()),
+            ["A"],
+            "A is still one"
+        );
     }
 
     #[test]
