@@ -17,7 +17,7 @@ use std::path::Path;
 
 use crate::config::{Config, ConfigError};
 use crate::ctx::Ctx;
-use crate::ui::nav::Nav;
+use crate::ui::nav::{Entries, Nav};
 
 pub use carousel::Carousel;
 pub use game_grid::GameGrid;
@@ -25,16 +25,25 @@ pub use home::Home;
 pub use no_config::NoConfig;
 pub use stub::Stub;
 
-/// Home and Consoles when a Config exists; otherwise the placeholder for First-run Setup, which
-/// isn't built yet.
+/// Home and Consoles, with Search and Settings, when a Config exists; otherwise the placeholder for
+/// First-run Setup, which isn't built yet.
 pub fn start(config: Result<Option<Config>, ConfigError>, path: &Path, ctx: &Ctx) -> Nav {
     match config {
         Ok(Some(_config)) => Nav::with_tabs(vec![
             ("Home", Box::new(Home::new())),
             ("Consoles", Box::new(Carousel::new(&ctx.library))),
-        ]),
+        ])
+        .with_entries(entries()),
         Ok(None) => Nav::single(Box::new(NoConfig::missing(path))),
         Err(e) => Nav::single(Box::new(NoConfig::unreadable(&e))),
+    }
+}
+
+/// The Search and Settings screens the top bar opens.
+fn entries() -> Entries {
+    Entries {
+        search: Box::new(|_| Box::new(Stub::new("Search"))),
+        settings: Box::new(|_| Box::new(Stub::new("Settings"))),
     }
 }
 
@@ -54,6 +63,7 @@ mod tests {
         );
         assert_eq!(nav.tab_labels(), Some(vec!["Home", "Consoles"]));
         assert_eq!(nav.top().title(), "Home");
+        assert!(nav.has_library(), "with Search and Settings");
     }
 
     #[test]
@@ -61,5 +71,6 @@ mod tests {
         let mut nav = start(Ok(None), Path::new("/c.toml"), &Ctx::empty());
         assert_eq!(nav.tab_labels(), None);
         assert_eq!(nav.top().title(), "First-run Setup");
+        assert!(!nav.has_library(), "no Search or Settings");
     }
 }

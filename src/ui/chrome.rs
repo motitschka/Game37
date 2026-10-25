@@ -1,11 +1,11 @@
-//! The chrome every screen shares, after `background`, `glyph`, `hintbar`, `logo` and `topbar` in
-//! `design/generate_mockups.py`.
+//! The chrome every screen shares, after `background`, `glyph`, `hintbar`, `logo`, `gear_button`
+//! and `topbar` in `design/generate_mockups.py`.
 
 use super::gfx::{Align, Gfx, TextStyle};
 use super::input::{Action, ButtonStyle, InputKind, glyph_label};
 use super::nav::Hint;
 use super::text::Weight;
-use super::theme::{ACCENT, BG, Colour, LINE, MUTED, SURFACE2, TEXT};
+use super::theme::{ACCENT, BG, Colour, LINE, MUTED, SURFACE, SURFACE2, TEXT};
 use super::{H, M, Rect, W};
 
 pub fn background(gfx: &mut Gfx<'_>) {
@@ -114,6 +114,11 @@ pub struct TopBar<'a> {
     /// Title of the screen Back returns to, for the "‹ title" affordance.
     pub back: Option<&'a str>,
     pub clock: &'a str,
+    /// Whether the search pill shows: only with a library, and not under the Search screen, which
+    /// draws its own field there.
+    pub search: bool,
+    /// Whether the Settings gear shows: only with a library.
+    pub settings: bool,
     pub kind: InputKind,
     pub style: ButtonStyle,
     pub pointer: Option<(f32, f32)>,
@@ -123,6 +128,8 @@ pub struct TopBar<'a> {
 pub struct TopBarHits {
     pub tabs: Vec<(Rect, usize)>,
     pub back: Option<Rect>,
+    pub search: Option<Rect>,
+    pub settings: Option<Rect>,
 }
 
 /// Horizontal distance between neighbouring tab label centres.
@@ -184,6 +191,18 @@ pub fn topbar(gfx: &mut Gfx<'_>, bar: &TopBar<'_>) -> TopBarHits {
         }
     }
 
+    let search = bar.search.then(|| {
+        let pill = Rect::new(W - M - 504.0, 44.0, 330.0, 48.0);
+        search_pill(gfx, pill, bar, hovered(pill));
+        pill
+    });
+    let settings = bar.settings.then(|| {
+        let (cx, cy) = (W - M - 134.0, 68.0);
+        let button = Rect::new(cx - 24.0, cy - 24.0, 48.0, 48.0);
+        gear_button(gfx, cx, cy, hovered(button));
+        button
+    });
+
     gfx.text(
         W - M,
         76.0,
@@ -191,5 +210,54 @@ pub fn topbar(gfx: &mut Gfx<'_>, bar: &TopBar<'_>) -> TopBarHits {
         TextStyle::new(24, Weight::SemiBold, TEXT),
         Align::Right,
     );
-    TopBarHits { tabs, back }
+    TopBarHits {
+        tabs,
+        back,
+        search,
+        settings,
+    }
+}
+
+/// The top bar's "Search games" pill, with both its keyboard and controller glyphs.
+fn search_pill(gfx: &mut Gfx<'_>, pill: Rect, bar: &TopBar<'_>, hover: bool) {
+    let sx = pill.x;
+    gfx.fill_round_rect(pill, 24.0, SURFACE);
+    gfx.stroke_round_rect(pill, 24.0, 1.0, LINE);
+    gfx.stroke_circle(sx + 30.0, 66.0, 8.0, 2.5, MUTED);
+    gfx.line(sx + 36.0, 72.0, sx + 42.0, 78.0, 2.5, MUTED);
+    // Round caps, as in the mockup.
+    gfx.fill_circle(sx + 36.0, 72.0, 1.25, MUTED);
+    gfx.fill_circle(sx + 42.0, 78.0, 1.25, MUTED);
+    let colour = if hover { TEXT } else { MUTED };
+    let label = TextStyle::new(18, Weight::Regular, colour);
+    gfx.text(sx + 52.0, 74.0, "Search games", label, Align::Left);
+    let pad = glyph_label(Action::Search, InputKind::Controller, bar.style);
+    let keys = glyph_label(Action::Search, InputKind::Keyboard, bar.style);
+    let pad_x = pill.x + pill.w - 14.0 - glyph_width(gfx, pad);
+    glyph(gfx, pad_x, 68.0, pad);
+    let keys_x = pad_x - 8.0 - glyph_width(gfx, keys);
+    glyph(gfx, keys_x, 68.0, keys);
+}
+
+/// The top bar's Settings button: a 48 px circle with the gear in it.
+fn gear_button(gfx: &mut Gfx<'_>, cx: f32, cy: f32, hover: bool) {
+    gfx.fill_circle(cx, cy, 24.0, SURFACE);
+    gfx.stroke_circle(cx, cy, 24.0, 1.0, LINE);
+    gear(gfx, cx, cy, 13.0, if hover { TEXT } else { MUTED }, SURFACE);
+}
+
+/// A Settings gear of outer radius `r`: eight teeth round a ring, its hole filled with `hole`.
+fn gear(gfx: &mut Gfx<'_>, cx: f32, cy: f32, r: f32, fill: Colour, hole: Colour) {
+    use std::f32::consts::TAU;
+    // The outline isn't convex, but every point of it sees the centre: fan out from there.
+    let mut points = vec![(cx, cy)];
+    for k in 0..8 {
+        let a = TAU * k as f32 / 8.0;
+        for (da, rr) in [(-0.27, r * 0.74), (-0.16, r), (0.16, r), (0.27, r * 0.74)] {
+            points.push((cx + rr * (a + da).cos(), cy + rr * (a + da).sin()));
+        }
+    }
+    points.push(points[1]);
+    gfx.fill_polygon(&points, fill);
+    gfx.fill_circle(cx, cy, r * 0.36, hole);
 }

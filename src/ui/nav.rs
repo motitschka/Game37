@@ -53,6 +53,32 @@ pub trait Screen {
     fn pause_menu(&mut self) -> Option<&mut PauseMenu> {
         None
     }
+    /// Which entry screen it is, if it is the Search or the Settings screen.
+    fn entry(&self) -> Option<Entry> {
+        None
+    }
+    /// Whether the top bar draws the search pill over it. The Search screen draws its own field
+    /// there instead.
+    fn search_pill(&self) -> bool {
+        true
+    }
+}
+
+/// The screens the top bar opens from anywhere in the library: Search (US-21) and Settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Entry {
+    Search,
+    Settings,
+}
+
+/// Makes a new entry screen.
+pub type MakeScreen = Box<dyn Fn(&Ctx) -> Box<dyn Screen>>;
+
+/// How a Nav with a library makes its entry screens; `screens::start` supplies them, as `ui` doesn't
+/// know the screens.
+pub struct Entries {
+    pub search: MakeScreen,
+    pub settings: MakeScreen,
 }
 
 pub enum Transition {
@@ -86,6 +112,10 @@ pub struct Hits {
     pub back: Option<Rect>,
     /// Hint bar entries and the action a click on each performs.
     pub hints: Vec<(Rect, Action)>,
+    /// The top bar's search pill.
+    pub search: Option<Rect>,
+    /// The top bar's Settings gear.
+    pub settings: Option<Rect>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +132,8 @@ struct Tab {
 pub struct Nav {
     tabs: Vec<Tab>,
     active: usize,
+    /// Search and Settings, for a Nav with a library; First-run Setup has none.
+    entries: Option<Entries>,
 }
 
 impl Nav {
@@ -115,7 +147,25 @@ impl Nav {
                 stack: vec![root],
             })
             .collect();
-        Nav { tabs, active: 0 }
+        Nav {
+            tabs,
+            active: 0,
+            entries: None,
+        }
+    }
+
+    /// The same Nav with a library: the top bar's search pill and gear, and the inputs that open
+    /// Search and Settings from anywhere.
+    pub fn with_entries(self, entries: Entries) -> Nav {
+        Nav {
+            entries: Some(entries),
+            ..self
+        }
+    }
+
+    /// Whether it has a library, and so Search and Settings.
+    pub fn has_library(&self) -> bool {
+        self.entries.is_some()
     }
 
     /// A single screen without tabs.
