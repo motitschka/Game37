@@ -27,6 +27,7 @@ C = {
     "ahead": "#3DDC84",  # Split delta: ahead of the comparison
     "behind": "#FF5C6C",  # Split delta: behind the comparison
     "best": "#FFD23F",  # Split delta: new Best Segment
+    "danger": "#FF8F98",  # a destructive Settings row: softer than `behind`, so it reads as care, not alarm
 }
 
 PALETTE = [
@@ -352,6 +353,9 @@ def console_card(sv, cx, cy, size, sysid, opacity=1.0):
 
 
 WARN = "#FFB020"
+# The Standalone Emulator of each External System; every other System is Embedded.
+EMULATORS = {"gc": "Dolphin", "wii": "Dolphin", "3ds": "Azahar", "wiiu": "Cemu", "switch": "Ryubing",
+             "ps2": "PCSX2", "ps3": "RPCS3", "ps4": "shadPS4"}
 
 
 def screen_carousel(focus="3ds", missing={"wiiu": "Cemu"}, games=12):
@@ -372,8 +376,7 @@ def screen_carousel(focus="3ds", missing={"wiiu": "Cemu"}, games=12):
                    text(cx, 450 + size / 2 + 40, f"{missing[sysid]} not installed", 18, 600, fill=WARN, anchor="middle"))
     sv.add(rect(705, 195, 510, 510, "none", rx=46, stroke="#FFFFFF", sw=4))
     console_card(sv, 960, 450, 500, focus)
-    emulator = {"3ds": "Azahar", "gc": "Dolphin", "wii": "Dolphin", "wiiu": "Cemu", "switch": "Ryubing",
-                "ps2": "PCSX2", "ps3": "RPCS3", "ps4": "shadPS4"}.get(focus, "Game37")
+    emulator = EMULATORS.get(focus, "Game37")
     sv.add(text(960, 790, f"{games} games  ·  Plays in {emulator}", 26, 600, fill=C["muted"], anchor="middle"))
     n = len(SYSTEMS)
     for i in range(n):
@@ -909,10 +912,66 @@ def screen_timer_window():
     sv.save()
 
 
+# ---------- Settings (M6) ----------
+
+SECTIONS = ["Library", "Artwork", "BIOS", "Cores", "Controls", "Display", "About"]
+RX = M + 448  # left edge of the rows column
+RW = W - M - RX
+TOP = 240  # first section and first row
+
+
+def settings_page(sv, section):
+    """Settings with `section` open and the focus in its rows: the section stays marked in accent."""
+    background(sv)
+    topbar(sv, crumb="Home")
+    sv.add(text(M, 196, "Settings", 48, 800))
+    for i, name in enumerate(SECTIONS):
+        y = TOP + i * 76
+        on = name == section
+        if on:
+            sv.add(rect(M - 24, y, 360, 64, C["surface"], rx=14))
+        sv.add(text(M, y + 41, name, 24, 700 if on else 500, fill=C["accent"] if on else C["muted"]))
+    sv.add(rect(M + 400, TOP, 1, 740, C["line"]))
+
+
+def settings_row(sv, y, h, label, value=None, sub=None, focused=False, more=False, fill=None, mono=False):
+    """A Settings row card; returns the x its right-aligned value ends at."""
+    if focused:
+        sv.add(rect(RX, y, RW, h, C["surface2"], rx=14), rect(RX, y + h / 2 - 20, 5, 40, C["accent"], rx=2))
+    else:
+        sv.add(rect(RX, y, RW, h, C["surface"], rx=14, opacity=0.6))
+    base = y + h / 2 + (8 if sub is None else -6)
+    sv.add(text(RX + 32, base, label, 22, 700 if focused else 600, fill=fill))
+    if sub:
+        sv.add(text(RX + 32, base + 30, sub, 16, 500, fill=C["muted"]))
+    r = RX + RW - 32
+    if more:
+        sv.add(text(r, y + h / 2 + 9, "›", 26, 600, fill=C["muted"], anchor="end"))
+        r -= 36
+    if value:
+        sv.add(text(r, y + h / 2 + 7, value, 18, 500, fill=C["muted"], anchor="end", font=MONO if mono else FONT))
+    return r
+
+
+def screen_settings_library():
+    sv = Svg("17-settings-library", "Settings: Library")
+    settings_page(sv, "Library")
+    rows = [("Games Root location", "~/Games", True), ("Rescan library", "23 Games", False),
+            ("Hidden games", "2 hidden", False)]
+    for i, (label, value, mono) in enumerate(rows):
+        settings_row(sv, TOP + i * 88, 76, label, value, focused=label == "Hidden games",
+                     more=label == "Hidden games", mono=mono)
+    settings_row(sv, TOP + 3 * 88 + 24, 92, "Reset Playtime and stats",
+                 sub="Clears Playtime and last played for every Game. Favorites and saves stay.", fill=C["danger"])
+    hintbar(sv, [(["A"], "Open"), (["B"], "Back")])
+    sv.save()
+
+
 if __name__ == "__main__":
     for fn in [screen_home, screen_home_empty, screen_carousel, screen_console_page, screen_details,
                screen_options, screen_pause, screen_ds, screen_console_missing_emulator,
                screen_details_missing_emulator, screen_speedrun_page, screen_splits_editor,
-               screen_speedrun_embedded, screen_pause_run, screen_timer_window, screen_details_speedrun]:
+               screen_speedrun_embedded, screen_pause_run, screen_timer_window, screen_details_speedrun,
+               screen_settings_library]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))
