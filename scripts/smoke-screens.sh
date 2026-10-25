@@ -88,5 +88,12 @@ shot m5-rename "$root/cfg.toml" \
 # M6: top bar entries
 shot m6-search-open "$root/cfg.toml" "down,down,search"
 shot m6-settings-open "$root/cfg.toml" "settings"
+# M6: Settings: Library with the focus on Hidden games, the Hidden games list after hiding a Game
+# from its Options Menu (three downs reach Hide game: an empty Load save state is skipped), the Reset
+# confirmation, About
+shot m6-settings-library "$root/cfg.toml" "settings,right,down,down"
+shot m6-settings-hidden "$root/cfg.toml" "down,down,options,down,down,down,confirm,settings,right,down,down,confirm"
+shot m6-settings-reset "$root/cfg.toml" "settings,right,down,down,down,confirm"
+shot m6-settings-about "$root/cfg.toml" "settings$(printf ',down%.0s' {1..6})"
 
 echo "screenshots in $out"
