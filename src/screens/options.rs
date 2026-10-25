@@ -13,6 +13,7 @@ use crate::ctx::{self, Ctx, Play};
 use crate::launch;
 use crate::library::db::GameRow;
 use crate::screens::artwork_picker::ArtworkPicker;
+use crate::screens::message::Message;
 use crate::session::sdl;
 use crate::session::states::{Rgb, SLOTS, StatePaths};
 use crate::systems::{self, Kind};
@@ -339,12 +340,17 @@ impl OptionsMenu {
         let Some((old, _)) = self.favorites.get(i) else {
             return Transition::None;
         };
-        let now = ctx::now();
-        let done = ctx
-            .library
-            .set_favorite(old.id, false, now)
-            .and_then(|()| ctx.library.set_favorite(self.game.id, true, now));
-        finish(done, ctx)
+        match ctx.library.replace_favorite(old.id, self.game.id, ctx::now()) {
+            Ok(()) => finish(Ok(()), ctx),
+            Err(e) => {
+                eprintln!("game37: {e}");
+                let body = format!(
+                    "{} wasn't added, and your Favorites are as they were.",
+                    self.game.title
+                );
+                Transition::Replace(Box::new(Message::new("Couldn't change Favorites", body)))
+            }
+        }
     }
 
     /// Saves the typed Display Title, trimmed. Empty, or the cleaned-up title, undoes the rename.
@@ -845,6 +851,19 @@ mod tests {
         assert!(!fresh(&ctx, &games[0]).favorite, "G0 is the 5th, oldest");
         assert!(fresh(&ctx, &games[5]).favorite);
         assert_eq!(favorite_ids(&ctx).len(), MAX_FAVORITES);
+    }
+
+    #[test]
+    fn a_failed_replacement_says_so_and_keeps_the_favorites() {
+        let (_dir, mut ctx, games, mut menu) = five_favorites();
+        let before = favorite_ids(&ctx);
+        ctx.library.fail_favoriting(games[5].id);
+        act(&mut menu, &mut ctx, Action::Confirm);
+        match act(&mut menu, &mut ctx, Action::Confirm) {
+            Transition::Replace(message) => assert_eq!(message.title(), "Couldn't change Favorites"),
+            _ => panic!("expected a message in the menu's place"),
+        }
+        assert_eq!(favorite_ids(&ctx), before, "G4 is still a Favorite");
     }
 
     #[test]

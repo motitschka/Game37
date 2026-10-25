@@ -390,6 +390,31 @@ impl Library {
         Ok(games.into_iter().map(|(g, present)| (g.row, present)).collect())
     }
 
+    /// Unfavorites `old` and favorites `new` in one transaction, so a failure leaves both as they
+    /// were.
+    pub fn replace_favorite(&mut self, old: i64, new: i64, now: i64) -> Result<(), DbError> {
+        let tx = self.conn.transaction()?;
+        tx.execute("UPDATE games SET favorited_at = NULL WHERE id = ?1", [old])?;
+        tx.execute(
+            "UPDATE games SET favorited_at = COALESCE(favorited_at, ?2) WHERE id = ?1",
+            [new, now],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Makes favoriting Game `id` fail, for tests of what a failed write does.
+    #[cfg(test)]
+    pub(crate) fn fail_favoriting(&self, id: i64) {
+        self.conn
+            .execute_batch(&format!(
+                "CREATE TEMP TRIGGER fail_favoriting BEFORE UPDATE OF favorited_at ON games
+                 WHEN NEW.id = {id} AND NEW.favorited_at IS NOT NULL
+                 BEGIN SELECT RAISE(ABORT, 'favoriting fails'); END"
+            ))
+            .unwrap();
+    }
+
     /// Records a play session that ended at `ended_at` and lasted `secs`.
     pub fn record_play(&self, id: i64, ended_at: i64, secs: u64) -> Result<(), DbError> {
         let secs = i64::try_from(secs).unwrap_or(i64::MAX);
@@ -715,6 +740,21 @@ mod tests {
             lib.shelf_count(Shelf::Favorites).unwrap(),
             1,
             "the Shelf shows B only"
+        );
+    }
+
+    #[test]
+    fn a_failed_favorite_replacement_changes_nothing() {
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_system("snes", &games("snes", &["A", "B"]), 0).unwrap();
+        let (a, b) = (id_of(&lib, "snes", "A"), id_of(&lib, "snes", "B"));
+        lib.set_favorite(a, true, 1).unwrap();
+        lib.fail_favoriting(b);
+        assert!(lib.replace_favorite(a, b, 2).is_err());
+        assert_eq!(
+            titles(&lib.shelf(Shelf::Favorites, None).unwrap()),
+            ["A"],
+            "A is still one"
         );
     }
 
