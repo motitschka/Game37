@@ -969,11 +969,47 @@ def screen_search():
     sv.save()
 
 
+# The rename on-screen keyboard (src/ui/text_entry.rs): keys and their widths in half keys, 20 per row.
+OSK_ROWS = [[(k, 2) for k in "1234567890"], [(k, 2) for k in "qwertyuiop"], [(k, 2) for k in "asdfghjkl'"],
+            [("Shift", 3)] + [(k, 2) for k in "zxcvbnm"] + [("Backspace", 3)],
+            [("?123", 4), ("-", 2), ("Space", 8), (":", 2), ("Done", 4)]]
+OSK_HALF, OSK_GAP, OSK_KEY_H = 57, 10, 76
+OSK_W, OSK_H = 20 * OSK_HALF - OSK_GAP, 5 * (OSK_KEY_H + OSK_GAP) - OSK_GAP
+
+
+def osk(sv, x, y, focus):
+    """The on-screen keyboard with its top left at (x, y); `focus` is the focused key's label."""
+    for r, row in enumerate(OSK_ROWS):
+        start = 0
+        for label, halves in row:
+            kx, ky, kw = x + start * OSK_HALF, y + r * (OSK_KEY_H + OSK_GAP), halves * OSK_HALF - OSK_GAP
+            start += halves
+            char = len(label) == 1
+            on = label == focus
+            sv.add(rect(kx, ky, kw, OSK_KEY_H, C["accent"] if on else C["surface2"] if char or label == "Space"
+                        else C["line"], rx=12))
+            ink = C["text"] if on or char else C["muted"]
+            sv.add(text(kx + kw / 2, ky + OSK_KEY_H / 2 + (10 if char else 7), label, 28 if char else 20, 600,
+                        fill=ink, anchor="middle"))
+
+
+def screen_search_controller():
+    sv = Svg("23-search-controller", "Search (on-screen keyboard)")
+    background(sv)
+    search_topbar(sv, SEARCH_QUERY, focused=True)
+    search_results(sv)
+    ty = 1010 - 24 - OSK_H - 24
+    sv.add(rect(0, ty, W, 1010 - ty, C["surface"]), rect(0, ty, W, 1, C["line"]))
+    osk(sv, (W - OSK_W) / 2, ty + 24, "r")
+    hintbar(sv, [(["A"], "Type"), (["B"], "Backspace"), (["+"], "Results")])
+    sv.save()
+
+
 if __name__ == "__main__":
     for fn in [screen_home, screen_home_empty, screen_carousel, screen_console_page, screen_details,
                screen_options, screen_pause, screen_ds, screen_console_missing_emulator,
                screen_details_missing_emulator, screen_speedrun_page, screen_splits_editor,
                screen_speedrun_embedded, screen_pause_run, screen_timer_window, screen_details_speedrun,
-               screen_search]:
+               screen_search, screen_search_controller]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))
