@@ -1,6 +1,4 @@
-//! Stands in for First-run Setup (not built yet) when there is no readable Config.
-
-use std::path::Path;
+//! Shown instead of First-run Setup when the Config exists but can't be read.
 
 use crate::config::ConfigError;
 use crate::ctx::Ctx;
@@ -17,16 +15,6 @@ pub struct NoConfig {
 }
 
 impl NoConfig {
-    pub fn missing(path: &Path) -> NoConfig {
-        NoConfig {
-            heading: "First-run Setup isn't available yet",
-            body: format!(
-                "Create {} to continue.\nconfig.example.toml in the Game37 repo shows the format.",
-                path.display()
-            ),
-        }
-    }
-
     pub fn unreadable(error: &ConfigError) -> NoConfig {
         NoConfig {
             heading: "Your Config couldn't be read",
@@ -81,7 +69,8 @@ mod tests {
 
     #[test]
     fn back_quits() {
-        let mut screen = NoConfig::missing(Path::new("/c.toml"));
+        let error = ConfigError::BadApiKey(std::path::PathBuf::from("/secrets.toml"));
+        let mut screen = NoConfig::unreadable(&error);
         assert!(matches!(
             screen.handle(Input::Action(Action::Back), &mut Ctx::empty()),
             Transition::Quit

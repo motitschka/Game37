@@ -62,6 +62,10 @@ pub trait Screen {
     fn search_pill(&self) -> bool {
         true
     }
+    /// Whether the top bar draws the clock over it. First-run Setup shows its progress there.
+    fn clock(&self) -> bool {
+        true
+    }
 }
 
 /// The screens the top bar opens from anywhere in the library: Search (US-21) and Settings.

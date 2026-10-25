@@ -56,7 +56,8 @@ pub fn run(options: Options) -> Result<(), String> {
             if has_library && shot.artwork {
                 ctx.artwork = artwork(&path, &ctx.data_dir);
             }
-            let nav = screens::start(loaded, &path, &ctx);
+            // Setup's folders go under the data dir, never in the real ~/Games.
+            let nav = screens::start(loaded, &ctx.data_dir.join("Games"), &ctx);
             // Never starts a process: a launch shows the Playing screen for good.
             let launcher = Launcher::new(Box::new(NeverExits::default()), log_dir);
             screenshot(nav, ctx, launcher, shot)
@@ -67,7 +68,8 @@ pub fn run(options: Options) -> Result<(), String> {
                 ctx.emulators = Emulators::detect();
                 ctx.artwork = artwork(&path, &ctx.data_dir);
             }
-            let nav = screens::start(loaded, &path, &ctx);
+            let setup_root = dirs::home_dir().expect("no home directory").join("Games");
+            let nav = screens::start(loaded, &setup_root, &ctx);
             let watcher = has_library.then(|| LibraryWatcher::start(ctx.games_root.clone()));
             let launcher = Launcher::new(Box::new(Processes), log_dir);
             interactive(nav, ctx, watcher, launcher)
@@ -424,10 +426,11 @@ fn draw(gfx: &mut Gfx<'_>, nav: &mut Nav, ctx: &Ctx, view: &View, clock: &str) -
     let labels = nav.tab_labels();
     let library = nav.has_library();
     let search = library && nav.base().search_pill();
+    let shows_clock = nav.base().clock();
     let bar = TopBar {
         tabs: labels.as_deref().map(|l| (l, nav.active_tab())),
         back: nav.back_title(),
-        clock,
+        clock: shows_clock.then_some(clock),
         search,
         settings: library,
         kind: view.kind,

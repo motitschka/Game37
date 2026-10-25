@@ -11,6 +11,7 @@ mod no_config;
 pub mod options;
 pub mod pause;
 pub mod playing;
+mod setup;
 mod stub;
 
 use std::path::Path;
@@ -23,18 +24,19 @@ pub use carousel::Carousel;
 pub use game_grid::GameGrid;
 pub use home::Home;
 pub use no_config::NoConfig;
+pub use setup::Setup;
 pub use stub::Stub;
 
-/// Home and Consoles, with Search and Settings, when a Config exists; otherwise the placeholder for
-/// First-run Setup, which isn't built yet.
-pub fn start(config: Result<Option<Config>, ConfigError>, path: &Path, ctx: &Ctx) -> Nav {
+/// Home and Consoles, with Search and Settings, when a Config exists; otherwise First-run Setup,
+/// proposing `setup_root` as the Games Root.
+pub fn start(config: Result<Option<Config>, ConfigError>, setup_root: &Path, ctx: &Ctx) -> Nav {
     match config {
         Ok(Some(_config)) => Nav::with_tabs(vec![
             ("Home", Box::new(Home::new())),
             ("Consoles", Box::new(Carousel::new(&ctx.library))),
         ])
         .with_entries(entries()),
-        Ok(None) => Nav::single(Box::new(NoConfig::missing(path))),
+        Ok(None) => Nav::single(Box::new(Setup::new(setup_root.to_path_buf()))),
         Err(e) => Nav::single(Box::new(NoConfig::unreadable(&e))),
     }
 }
@@ -69,10 +71,11 @@ mod tests {
     }
 
     #[test]
-    fn no_config_starts_on_the_setup_placeholder() {
-        let mut nav = start(Ok(None), Path::new("/c.toml"), &Ctx::empty());
+    fn no_config_starts_on_first_run_setup() {
+        let mut nav = start(Ok(None), Path::new("/g"), &Ctx::empty());
         assert_eq!(nav.tab_labels(), None);
         assert_eq!(nav.top().title(), "First-run Setup");
+        assert!(!nav.top().clock(), "Setup's progress shows where the clock was");
         assert!(!nav.has_library(), "no Search or Settings");
     }
 
