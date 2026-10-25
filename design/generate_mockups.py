@@ -1028,6 +1028,37 @@ def screen_settings_cores():
     hintbar(sv, [(["A"], "Download"), (["B"], "Back")])
 
 
+# ---------- Settings: key entry, Controls, Controller test, About (M6) ----------
+
+KEY_X, KEY_Y, KEY_W, KEY_H = 340, 120, 1240, 768  # the key entry card, as the rename card in options.rs
+
+
+def screen_settings_api_key():
+    sv = Svg("20-settings-api-key", "Settings: SteamGridDB API key")
+    settings_page(sv, "Artwork")
+    settings_row(sv, TOP, 92, "SteamGridDB API key", "Set · ends in 3f9a",
+                 sub="Get a key at steamgriddb.com → Profile → Preferences → API", focused=True)
+    settings_row(sv, TOP + 104, 76, "Remove key", fill=C["danger"])
+    dim(sv, 0.62)
+    sv.add(rect(KEY_X, KEY_Y, KEY_W, KEY_H, C["surface"], rx=20, stroke=C["line"], sw=1))
+    x = KEY_X + (KEY_W - OSK_W) / 2
+    sv.add(text(x, KEY_Y + 72, "SteamGridDB API key", 28, 800))
+    fy = KEY_Y + 136
+    dots, tail = 28, "3f9a"
+    tx = x + 28
+    shown_w = dots * 32 * 0.35 + tw(tail, 32, 600)  # a dot is narrower than tw() assumes
+    sv.add(rect(x, fy, OSK_W, 88, C["surface2"], rx=14, stroke=C["accent"], sw=2),
+           text(tx, fy + 44 + 12, "•" * dots + tail, 32, 600),
+           rect(tx + shown_w + 3, fy + 18, 3, 88 - 36, C["accent"]))
+    sv.add(text(x, KEY_Y + 256, "Saved to ~/.config/game37/secrets.toml on this device only", 16, 500,
+                fill=C["muted"]))
+    osk(sv, x, KEY_Y + KEY_H - 48 - OSK_H, "a")
+    # TextEntry::hints for the controller, then the keyboard's paste
+    hintbar(sv, [(["A"], "Type"), (["Y"], "Backspace"), (["X"], "Space"), (["B"], "Cancel"), (["+"], "Save"),
+                 (["Ctrl V"], "Paste")])
+    sv.save()
+
+
 # ---------- search (M6) ----------
 
 def search_topbar(sv, query, focused):
@@ -1386,7 +1417,7 @@ if __name__ == "__main__":
                screen_options, screen_pause, screen_ds, screen_console_missing_emulator,
                screen_details_missing_emulator, screen_speedrun_page, screen_splits_editor,
                screen_speedrun_embedded, screen_pause_run, screen_timer_window, screen_details_speedrun,
-               screen_settings_library, screen_settings_bios, screen_settings_cores,
+               screen_settings_library, screen_settings_bios, screen_settings_cores, screen_settings_api_key,
                screen_search, screen_search_controller, screen_search_results, screen_search_empty,
                screen_setup_systems, screen_setup_emulators, screen_setup_folders, screen_setup_cores,
                screen_setup_key]:
