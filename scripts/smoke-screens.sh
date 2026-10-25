@@ -92,6 +92,11 @@ shot m6-settings-open "$root/cfg.toml" "settings"
 shot m6-setup-emulators "$root/missing.toml" \
     "down,confirm,down,right,confirm,up,right,right,right,right,confirm,settings" --missing-emulators switch,ps2
 shot m6-setup-emulators-all "$root/missing.toml" "sort,settings" --missing-emulators wii,3ds,wiiu,switch,ps2,ps3,ps4
+# First-run Setup step 3: NES, GameCube, Switch and PlayStation 2 ticked, on through step 2, then
+# Create folders, under the Games Root that screenshot mode puts in the data dir
+shot m6-setup-folders "$root/missing.toml" \
+    "confirm,down,confirm,down,right,confirm,up,right,right,right,right,confirm,settings,settings,confirm" \
+    --missing-emulators switch,ps2
 
 # M6: Controller test
 shot m6-controller-test "$root/cfg.toml" "" --screen controller-test

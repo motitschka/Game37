@@ -7,6 +7,7 @@
 //! ticked is passed over both ways, and Back from the first step quits Game37.
 
 mod emulators;
+mod folders;
 mod systems;
 
 use std::path::{Path, PathBuf};
@@ -35,6 +36,8 @@ pub struct Model {
     /// Whether each System, by its index in `SYSTEMS`, is ticked.
     ticked: Vec<bool>,
     games_root: PathBuf,
+    /// The folders "Create folders" made or found already there, under this Games Root.
+    made: Vec<PathBuf>,
 }
 
 impl Model {
@@ -42,6 +45,7 @@ impl Model {
         Model {
             ticked: vec![false; SYSTEMS.len()],
             games_root,
+            made: Vec::new(),
         }
     }
 
@@ -90,6 +94,11 @@ trait Step {
     fn hints(&self, model: &Model) -> Vec<Hint>;
     /// Which of the bottom buttons has focus, if one does.
     fn focused_button(&self) -> Option<Button>;
+    /// Whether a text field is open: it then takes all input and its hints, and the bottom
+    /// buttons are hidden.
+    fn text_input(&self) -> bool {
+        false
+    }
 }
 
 /// A step that comes in a later job: it shows its number and title, and only goes Back.
@@ -145,9 +154,7 @@ impl Setup {
             steps: vec![
                 Box::new(systems::Systems::new()),
                 Box::new(emulators::Install::new()),
-                Box::new(Later {
-                    title: "Make your folders",
-                }),
+                Box::new(folders::Folders::new()),
                 Box::new(Later {
                     title: "Download the Cores",
                 }),
@@ -211,6 +218,7 @@ impl Screen for Setup {
 
     fn handle(&mut self, input: Input, ctx: &mut Ctx) -> Transition {
         let go = match input {
+            _ if self.steps[self.at].text_input() => self.steps[self.at].handle(input, &mut self.model, ctx),
             Input::Action(Action::Back) | Input::Pointer(Pointer::Back) => Go::Back,
             // + outside a text field: Start on a controller arrives as Settings.
             Input::Action(Action::Settings) => Go::Next,
@@ -251,6 +259,10 @@ impl Screen for Setup {
         let explanation = TextStyle::new(20, Weight::Medium, MUTED);
         gfx.text(M, 244.0, step.explanation(), explanation, Align::Left);
         step.draw(gfx, &self.model, ctx);
+        if step.text_input() {
+            self.buttons.clear();
+            return;
+        }
 
         let back_label = self.back_label();
         let step = &self.steps[self.at];
@@ -274,6 +286,9 @@ impl Screen for Setup {
 
     fn hints(&self) -> Vec<Hint> {
         let mut hints = self.steps[self.at].hints(&self.model);
+        if self.steps[self.at].text_input() {
+            return hints;
+        }
         if self.steps[self.at].can_continue(&self.model) {
             hints.push(Hint::new(&[Action::Settings], "Continue"));
         }
@@ -283,6 +298,10 @@ impl Screen for Setup {
 
     fn clock(&self) -> bool {
         false
+    }
+
+    fn text_input(&self) -> bool {
+        self.steps[self.at].text_input()
     }
 }
 
