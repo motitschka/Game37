@@ -116,6 +116,12 @@ fn start_shot_library(ctx: &mut Ctx, with_artwork: bool) -> Result<(), String> {
 fn start_live_library(ctx: &mut Ctx) -> LibraryWatcher {
     ctx.emulators = Emulators::detect();
     ctx.artwork = artwork(&ctx.config_path, &ctx.data_dir);
+    watch(ctx)
+}
+
+/// The watcher on the Games Root, at the start and whenever Settings moves it. It scans every System
+/// in the background, then follows the folder.
+fn watch(ctx: &Ctx) -> LibraryWatcher {
     LibraryWatcher::start(ctx.games_root.clone())
 }
 
@@ -329,6 +335,10 @@ fn interactive(
         if let Some(config) = ctx.setup_finished.take() {
             let started = finish_setup(&mut nav, &mut ctx, config, |ctx| Ok(start_live_library(ctx)))?;
             watcher = Some(started);
+        }
+        // Settings moved the Games Root: the old watcher stops as the new one replaces it.
+        if std::mem::take(&mut ctx.games_root_changed) {
+            watcher = Some(watch(&ctx));
         }
         if let Some(session) = sdl::running(&mut nav) {
             session.set_shown(shown);
