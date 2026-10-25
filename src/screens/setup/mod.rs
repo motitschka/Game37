@@ -8,6 +8,7 @@
 //! step, writes the Config and leaves it in `Ctx::setup_finished` for `app.rs` to switch to Home;
 //! nothing before it writes the Config, so quitting earlier brings Setup back next time.
 
+mod cores;
 mod emulators;
 mod folders;
 mod systems;
@@ -89,6 +90,10 @@ trait Step {
     }
     /// Called each time the step is shown.
     fn enter(&mut self, _model: &Model, _ctx: &mut Ctx) {}
+    /// Called each frame while the step is shown.
+    fn tick(&mut self, _model: &Model, _ctx: &mut Ctx) {}
+    /// Called each time the step is left, before the next one is entered.
+    fn leave(&mut self) {}
     fn can_continue(&self, model: &Model) -> bool;
     /// Handles input other than Back and Continue (+), which the frame handles. Confirm on a
     /// focused [`Button`] returns its [`Go`].
@@ -161,9 +166,7 @@ impl Setup {
                 Box::new(systems::Systems::new()),
                 Box::new(emulators::Install::new()),
                 Box::new(folders::Folders::new()),
-                Box::new(Later {
-                    title: "Download the Cores",
-                }),
+                Box::new(cores::Cores::new()),
                 Box::new(Later {
                     title: "Add a SteamGridDB key (optional)",
                 }),
@@ -210,6 +213,7 @@ impl Setup {
             },
             Go::Next => return Transition::None,
         };
+        self.steps[self.at].leave();
         self.at = next;
         self.error = None;
         self.steps[next].enter(&self.model, ctx);
@@ -272,6 +276,11 @@ impl Screen for Setup {
             _ => self.steps[self.at].handle(input, &mut self.model, ctx),
         };
         self.go(go, ctx)
+    }
+
+    fn tick(&mut self, ctx: &mut Ctx) -> Transition {
+        self.steps[self.at].tick(&self.model, ctx);
+        Transition::None
     }
 
     fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
@@ -446,10 +455,16 @@ mod tests {
     }
 
     /// Setup on its last step with NES ticked and its folders made under `root`, the Config to be
-    /// written at `config_path`.
+    /// written at `config_path`. NES's Core is installed in a data dir beside `root`, so the Cores
+    /// step downloads nothing.
     fn on_last_step(root: &Path, config_path: &Path) -> (Setup, Ctx) {
         let mut ctx = Ctx::empty();
         ctx.config_path = config_path.to_path_buf();
+        ctx.data_dir = root.with_file_name("data");
+        let mesen = crate::cores::installed_path(&ctx.data_dir, &crate::cores::MESEN);
+        std::fs::create_dir_all(mesen.parent().unwrap()).unwrap();
+        std::fs::write(mesen, b"dummy").unwrap();
+        ctx.start_download = Box::new(|_, _| panic!("Mesen is already installed"));
         let mut setup = Setup::new(root.to_path_buf());
         act(&mut setup, &mut ctx, Action::Confirm);
         act(&mut setup, &mut ctx, Action::Settings);
