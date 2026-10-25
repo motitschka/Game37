@@ -210,7 +210,12 @@ def topbar(sv, active=None, crumb=None):
             sv.add(text(x, 70, label, 24, 700 if on else 500, fill=C["text"] if on else C["muted"], anchor="middle"))
             if on:
                 sv.add(rect(x - tw(label, 24, 700) / 2, 86, tw(label, 24, 700), 4, C["accent"], rx=2))
-    # search pill, Settings gear and clock
+    search_and_gear(sv)
+    sv.add(text(W - M, 76, "21:42", 24, 600, anchor="end"))
+
+
+def search_and_gear(sv):
+    """The top bar's search pill and Settings gear, left of the clock; every screen with chrome has them."""
     sx = W - M - 504
     sv.add(rect(sx, 44, 330, 48, C["surface"], rx=24, stroke=C["line"], sw=1),
            circle(sx + 30, 66, 8, "none", stroke=C["muted"], sw=2.5),
@@ -221,7 +226,6 @@ def topbar(sv, active=None, crumb=None):
     glyph(sv, l3_x, 68, "L3")
     glyph(sv, l3_x - 8 - (tw("Ctrl F", 14, 700) + 18), 68, "Ctrl F")
     gear_button(sv, W - M - 134, 68)
-    sv.add(text(W - M, 76, "21:42", 24, 600, anchor="end"))
 
 
 def cover(sv, x, y, w, h, g, focused=False, show_sys=True):
@@ -483,6 +487,7 @@ def details_page(name, title, g, sysid, emulator, stats, path, favorite=False, m
     logo(sv)
     sv.add(text(M + 150, 70, f"{SYS[sysid][1]}   ›   {g['title']}", 20, 500, fill=C["muted"]),
            text(W - M, 76, "21:42", 24, 600, anchor="end"))
+    search_and_gear(sv)
     cover(sv, M, 176, 380, 570, g, show_sys=False)
     x = 560
     label = SHORT[sysid]
@@ -684,6 +689,7 @@ def speedrun_header(sv, crumb, eyebrow, title, sub):
     background(sv, glow=SYS["snes"][3], glow_opacity=0.35)
     logo(sv)
     sv.add(text(M + 150, 70, crumb, 20, 500, fill=C["muted"]), text(W - M, 76, "21:42", 24, 600, anchor="end"))
+    search_and_gear(sv)
     cover(sv, M, 136, 92, 138, SMW, show_sys=False)
     x = M + 124
     sv.add(text(x, 168, eyebrow, 15, 700, fill=C["accent"], ls=3), text(x - 2, 224, title, 48, 800),
