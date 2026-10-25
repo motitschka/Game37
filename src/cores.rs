@@ -188,18 +188,23 @@ pub fn is_installed(data_dir: &Path, core: &CoreInfo) -> bool {
 /// case-insensitively, and is a non-empty regular file (so a directory, a dangling symlink or a
 /// zero-byte file never counts). True when the Core needs none.
 pub fn has_required_bios(games_root: &Path, core: &CoreInfo) -> bool {
-    if core.required_bios.is_empty() {
-        return true;
-    }
-    let bios_dir = games_root.join("bios");
-    let Ok(entries) = fs::read_dir(&bios_dir) else {
-        return false;
-    };
+    core.required_bios.is_empty() || found_bios(games_root, core).is_some()
+}
+
+/// The file in `<games_root>/bios/` that satisfies [`has_required_bios`] for `core`, named as it is
+/// on disk. With several, the one earliest in `required_bios`. `None` when there is none, or the
+/// Core needs none.
+pub fn found_bios(games_root: &Path, core: &CoreInfo) -> Option<String> {
+    let entries = fs::read_dir(games_root.join("bios")).ok()?;
     let names: HashSet<String> = core.required_bios.iter().map(|n| n.to_string()).collect();
-    entries.filter_map(|e| e.ok()).any(|entry| {
-        names.contains(&entry.file_name().to_string_lossy().to_lowercase())
-            && fs::metadata(entry.path()).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
-    })
+    entries
+        .filter_map(|e| e.ok())
+        .filter(|entry| {
+            names.contains(&entry.file_name().to_string_lossy().to_lowercase())
+                && fs::metadata(entry.path()).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
+        })
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .min_by_key(|name| core.required_bios.iter().position(|n| *n == name.to_lowercase()))
 }
 
 /// The libretro build server's URL for a Core's nightly zip.
@@ -1038,6 +1043,26 @@ mod tests {
 
         fs::write(root.join("bios/scph5502.bin"), b"x").unwrap();
         assert!(has_required_bios(root, &BEETLE_PSX_HW), "a non-empty file");
+    }
+
+    #[test]
+    fn found_bios_names_the_file_on_disk_and_prefers_the_earliest_accepted_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        assert_eq!(found_bios(root, &BEETLE_PSX_HW), None, "no bios folder");
+        assert_eq!(found_bios(root, &MELONDS_DS), None, "needs none");
+        fs::create_dir_all(root.join("bios")).unwrap();
+        fs::write(root.join("bios/scph5501.bin"), b"").unwrap();
+        fs::write(root.join("bios/other.bin"), b"x").unwrap();
+        assert_eq!(
+            found_bios(root, &BEETLE_PSX_HW),
+            None,
+            "an empty file doesn't count"
+        );
+        fs::write(root.join("bios/SCPH5552.BIN"), b"x").unwrap();
+        assert_eq!(found_bios(root, &BEETLE_PSX_HW).as_deref(), Some("SCPH5552.BIN"));
+        fs::write(root.join("bios/scph5501.bin"), b"x").unwrap();
+        assert_eq!(found_bios(root, &BEETLE_PSX_HW).as_deref(), Some("scph5501.bin"));
     }
 
     #[test]
