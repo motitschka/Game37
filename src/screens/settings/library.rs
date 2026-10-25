@@ -3,6 +3,7 @@
 
 use std::collections::HashSet;
 
+use super::games_root::GamesRootEntry;
 use super::hidden::HiddenGames;
 use super::{Row, Section};
 use crate::ctx::{self, Ctx};
@@ -12,6 +13,7 @@ use crate::screens::home::tilde;
 use crate::systems::SYSTEMS;
 use crate::ui::nav::Transition;
 
+const GAMES_ROOT: usize = 0;
 const RESCAN: usize = 1;
 const HIDDEN: usize = 2;
 const RESET: usize = 3;
@@ -59,9 +61,9 @@ impl Section for Library {
         ]
     }
 
-    /// Confirm on Games Root location does nothing yet: changing it comes in a later job.
     fn confirm(&mut self, i: usize, ctx: &mut Ctx) -> Transition {
         match i {
+            GAMES_ROOT => return Transition::Push(Box::new(GamesRootEntry::new(ctx))),
             RESCAN => self.rescanned = Some(rescan(ctx)),
             HIDDEN => return Transition::Push(Box::new(HiddenGames::new(ctx))),
             RESET => return Transition::Push(Box::new(reset())),
