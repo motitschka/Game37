@@ -68,7 +68,7 @@ its rows, and Left or Back goes back to the sections. Back on the sections leave
   unhides the focused one. The list is empty-stated when nothing is hidden (US-15). An unhidden Game
   returns to its Shelves; its Favorite stays cleared.
 - **Reset Playtime and stats:** a confirmation ("Reset Playtime and stats for every Game? This can't
-  be undone.", Cancel focused). It clears Playtime, last played and play counts for every Game, so
+  be undone.", Cancel focused). It clears Playtime and last played for every Game, so
   Continue playing and Most played empty out. Favorites, renames, hidden Games, Artwork, In-game
   Saves and Save States stay.
 - **SteamGridDB API key:** Confirm opens a text field (empty, not prefilled). While typing, every
