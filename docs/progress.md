@@ -14,13 +14,13 @@ way, and what's still open.
 | M2 External launching | Done, reviewed | `m2-external` | Yes |
 | M3 Embedded player (software) | Done, reviewed, regression-checked | `m3-embedded` | Yes |
 | M4 OpenGL hardware rendering | Done, reviewed, regression-checked | `m4-opengl` | Yes |
-| M5 Artwork, Details Page, Options Menu | Done, reviewed twice, regression-checked | `m5-artwork` | Waiting for the owner's OK |
+| M5 Artwork, Details Page, Options Menu | Done, reviewed twice, regression-checked | `m5-artwork` | Yes |
 | M6 Settings, search, First-run Setup | Not started | | |
 | M7 Speedrun timer (after v1) | Specified 2026-10-21, not started | | |
 
-Each milestone branch builds on the previous one. `main` has M1–M4 plus the M7 spec, the license and
-the README. M5 is on `m5-artwork` (pushed), waiting for the owner's OK to merge. Start M6 from `main`
-once M5 is in, on a new branch `m6-…`.
+Each milestone branch builds on the previous one. `main` has everything through M5 (merged on
+2026-10-25), plus the M7 spec, the license and the README. Start M6 from `main`, on a new branch
+`m6-…`.
 
 ## Code map
 
