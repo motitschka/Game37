@@ -967,11 +967,39 @@ def screen_settings_library():
     sv.save()
 
 
+def screen_settings_bios():
+    sv = Svg("18-settings-bios", "Settings: BIOS")
+    settings_page(sv, "BIOS")
+    pitch, top, status_x = 41, TOP + 28, RX + 320
+    sv.add(text(RX + 32, TOP + 13, "SYSTEM", 13, 700, fill=C["muted"], ls=1.5),
+           text(status_x, TOP + 13, "BIOS", 13, 700, fill=C["muted"], ls=1.5))
+    for i, (sysid, name, _, _) in enumerate(SYSTEMS):
+        y = top + i * pitch
+        focused = sysid == "ps1"
+        if focused:
+            sv.add(rect(RX, y, RW, pitch, C["surface2"], rx=10), rect(RX, y + pitch / 2 - 13, 5, 26, C["accent"], rx=2))
+        elif i:
+            sv.add(rect(RX + 16, y, RW - 32, 1, C["line"]))
+        base = y + pitch / 2 + 7
+        sv.add(text(RX + 32, base, name, 19, 700 if focused else 500))
+        if sysid == "ps1":
+            sv.add(circle(status_x + 11, base - 6, 11, WARN),
+                   text(status_x + 11, base - 1, "!", 15, 800, fill=C["bg"], anchor="middle"),
+                   text(status_x + 32, base, "Missing: put scph5500.bin, scph5501.bin or scph5502.bin in "
+                                          "~/Games/bios/", 18, 500, fill=WARN))
+        elif sysid in EMULATORS:
+            sv.add(text(status_x, base, f"Handled by {EMULATORS[sysid]}", 18, 500, fill=C["muted"]))
+        else:
+            sv.add(text(status_x, base, "No BIOS needed", 18, 500, fill=C["muted"]))
+    hintbar(sv, [(["B"], "Back")])
+    sv.save()
+
+
 if __name__ == "__main__":
     for fn in [screen_home, screen_home_empty, screen_carousel, screen_console_page, screen_details,
                screen_options, screen_pause, screen_ds, screen_console_missing_emulator,
                screen_details_missing_emulator, screen_speedrun_page, screen_splits_editor,
                screen_speedrun_embedded, screen_pause_run, screen_timer_window, screen_details_speedrun,
-               screen_settings_library]:
+               screen_settings_library, screen_settings_bios]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))
