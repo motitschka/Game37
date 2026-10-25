@@ -28,7 +28,8 @@ use crate::session::sdl;
 use crate::ui::chrome::{self, TopBar};
 use crate::ui::controls::{ControlEvent, Controls, StickAxis};
 use crate::ui::gfx::{Gfx, WindowMode};
-use crate::ui::input::{Action, ButtonStyle, Input, InputKind, Pointer};
+use crate::ui::hit;
+use crate::ui::input::{Action, ButtonStyle, Input, InputKind, Pointer, TextInput};
 use crate::ui::nav::{Flow, Hits, Nav};
 use crate::ui::text::Fonts;
 use crate::ui::theme::Colour;
@@ -299,6 +300,7 @@ fn interactive(
             &mut nav,
             &hits,
             &mut ctx,
+            || video.clipboard().clipboard_text().unwrap_or_default(),
             |nav, ctx| {
                 if let Some(game) = ctx.launch.take() {
                     gfx.minimize();
@@ -623,6 +625,7 @@ fn feed(
     nav: &mut Nav,
     hits: &Hits,
     ctx: &mut Ctx,
+    mut clipboard: impl FnMut() -> String,
     mut started: impl FnMut(&mut Nav, &mut Ctx),
 ) -> Flow {
     let mut inputs = Vec::new();
@@ -642,6 +645,23 @@ fn feed(
             if sdl::playing(nav) {
                 continue;
             }
+            // A Paste hint click is resolved here, before `Nav::handle`, which would otherwise
+            // turn it into a plain `Action::Paste` with no clipboard text attached; Ctrl+V while
+            // typing arrives as that same action (see `ctrl_key_action`).
+            let pastes = match input {
+                Input::Action(Action::Paste) => true,
+                Input::Pointer(Pointer::Click { x, y }) => hit(&hits.hints, x, y) == Some(Action::Paste),
+                _ => false,
+            };
+            if pastes {
+                for paste in paste_inputs(&clipboard()) {
+                    if nav.handle(paste, hits, ctx) == Flow::Quit {
+                        return Flow::Quit;
+                    }
+                }
+                started(nav, ctx);
+                continue;
+            }
             if nav.handle(input, hits, ctx) == Flow::Quit {
                 return Flow::Quit;
             }
@@ -650,6 +670,15 @@ fn feed(
     }
     controls.text = wants_text(nav);
     Flow::Continue
+}
+
+/// Clipboard text turned into one [`Input::Text`] per printable character (FR-UI-1): newlines,
+/// tabs and other control characters are dropped, an empty clipboard becomes no `Input`s.
+pub(crate) fn paste_inputs(text: &str) -> Vec<Input> {
+    text.chars()
+        .filter(|c| !c.is_control())
+        .map(|c| Input::Text(TextInput::Char(c)))
+        .collect()
 }
 
 /// Turns SDL events into [`Feed`]s: keys and gamepads for [`Controls`], the mouse directly.
@@ -896,7 +925,15 @@ mod tests {
         let mut frame = |nav: &mut Nav, ctx: &mut Ctx, keys: &[Keycode]| {
             let feeds = keys.iter().flat_map(|&k| press(k));
             assert_eq!(
-                feed(&mut controls, feeds, nav, &Hits::default(), ctx, |_, _| {}),
+                feed(
+                    &mut controls,
+                    feeds,
+                    nav,
+                    &Hits::default(),
+                    ctx,
+                    String::new,
+                    |_, _| {}
+                ),
                 Flow::Continue
             );
         };
@@ -981,6 +1018,7 @@ mod tests {
             &mut nav,
             &Hits::default(),
             &mut ctx,
+            String::new,
             |_, _| {},
         );
         assert_eq!(flow, Flow::Continue);
@@ -1009,5 +1047,82 @@ mod tests {
             "a reconnects after b and c, on a different port than before"
         );
         assert_eq!(ports.port_of(b), Some(1), "b kept its port throughout");
+    }
+
+    #[test]
+    fn paste_inputs_keeps_printable_characters_and_drops_control_ones() {
+        assert_eq!(
+            paste_inputs("hé\tl\nlo"),
+            ['h', 'é', 'l', 'l', 'o'].map(|c| Input::Text(TextInput::Char(c)))
+        );
+        assert_eq!(paste_inputs(""), [], "an empty clipboard pastes nothing");
+    }
+
+    /// A screen that records every `Input` it is handed, for the Paste tests below.
+    struct Probe(std::rc::Rc<std::cell::RefCell<Vec<Input>>>);
+
+    impl crate::ui::nav::Screen for Probe {
+        fn title(&self) -> &str {
+            "Probe"
+        }
+        fn handle(&mut self, input: Input, _: &mut Ctx) -> crate::ui::nav::Transition {
+            self.0.borrow_mut().push(input);
+            crate::ui::nav::Transition::None
+        }
+        fn draw(&mut self, _: &mut Gfx<'_>, _: &Ctx) {}
+        fn hints(&self) -> Vec<crate::ui::nav::Hint> {
+            Vec::new()
+        }
+        fn text_input(&self) -> bool {
+            true
+        }
+    }
+
+    /// Ctrl+V arrives as a plain `Action::Paste`: `feed` reads the clipboard through the closure
+    /// it is given and turns it into the typed characters, never handing the bare action on.
+    #[test]
+    fn feed_turns_the_paste_action_into_the_clipboards_characters() {
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut nav = Nav::single(Box::new(Probe(log.clone())));
+        let mut ctx = Ctx::empty();
+        let mut controls = Controls::new(InputKind::Keyboard);
+        let flow = feed(
+            &mut controls,
+            [Feed::Input(Input::Action(Action::Paste))],
+            &mut nav,
+            &Hits::default(),
+            &mut ctx,
+            || "hé\n\tllo".to_owned(),
+            |_, _| {},
+        );
+        assert_eq!(flow, Flow::Continue);
+        assert_eq!(*log.borrow(), paste_inputs("héllo"));
+    }
+
+    /// A click on the Paste hint is resolved the same way, before `Nav::handle` turns it into an
+    /// action of its own.
+    #[test]
+    fn feed_turns_a_click_on_the_paste_hint_into_the_clipboards_characters() {
+        use crate::ui::Rect;
+
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut nav = Nav::single(Box::new(Probe(log.clone())));
+        let mut ctx = Ctx::empty();
+        let mut controls = Controls::new(InputKind::Keyboard);
+        let hits = Hits {
+            hints: vec![(Rect::new(0.0, 0.0, 20.0, 20.0), Action::Paste)],
+            ..Hits::default()
+        };
+        let flow = feed(
+            &mut controls,
+            [Feed::Input(Input::Pointer(Pointer::Click { x: 5.0, y: 5.0 }))],
+            &mut nav,
+            &hits,
+            &mut ctx,
+            || "ab".to_owned(),
+            |_, _| {},
+        );
+        assert_eq!(flow, Flow::Continue);
+        assert_eq!(*log.borrow(), paste_inputs("ab"));
     }
 }

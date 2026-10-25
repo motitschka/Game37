@@ -201,6 +201,8 @@ pub struct Artwork {
     /// Set once SteamGridDB's API refuses the key (401, 403) or asks to slow down (429), or
     /// [`MAX_CONNECT_FAILURES`] requests in a row can't connect: no further requests this run.
     stopped: Arc<AtomicBool>,
+    /// Set once SteamGridDB's API refuses the key (401, 403), for Settings to say so.
+    rejected: Arc<AtomicBool>,
     budget: usize,
     /// The least time between the starts of two requests.
     gap: Duration,
@@ -602,6 +604,7 @@ impl Artwork {
             key,
             fetch,
             stopped: Arc::new(AtomicBool::new(false)),
+            rejected: Arc::new(AtomicBool::new(false)),
             budget: MEMORY_BUDGET,
             gap: REQUEST_GAP,
             workers: OnceCell::new(),
@@ -618,6 +621,16 @@ impl Artwork {
         }
     }
 
+    /// The SteamGridDB API key Artwork fetches with, if any.
+    pub fn key(&self) -> Option<&ApiKey> {
+        self.key.as_ref()
+    }
+
+    /// Whether SteamGridDB's API refused the key (401, 403) this run, which stops every request.
+    pub fn key_rejected(&self) -> bool {
+        self.rejected.load(Ordering::Relaxed)
+    }
+
     fn online(&self) -> bool {
         self.key.is_some() && !self.stopped.load(Ordering::Relaxed)
     }
@@ -629,6 +642,7 @@ impl Artwork {
                 self.key.clone(),
                 Arc::clone(&self.fetch),
                 Arc::clone(&self.stopped),
+                Arc::clone(&self.rejected),
                 self.gap,
             )
         })
@@ -1069,6 +1083,7 @@ impl Workers {
         key: Option<ApiKey>,
         fetch: Fetch,
         stopped: Arc<AtomicBool>,
+        rejected: Arc<AtomicBool>,
         gap: Duration,
     ) -> Workers {
         let (disk_tx, disk_done) = mpsc::channel();
@@ -1094,6 +1109,7 @@ impl Workers {
                 key,
                 fetch,
                 stopped,
+                rejected,
                 searched: HashMap::new(),
                 gap,
                 last: Cell::new(None),
@@ -1285,6 +1301,7 @@ struct Net {
     key: Option<ApiKey>,
     fetch: Fetch,
     stopped: Arc<AtomicBool>,
+    rejected: Arc<AtomicBool>,
     /// Display Title searches done this run, so a Game's cover and hero search once.
     searched: HashMap<String, Option<u64>>,
     /// The least time between the starts of two requests.
@@ -1471,6 +1488,9 @@ impl Net {
         };
         self.connect_failures.set(failures);
         let refused = matches!(result, Err(FetchError::Status(401 | 403 | 429))) && api_key.is_some();
+        if matches!(result, Err(FetchError::Status(401 | 403))) && api_key.is_some() {
+            self.rejected.store(true, Ordering::Relaxed);
+        }
         if refused || failures >= MAX_CONNECT_FAILURES {
             self.stopped.store(true, Ordering::Relaxed);
         }
@@ -1927,6 +1947,20 @@ pub(crate) mod tests {
         assert_eq!(fake.calls(), 1);
         // A refused key is not "no match": the next run tries again.
         assert_eq!(read_record(&library, games[0].id), None);
+    }
+
+    #[test]
+    fn artwork_tells_a_rejected_key_from_one_asked_to_slow_down() {
+        for (status, rejected) in [(401, true), (403, true), (429, false)] {
+            let dir = tempfile::tempdir().unwrap();
+            let fake = Fake::new();
+            fake.route(API, Err(FetchError::Status(status)));
+            let (library, games) = library(dir.path());
+            let artwork = artwork(dir.path(), &fake, true);
+            assert!(!artwork.key_rejected());
+            wait(&artwork, &library, &games[0], Kind::Cover);
+            assert_eq!(artwork.key_rejected(), rejected, "{status}");
+        }
     }
 
     #[test]

@@ -335,16 +335,21 @@ impl TextEntry {
     /// Draws the field into `r`: the text and a caret after it, showing the end when it is too
     /// long. An empty field shows `placeholder`.
     pub fn draw_field(&mut self, gfx: &mut Gfx<'_>, r: Rect, placeholder: &str) {
+        self.draw_field_showing(gfx, r, placeholder, &self.text);
+    }
+
+    /// Like [`TextEntry::draw_field`], showing `shown` in place of the text: the text masked, say.
+    pub fn draw_field_showing(&self, gfx: &mut Gfx<'_>, r: Rect, placeholder: &str, shown: &str) {
         gfx.fill_round_rect(r, 14.0, SURFACE2);
         gfx.stroke_round_rect(r, 14.0, 2.0, ACCENT);
         let style = TextStyle::new(32, Weight::SemiBold, TEXT);
         let (x, base) = (r.x + 28.0, r.y + r.h / 2.0 + 12.0);
         let room = r.w - 64.0;
-        if self.text.is_empty() {
+        if shown.is_empty() {
             let dim = TextStyle::new(32, Weight::Medium, MUTED);
             gfx.text(x + 12.0, base, placeholder, dim, Align::Left);
         }
-        let mut shown = self.text.as_str();
+        let mut shown = shown;
         let mut prefix = "";
         while gfx.measure(shown, style) > room {
             let mut chars = shown.chars();

@@ -132,4 +132,9 @@ shot m6-settings-controls "$root/cfg.toml" "settings,down,down,down,down,right"
 shot m6-settings-xbox "$root/cfg.toml" "settings,down,down,down,down,right,right"
 shot m6-settings-display "$root/cfg.toml" "settings,down,down,down,down,down,right"
 
+# M6: Settings Artwork: the key row with no key set (screenshot mode runs Artwork off, so it shows
+# "Not set"), and the key entry modal with a typed key
+shot m6-settings-artwork "$root/cfg.toml" "settings,down,right"
+shot m6-settings-key "$root/cfg.toml" "settings,down,right,confirm,text:abcdef0123456789"
+
 echo "screenshots in $out"
