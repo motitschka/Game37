@@ -1005,11 +1005,20 @@ def screen_search_controller():
     sv.save()
 
 
+def screen_search_results():
+    sv = Svg("24-search-results", "Search (results)")
+    background(sv)
+    search_topbar(sv, SEARCH_QUERY, focused=False)
+    search_results(sv, focus=1)
+    hintbar(sv, [(["A"], "Details"), (["Y"], "Options"), (["B"], "Close")])
+    sv.save()
+
+
 if __name__ == "__main__":
     for fn in [screen_home, screen_home_empty, screen_carousel, screen_console_page, screen_details,
                screen_options, screen_pause, screen_ds, screen_console_missing_emulator,
                screen_details_missing_emulator, screen_speedrun_page, screen_splits_editor,
                screen_speedrun_embedded, screen_pause_run, screen_timer_window, screen_details_speedrun,
-               screen_search, screen_search_controller]:
+               screen_search, screen_search_controller, screen_search_results]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))
