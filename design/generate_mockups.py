@@ -983,11 +983,63 @@ def screen_setup_systems():
     sv.save()
 
 
+def command_box(sv, x, y, cmd, focus="Copy"):
+    """The copyable command line with Copy and Check again, as on 09-console-page-emulator-missing."""
+    bw = 42 + tw(cmd, 18) / 0.54 * 0.6 * 1.1 + 24  # MONO is 0.6 em a character
+    sv.add(rect(x, y, bw, 48, "#000000", rx=10, opacity=0.4),
+           text(x + 20, y + 31, "$", 18, 600, fill=C["dim"], font=MONO),
+           text(x + 42, y + 31, cmd, 18, 500, font=MONO))
+    bx = x + bw + 20
+    cw = 130
+    if focus == "Copy":
+        sv.add(rect(bx - 5, y - 5, cw + 10, 58, "none", rx=15, stroke=C["accent"], sw=3))
+    sv.add(rect(bx, y, cw, 48, C["surface2"], rx=10),
+           rect(bx + 22, y + 13, 14, 17, "none", rx=3, stroke=C["text"], sw=2),
+           rect(bx + 27, y + 18, 14, 17, C["surface2"], rx=3, stroke=C["text"], sw=2),
+           text(bx + 56, y + 31, "Copy", 18, 600))
+    bx2 = bx + cw + 20
+    sv.add(rect(bx2, y, 168, 48, "none", rx=10, stroke=C["line"], sw=2),
+           f'<path d="M{bx2 + 34},{y + 16} a9,9 0 1,0 3,7" fill="none" stroke="{C["text"]}" stroke-width="2.4"'
+           f' stroke-linecap="round"/>',
+           f'<path d="M{bx2 + 30},{y + 11} l5,5 l-6,3" fill="none" stroke="{C["text"]}" stroke-width="2.4"'
+           f' stroke-linecap="round" stroke-linejoin="round"/>',
+           text(bx2 + 52, y + 31, "Check again", 18, 600))
+
+
+def screen_setup_emulators():
+    sv = Svg("27-setup-emulators", "First-run Setup: emulators")
+    setup_frame(sv, 2, "Install the emulators", "These Systems run in their own emulator, installed with Flatpak.")
+    rows = [("gc", "org.DolphinEmu.dolphin-emu", True), ("switch", "io.github.ryubing.Ryujinx", False),
+            ("ps2", "net.pcsx2.PCSX2", False)]
+    for i, (sysid, app_id, installed) in enumerate(rows):
+        x, y = M, 296 + i * 112
+        sv.add(rect(x, y, SETUP_W, 96, C["surface"], rx=14, stroke=C["line"], sw=1))
+        system_chip(sv, x + 24, y + 22, 52, sysid)
+        sv.add(text(x + 100, y + 44, SYS[sysid][1], 24, 700),
+               text(x + 100, y + 74, EXTERNAL[sysid], 18, 500, fill=C["muted"]),
+               text(x + 440, y + 56, app_id, 18, 500, fill=C["muted"], font=MONO))
+        r = x + SETUP_W - 28
+        if installed:
+            sv.add(text(r, y + 56, "Installed", 20, 600, fill=C["ahead"], anchor="end"),
+                   check_path(r - tw("Installed", 20, 600) * 1.1 - 32, y + 42, C["ahead"]))
+        else:
+            sv.add(text(r, y + 56, "Not installed", 20, 600, fill=WARN, anchor="end"),
+                   circle(r - tw("Not installed", 20, 600) * 1.1 - 18, y + 49, 6, WARN))
+    missing = [app_id for _, app_id, installed in rows if not installed]
+    sv.add(text(M, 676, "INSTALL THE MISSING ONES", 14, 700, fill=C["muted"], ls=1.5))
+    command_box(sv, M, 696, "flatpak install flathub " + " ".join(missing))
+    sv.add(text(M, 800, "You can continue now and install them later. Missing emulators show on the Carousel.",
+                18, 500, fill=C["muted"]))
+    setup_buttons(sv, [("Back", "normal"), ("Continue", "primary")])
+    hintbar(sv, [(["A"], "Copy"), (["Y"], "Check again"), (["+"], "Continue"), (["B"], "Back")])
+    sv.save()
+
+
 if __name__ == "__main__":
     for fn in [screen_home, screen_home_empty, screen_carousel, screen_console_page, screen_details,
                screen_options, screen_pause, screen_ds, screen_console_missing_emulator,
                screen_details_missing_emulator, screen_speedrun_page, screen_splits_editor,
                screen_speedrun_embedded, screen_pause_run, screen_timer_window, screen_details_speedrun,
-               screen_setup_systems]:
+               screen_setup_systems, screen_setup_emulators]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))
