@@ -49,8 +49,9 @@ impl GamesRootEntry {
     /// Saves the typed Games Root: makes it, its System folders and `bios/`, rewrites the Config,
     /// and rescans there. A Game's identity is its path relative to the Games Root, so Games moved
     /// with the folder keep their Playtime, Favorites and renames, and Games only under the old root
-    /// leave every view. The unchanged path closes doing nothing; an empty field, a relative path or
-    /// a folder that can't be made stays open, saying why.
+    /// leave every view. The unchanged path closes doing nothing, compared by `canonicalize` when
+    /// both exist so e.g. `~/Games/../Games` doesn't count as a new root; an empty field, a relative
+    /// path or a folder that can't be made stays open, saying why.
     fn save(&mut self, ctx: &mut Ctx) -> Transition {
         let typed = self.entry.text().trim();
         if typed.is_empty() {
@@ -61,7 +62,11 @@ impl GamesRootEntry {
             self.error = Some(RELATIVE.to_owned());
             return Transition::None;
         }
-        if root == ctx.games_root {
+        let unchanged = match (root.canonicalize(), ctx.games_root.canonicalize()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => root == ctx.games_root,
+        };
+        if unchanged {
             return Transition::Pop;
         }
         if let Err(e) = make_folders(&root) {
@@ -330,6 +335,23 @@ mod tests {
         assert!(matches!(save(&mut entry, ctx, &unchanged), Transition::Pop));
         assert_eq!(state(ctx), before);
         assert!(!ctx.games_root.join("snes").exists(), "no folders made");
+    }
+
+    #[test]
+    fn a_differently_spelled_path_to_the_same_folder_is_also_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a");
+        fs::create_dir_all(&a).unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = a.clone();
+        ctx.config_path = dir.path().join("config.toml");
+        ctx.data_dir = dir.path().join("data");
+        let before = state(&ctx);
+        let mut entry = GamesRootEntry::new(&ctx);
+        let spelled = format!("{}/../a", path(&a));
+        assert!(matches!(save(&mut entry, &mut ctx, &spelled), Transition::Pop));
+        assert_eq!(state(&ctx), before);
+        assert!(!ctx.config_path.exists(), "no config written");
     }
 
     #[test]
