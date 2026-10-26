@@ -37,8 +37,9 @@ keyboard.
 
 ## Status
 
-**Beta.** Version 0.1.0-beta.1 is the first public release: everything planned for v1 is in, but it has
-mostly been played with homebrew and test programs so far. First-run Setup, the library, both ways of
+**Beta.** Version 0.1.0-beta.2 is the second beta: everything planned for v1 is in, but it has
+mostly been played with homebrew and test programs so far. What changed in each release is in
+[CHANGELOG.md](CHANGELOG.md). First-run Setup, the library, both ways of
 playing, Artwork, the Details Page, the Options Menu, Settings and search all work. Please
 [report what breaks](https://github.com/motitschka/Game37/issues).
 
@@ -149,24 +150,24 @@ The binaries use your system's SDL3, so they need an up-to-date Arch (`sudo pacm
    ```
 
 2. From the [Releases page](https://github.com/motitschka/Game37/releases), download the file for your
-   distribution and its `.sha256` file: `game37-0.1.0-beta.1-x86_64-arch.tar.gz` or
-   `game37-0.1.0-beta.1-x86_64-ubuntu.tar.gz`. Then check and unpack it; on Ubuntu, write `ubuntu` in
+   distribution and its `.sha256` file: `game37-0.1.0-beta.2-x86_64-arch.tar.gz` or
+   `game37-0.1.0-beta.2-x86_64-ubuntu.tar.gz`. Then check and unpack it; on Ubuntu, write `ubuntu` in
    place of `arch`:
 
    ```bash
-   sha256sum -c game37-0.1.0-beta.1-x86_64-arch.tar.gz.sha256
-   tar -xzf game37-0.1.0-beta.1-x86_64-arch.tar.gz
+   sha256sum -c game37-0.1.0-beta.2-x86_64-arch.tar.gz.sha256
+   tar -xzf game37-0.1.0-beta.2-x86_64-arch.tar.gz
    ```
 
 3. Set up Flathub, as in [step 3](#3-set-up-flathub) below.
 4. Start it:
 
    ```bash
-   ./game37-0.1.0-beta.1/game37
+   ./game37-0.1.0-beta.2/game37
    ```
 
 To start it from your app menu, see [Add Game37 to your app menu](#add-game37-to-your-app-menu); use
-`game37-0.1.0-beta.1/game37` in place of `target/release/game37` there.
+`game37-0.1.0-beta.2/game37` in place of `target/release/game37` there.
 
 ### NixOS
 
@@ -184,14 +185,14 @@ Then set up Flathub, as in [step 3](#3-set-up-flathub) below.
 To try Game37 without installing it:
 
 ```bash
-nix run github:motitschka/Game37/v0.1.0-beta.1
+nix run github:motitschka/Game37/v0.1.0-beta.2
 ```
 
 To install it, with an entry and icon in your app menu, add the flake to your system flake:
 
 ```nix
 # flake.nix, under inputs:
-game37.url = "github:motitschka/Game37/v0.1.0-beta.1";
+game37.url = "github:motitschka/Game37/v0.1.0-beta.2";
 
 # Your NixOS configuration, with inputs passed in through specialArgs:
 environment.systemPackages = [ inputs.game37.packages.x86_64-linux.default ];
@@ -254,11 +255,11 @@ flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.f
 #### 4. Get the source
 
 ```bash
-git clone --branch v0.1.0-beta.1 https://github.com/motitschka/Game37.git
+git clone --branch v0.1.0-beta.2 https://github.com/motitschka/Game37.git
 cd Game37
 ```
 
-Leave out `--branch v0.1.0-beta.1` to get the latest development version instead of this release.
+Leave out `--branch v0.1.0-beta.2` to get the latest development version instead of this release.
 
 #### 5. Build
 
@@ -315,7 +316,7 @@ everything else it needs is downloaded or created at first start, in the places 
 ### Updating
 
 From the `Game37` folder, fetch the new release, check out its tag (shown on the
-[Releases page](https://github.com/motitschka/Game37/releases); `v0.1.0-beta.2` is an example) and build
+[Releases page](https://github.com/motitschka/Game37/releases); `v0.1.0-beta.3` is an example) and build
 again:
 
 ```bash
@@ -323,7 +324,7 @@ git fetch --tags
 ```
 
 ```bash
-git checkout v0.1.0-beta.2
+git checkout v0.1.0-beta.3
 ```
 
 ```bash
