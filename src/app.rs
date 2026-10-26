@@ -29,7 +29,7 @@ use crate::ui::chrome::{self, TopBar};
 use crate::ui::controls::{ControlEvent, Controls, StickAxis};
 use crate::ui::gfx::{Gfx, WindowMode};
 use crate::ui::hit;
-use crate::ui::input::{Action, ButtonStyle, Input, InputKind, Pointer, TextInput};
+use crate::ui::input::{Action, ButtonStyle, Input, InputKind, Pointer, TextInput, button_action};
 use crate::ui::nav::{Flow, Hits, Nav};
 use crate::ui::text::Fonts;
 use crate::ui::theme::Colour;
@@ -210,6 +210,21 @@ const FRAME: Duration = Duration::from_nanos(1_000_000_000 / 60);
 /// The longest the loop sleeps while the window is minimized or hidden.
 const HIDDEN_WAIT: Duration = Duration::from_millis(100);
 
+/// Whether `Action::Confirm` is down this frame, on a controller (already in `ctx.controllers`)
+/// or the keyboard: `Ctx::confirm_held`, for a hold-mode `screens::confirm::Confirm` (Delete save
+/// data) to tell a tap from a hold, following the same approach as
+/// `screens::controller_test::back_held`.
+fn confirm_held(ctx: &Ctx, keys: &sdl3::keyboard::KeyboardState) -> bool {
+    let pad = input::ALL_BUTTONS
+        .into_iter()
+        .find(|&b| button_action(ctx.button_style, b) == Some(Action::Confirm));
+    let on_pad = pad.is_some_and(|b| ctx.controllers.iter().any(|c| c.pad.is_pressed(b)));
+    let on_keyboard = [Scancode::Return, Scancode::KpEnter, Scancode::Space]
+        .into_iter()
+        .any(|k| keys.is_scancode_pressed(k));
+    on_pad || on_keyboard
+}
+
 fn interactive(
     mut nav: Nav,
     mut ctx: Ctx,
@@ -267,6 +282,7 @@ fn interactive(
         ctx.controllers = input.controllers();
         ctx.last_controller = input.last_controller();
         ctx.ticks = sdl3::timer::ticks();
+        ctx.confirm_held = confirm_held(&ctx, &events.keyboard_state());
         if let Some(watcher) = &mut watcher {
             match watcher.poll(&mut ctx.library, ctx::now()) {
                 Ok(changed) => {

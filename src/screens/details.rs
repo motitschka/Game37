@@ -765,8 +765,13 @@ mod tests {
             panic!("expected a confirmation");
         };
         assert_eq!(confirm.title(), "Delete the Save State?");
-        confirm.handle(Input::Action(Action::Right), &mut ctx);
-        confirm.handle(Input::Action(Action::Confirm), &mut ctx);
+        // Delete is focused by default (hold mode): arm, then hold Confirm the full second.
+        confirm.tick(&mut ctx);
+        ctx.confirm_held = true;
+        confirm.tick(&mut ctx);
+        ctx.ticks += crate::screens::confirm::HOLD_MS;
+        confirm.tick(&mut ctx);
+        ctx.confirm_held = false;
         act(&mut page, &mut ctx, Action::Right);
         assert_eq!(stat(&page, "SAVE STATES").as_deref(), Some("0 of 3"));
     }

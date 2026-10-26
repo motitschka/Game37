@@ -300,7 +300,9 @@ impl OptionsMenu {
         };
         let body = self.delete_body(what);
         let (states, srm, deleted) = (self.states.clone(), self.srm.clone(), self.deleted.clone());
-        Confirm::new(title, body, "Delete", move |ctx| {
+        // Hold mode (the owner's call): the row that opens this is itself chosen with Confirm, so
+        // a double tap must not also delete it (see `screens::confirm` module docs).
+        Confirm::hold(title, body, "Delete", "Hold to delete", move |ctx| {
             *deleted.borrow_mut() = Some(states::delete(what, &states, &srm));
             // The Details Page's Save State count reloads.
             ctx.revision += 1;
@@ -1518,16 +1520,28 @@ mod tests {
     }
 
     /// Chooses the focused delete view row and answers its confirmation, Delete when `yes`, else
-    /// Cancel. Returns the confirmation's title and the menu's next tick.
+    /// Cancel. Returns the confirmation's title and the menu's next tick. Delete is focused by
+    /// default (hold mode), so `yes` holds Confirm the full second rather than tapping it.
     fn answer(menu: &mut OptionsMenu, ctx: &mut Ctx, yes: bool) -> (String, Transition) {
         let Transition::Push(mut confirm) = act(menu, ctx, Action::Confirm) else {
             panic!("expected a confirmation");
         };
         let title = confirm.title().to_owned();
-        if yes {
-            confirm.handle(Input::Action(Action::Right), ctx);
-        }
-        let closes = confirm.handle(Input::Action(Action::Confirm), ctx);
+        let closes = if yes {
+            // Arms the hold: the dialog just opened, so Confirm isn't held yet in this test.
+            confirm.tick(ctx);
+            // Starts the hold at the current tick, then lets the full second pass.
+            ctx.confirm_held = true;
+            confirm.tick(ctx);
+            ctx.ticks += crate::screens::confirm::HOLD_MS;
+            let closes = confirm.tick(ctx);
+            ctx.confirm_held = false;
+            closes
+        } else {
+            // Delete is focused by default in hold mode; Left moves to Cancel.
+            confirm.handle(Input::Action(Action::Left), ctx);
+            confirm.handle(Input::Action(Action::Confirm), ctx)
+        };
         assert!(matches!(closes, Transition::Pop));
         (title, menu.tick(ctx))
     }

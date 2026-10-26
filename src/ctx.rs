@@ -119,6 +119,11 @@ pub struct Ctx {
     /// Milliseconds since SDL started, as of this frame: the clock screens time held buttons with.
     /// `app.rs` sets it; tests drive it by hand.
     pub ticks: u64,
+    /// Whether `Action::Confirm` is down this frame, on a controller or the keyboard, for a screen
+    /// that needs to tell a tap from a hold (e.g. `screens::confirm::Confirm`'s hold mode); unlike
+    /// `Input::Action(Action::Confirm)`, which fires once on the press. `app.rs` sets it; tests and
+    /// screenshot mode drive it by hand, when they drive it at all.
+    pub confirm_held: bool,
 }
 
 impl Ctx {
@@ -147,6 +152,7 @@ impl Ctx {
             controllers: Vec::new(),
             last_controller: None,
             ticks: 0,
+            confirm_held: false,
         }
     }
 
