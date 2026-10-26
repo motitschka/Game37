@@ -41,14 +41,15 @@ struct Hold {
 }
 
 impl Hold {
-    /// Whether Confirm has now been held long enough to act.
-    fn update(&mut self, held: bool, now: u64) -> bool {
+    /// Whether Confirm, `held` on the action's button (`focused`), has now been held long enough
+    /// to act. Only letting go of Confirm arms the hold, wherever the focus is, so a Confirm already
+    /// held when the dialog opened never counts, even if the focus leaves the button and comes back.
+    fn update(&mut self, held: bool, focused: bool, now: u64) -> bool {
         if !held {
             self.armed = true;
-            self.since = None;
-            return false;
         }
-        if !self.armed {
+        if !(held && focused && self.armed) {
+            self.since = None;
             return false;
         }
         let since = *self.since.get_or_insert(now);
@@ -160,7 +161,7 @@ impl Screen for Confirm {
             return Transition::None;
         };
         // Only the focused action button's hold counts; moving focus away resets it.
-        if hold.update(self.yes_focused && ctx.confirm_held, ctx.ticks) {
+        if hold.update(ctx.confirm_held, self.yes_focused, ctx.ticks) {
             return self.choose(true, ctx);
         }
         Transition::None
@@ -344,6 +345,24 @@ mod tests {
         assert!(matches!(c.tick(ctx), Transition::None));
         ctx.confirm_held = false;
         assert!(matches!(c.tick(ctx), Transition::None));
+        assert!(!done.get());
+    }
+
+    #[test]
+    fn moving_the_focus_away_and_back_doesnt_count_as_letting_go_of_confirm() {
+        let ctx = &mut Ctx::empty();
+        ctx.confirm_held = true;
+        let (mut c, done) = hold_dialog();
+        c.tick(ctx);
+        c.handle(Input::Action(Action::Left), ctx);
+        c.tick(ctx);
+        c.handle(Input::Action(Action::Right), ctx);
+        c.tick(ctx);
+        ctx.ticks += HOLD_MS;
+        assert!(
+            matches!(c.tick(ctx), Transition::None),
+            "still the press that chose the row"
+        );
         assert!(!done.get());
     }
 

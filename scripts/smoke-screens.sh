@@ -73,9 +73,8 @@ shot m3-pause-saved "$root/cfg.toml" \
 # data are both enabled here)
 shot m5-start-power-on "$root/cfg.toml" "nexttab,right,right,confirm,confirm,options,down,down"
 shot m5-delete-save-data "$root/cfg.toml" "nexttab,right,right,confirm,confirm,options,down,down,down,confirm"
-# Delete is focused and needs holding now, so a single confirm here is just a tap: it deletes
-# nothing, and the button shows unfilled (screenshot mode can't hold a key across frames, see
-# CLAUDE.md)
+# The last confirm chooses the Resume State row, which opens its confirmation with Delete focused
+# and unfilled: deleting needs Confirm held, which screenshot mode can't do across frames
 shot m5-delete-confirm "$root/cfg.toml" \
     "nexttab,right,right,confirm,confirm,options,down,down,down,confirm,confirm"
 shot m3-pause-restart-confirm "$root/cfg.toml" \
