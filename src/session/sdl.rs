@@ -66,9 +66,23 @@ pub struct Session {
     touch_screen: bool,
     /// Whether the left stick also presses the d-pad ([`cores::CoreInfo::stick_is_dpad`]).
     stick_dpad: bool,
+    /// How fast the Game really ran, logged when the session ends.
+    pace: Pace,
     /// Set once, by [`Session::start`]: the message to show the player when they chose a Save
     /// State slot that couldn't be loaded, so the Game started fresh instead (FR-DET-4).
     start_message: Option<String>,
+}
+
+/// Counts over a session's unpaused ticks, to log how fast the Game really ran against its own
+/// frame rate: a Game that sounds too fast shows up here.
+#[derive(Debug, Default)]
+struct Pace {
+    /// Displayed frames that ran the Core.
+    ticks: u64,
+    core_frames: u64,
+    secs: f64,
+    /// Times the sound backlog grew past `AUDIO_MAX` and was dropped.
+    dropped: u64,
 }
 
 struct Audio {
@@ -108,16 +122,18 @@ impl Audio {
     }
 
     /// Drops a backlog (after a stall) rather than play it late, and sets the playback speed that
-    /// keeps the queue near its target.
-    fn balance(&self, base_ratio: f64) {
+    /// keeps the queue near its target. Returns whether it dropped one.
+    fn balance(&self, base_ratio: f64) -> bool {
         let mut queued = self.queued();
-        if queued > AUDIO_MAX {
+        let dropped = queued > AUDIO_MAX;
+        if dropped {
             let _ = self.stream.clear();
             queued = 0.0;
         }
         let ratio = timing::audio_ratio(base_ratio, queued) as f32;
         // SAFETY: the stream is alive.
         unsafe { sdl3::sys::audio::SDL_SetAudioStreamFrequencyRatio(self.stream.raw(), ratio) };
+        dropped
     }
 }
 
@@ -235,6 +251,7 @@ impl Session {
             paused: false,
             touch_screen: std::ptr::eq(core_info, &cores::MELONDS_DS),
             stick_dpad: core_info.stick_is_dpad(),
+            pace: Pace::default(),
             start_message,
         })
     }
@@ -310,7 +327,11 @@ impl Session {
             // Where `draw` puts the frame.
             input.set_pointer(input::touch(timing::fit(self.core.av_info().aspect_ratio), mouse));
         }
-        for _ in 0..self.scheduler.frames(dt) {
+        let frames = self.scheduler.frames(dt);
+        self.pace.ticks += 1;
+        self.pace.core_frames += u64::from(frames);
+        self.pace.secs += dt.max(0.0);
+        for _ in 0..frames {
             let out = self.core.run_frame(&input);
             if !out.duped {
                 gfx.upload_game_frame(out.video);
@@ -322,8 +343,10 @@ impl Session {
                 self.audio = None;
             }
         }
-        if let Some(audio) = &self.audio {
-            audio.balance(self.scheduler.base_ratio());
+        if let Some(audio) = &self.audio
+            && audio.balance(self.scheduler.base_ratio())
+        {
+            self.pace.dropped += 1;
         }
         if let Some((path, tracker)) = &mut self.save
             && let Some(ram) = self.core.save_ram()
@@ -395,6 +418,23 @@ impl Session {
     /// Writes the save memory if it changed and the Resume State, records the Playtime and
     /// silences the Game. The Core shuts down when the session is dropped.
     fn end(&mut self, ctx: &mut Ctx, now: i64) {
+        let Pace {
+            ticks,
+            core_frames,
+            secs,
+            dropped,
+        } = self.pace;
+        if secs > 0.0 {
+            eprintln!(
+                "game37: ran {core_frames} Core frames in {secs:.1} s: {:.2} fps against the Core's {:.2}, \
+                 {:.2} displayed frames a second (display {}), sound backlog dropped {dropped} times",
+                core_frames as f64 / secs,
+                self.fps,
+                ticks as f64 / secs,
+                self.refresh
+                    .map_or("not synced".to_owned(), |r| format!("{r:.2} Hz")),
+            );
+        }
         self.write_resume();
         if let Some((path, tracker)) = &mut self.save
             && let Some(ram) = self.core.save_ram()
