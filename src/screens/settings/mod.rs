@@ -404,10 +404,16 @@ impl Screen for Settings {
     }
 
     fn tick(&mut self, ctx: &mut Ctx) -> Transition {
+        self.tick_covered(ctx);
+        Transition::None
+    }
+
+    /// Ticks every section, so a Core download keeps progressing while something covers Settings,
+    /// as it does while Settings is the top screen.
+    fn tick_covered(&mut self, ctx: &mut Ctx) {
         for section in &mut self.sections {
             section.tick(ctx);
         }
-        Transition::None
     }
 
     fn hints(&self) -> Vec<Hint> {

@@ -485,6 +485,25 @@ mod tests {
     }
 
     #[test]
+    fn tick_covered_starts_a_queued_core_while_something_covers_settings() {
+        let (_dir, mut ctx, started) = world();
+        let mut cores = Cores::default();
+        cores.confirm(row_of(&MGBA), &mut ctx);
+        cores.confirm(row_of(&MESEN), &mut ctx);
+        let mut s = Settings::with_sections(vec![Box::new(cores)]);
+        s.tick_covered(&mut ctx);
+        assert_eq!(names(&started), ["mGBA"], "nothing new yet, still downloading");
+
+        set(&started, 0, DownloadState::Failed("no network".to_owned()));
+        s.tick_covered(&mut ctx);
+        assert_eq!(
+            names(&started),
+            ["mGBA", "Mesen"],
+            "the queued Core starts while something covers Settings"
+        );
+    }
+
+    #[test]
     fn update_all_queues_only_the_installed_cores_and_ppsspps_assets_before_its_core() {
         let (_dir, mut ctx, started) = world();
         install(&ctx, &MESEN);
