@@ -306,6 +306,10 @@ impl Step for Cores {
         !self.queue.running()
     }
 
+    fn busy(&self) -> bool {
+        self.queue.running()
+    }
+
     fn handle(&mut self, input: Input, _: &mut Model, ctx: &mut Ctx) -> Go {
         match input {
             Input::Action(Action::Confirm) => return self.confirm(ctx),
@@ -558,6 +562,17 @@ mod tests {
         setup.tick(ctx);
         assert_eq!(setup.steps[setup.at].focused_button(), Some(Button::Continue));
         assert_eq!(hints(&setup), ["Continue", "Back"]);
+    }
+
+    #[test]
+    fn setup_is_busy_while_a_core_downloads() {
+        let (dir, mut ctx, started) = world();
+        let ctx = &mut ctx;
+        let mut setup = on_cores(dir.path(), &["nes"], ctx);
+        assert!(setup.busy(), "Mesen is downloading");
+        set(&started, 0, DownloadState::Done(ctx.data_dir.clone()));
+        setup.tick(ctx);
+        assert!(!setup.busy());
     }
 
     #[test]

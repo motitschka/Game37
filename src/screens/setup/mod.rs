@@ -122,6 +122,10 @@ trait Step {
     fn types_in_place(&self) -> bool {
         false
     }
+    /// Whether the step has work pending that screenshot mode should wait for: a Core download.
+    fn busy(&self) -> bool {
+        false
+    }
 }
 
 pub struct Setup {
@@ -357,6 +361,10 @@ impl Screen for Setup {
 
     fn clock(&self) -> bool {
         false
+    }
+
+    fn busy(&self) -> bool {
+        self.steps[self.at].busy()
     }
 
     fn text_input(&self) -> bool {
