@@ -15,7 +15,7 @@ way, and what's still open.
 | M3 Embedded player (software) | Done, reviewed, regression-checked | `m3-embedded` | Yes |
 | M4 OpenGL hardware rendering | Done, reviewed, regression-checked | `m4-opengl` | Yes |
 | M5 Artwork, Details Page, Options Menu | Done, reviewed twice, regression-checked | `m5-artwork` | Yes |
-| M6 Settings, search, First-run Setup | Done, reviewed (three reviewers), regression-checked | `m6-settings` | Waiting for the owner's OK |
+| M6 Settings, search, First-run Setup | Done, reviewed (three reviewers, then a second round), regression-checked | `m6-settings` | Waiting for the owner's OK |
 | M7 Speedrun timer (after v1) | Specified 2026-10-21, not started | | |
 
 Each milestone branch builds on the previous one. `main` has everything through M5 (merged on
@@ -45,7 +45,7 @@ branch `m7-…`.
 
 ## How to check everything
 
-- `cargo test`: 464 unit and integration tests, no external data or network needed.
+- `cargo test`: 674 unit and integration tests, no external data or network needed.
 - `cargo test -- --ignored`: 13 tests against real Cores and test ROMs in `.testdata/` (below).
 - `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check`.
 - `scripts/smoke-screens.sh [out-dir]` renders every screen and flow from M1–M6 headless (52 shots,
@@ -220,6 +220,9 @@ The owner's `~/.config/game37/secrets.toml` holds a real SteamGridDB key (mode 6
   - Two quick F11 presses can be lost, because SDL applies fullscreen late and `toggle_fullscreen`
     reads the current state (`gfx.rs`).
   - Pushed screens draw the Home/Consoles tabs; the mockups show only the crumb.
+  - Opening Search from Settings when Search is lower on the stack pops back to it, which drops
+    Settings and so cancels a Core download running there (`nav.rs` `open`).
+  - Screenshot mode's stop-after-Finish (`app.rs`, the step loop's `break`) has no test; `feed`'s has.
 - **M6, manual, in a real window:**
   - a fresh user account with no Config: First-run Setup to playing a homebrew Game, with real
     Flatpak detection and Core downloads (M6's "done when"; checked headless only);
@@ -268,7 +271,8 @@ asking first for anything new.
 
 Cost from the `agent-cost` skill (input-equivalent tokens): M1 10.9M, M3 10.7M, M4 20.7M (main 7.4M,
 13 subagents 13.3M), M5 23.5M (main 8.4M, 26 subagents 15.1M; two usage-limit interruptions and two
-review rounds). M2 wasn't measured separately. Measure a milestone with
+review rounds), M6 34.3M (main 11.7M, 48 subagents 22.6M; three usage-limit interruptions, three
+reviewers and a second round). M2 wasn't measured separately. Measure a milestone with
 `agent-cost --project Game37 --since <its start time>`.
 
 ## Next: M7 (Speedrun timer, after v1)
