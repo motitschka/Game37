@@ -11,6 +11,7 @@
 mod cores;
 mod emulators;
 mod folders;
+mod key;
 mod systems;
 
 use std::path::{Path, PathBuf};
@@ -92,7 +93,8 @@ trait Step {
     fn enter(&mut self, _model: &Model, _ctx: &mut Ctx) {}
     /// Called each frame while the step is shown.
     fn tick(&mut self, _model: &Model, _ctx: &mut Ctx) {}
-    /// Called each time the step is left, before the next one is entered.
+    /// Called each time the step is left, forward or back, before the next one is entered: a step
+    /// cancels its downloads, or clears something sensitive such as the typed SteamGridDB key.
     fn leave(&mut self) {}
     fn can_continue(&self, model: &Model) -> bool;
     /// Handles input other than Back and Continue (+), which the frame handles. Confirm on a
@@ -103,46 +105,15 @@ trait Step {
     fn hints(&self, model: &Model) -> Vec<Hint>;
     /// Which of the bottom buttons has focus, if one does.
     fn focused_button(&self) -> Option<Button>;
+    /// Runs just before Finish writes the Config; `Err` shows why and keeps the step, writing no
+    /// Config (default: nothing to do).
+    fn before_finish(&mut self, _model: &Model, _ctx: &mut Ctx) -> Result<(), String> {
+        Ok(())
+    }
     /// Whether a text field is open: it then takes all input and its hints, and the bottom
     /// buttons are hidden.
     fn text_input(&self) -> bool {
         false
-    }
-}
-
-/// A step that comes in a later job: it shows its number and title, and Continue passes it.
-struct Later {
-    title: &'static str,
-}
-
-impl Step for Later {
-    fn title(&self) -> &'static str {
-        self.title
-    }
-
-    fn explanation(&self) -> &'static str {
-        "This step isn't built yet."
-    }
-
-    fn can_continue(&self, _: &Model) -> bool {
-        true
-    }
-
-    fn handle(&mut self, input: Input, _: &mut Model, _: &mut Ctx) -> Go {
-        match input {
-            Input::Action(Action::Confirm) => Go::Next,
-            _ => Go::Stay,
-        }
-    }
-
-    fn draw(&mut self, _: &mut Gfx<'_>, _: &Model, _: &Ctx) {}
-
-    fn hints(&self, _: &Model) -> Vec<Hint> {
-        Vec::new()
-    }
-
-    fn focused_button(&self) -> Option<Button> {
-        Some(Button::Continue)
     }
 }
 
@@ -167,9 +138,7 @@ impl Setup {
                 Box::new(emulators::Install::new()),
                 Box::new(folders::Folders::new()),
                 Box::new(cores::Cores::new()),
-                Box::new(Later {
-                    title: "Add a SteamGridDB key (optional)",
-                }),
+                Box::new(key::Key::new()),
             ],
             at: 0,
             buttons: Vec::new(),
@@ -221,8 +190,13 @@ impl Setup {
     }
 
     /// Writes the Config with the chosen Games Root and asks `app.rs` to switch to Home, or shows
-    /// why it couldn't and stays.
+    /// why it couldn't and stays. First gives the current step a chance to object (the key step
+    /// saving a bad or unwritable SteamGridDB key, say), writing no Config either.
     fn finish(&mut self, ctx: &mut Ctx) {
+        if let Err(e) = self.steps[self.at].before_finish(&self.model, ctx) {
+            self.error = Some(e);
+            return;
+        }
         let config = Config {
             games_root: self.model.games_root.clone(),
         };

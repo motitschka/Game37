@@ -13,7 +13,7 @@ use crate::ui::gfx::{Align, Gfx, TextStyle};
 use crate::ui::input::{Action, Input, InputKind};
 use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
-use crate::ui::text_entry::{KEYBOARD_H, KEYBOARD_W, Outcome, TextEntry};
+use crate::ui::text_entry::{KEYBOARD_H, KEYBOARD_W, Outcome, TextEntry, mask};
 use crate::ui::theme::{DANGER, LINE, MUTED, SURFACE, TEXT};
 use crate::ui::{Rect, W};
 
@@ -68,16 +68,6 @@ fn ends_in(key: &ApiKey) -> String {
         Some((i, ch)) => format!("Set · ends in {}", &key[i + ch.len_utf8()..]),
         None => "Set".to_owned(),
     }
-}
-
-/// `text` as the key field shows it: every character but the last four as a dot. Four or fewer
-/// show as typed, so the last four typed are always visible.
-fn mask(text: &str) -> String {
-    let hidden = text.chars().count().saturating_sub(4);
-    text.chars()
-        .enumerate()
-        .map(|(i, ch)| if i < hidden { '•' } else { ch })
-        .collect()
 }
 
 /// Restarts Artwork with `key`, or with none (the cache only), so the change shows without a

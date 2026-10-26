@@ -443,6 +443,17 @@ fn key_at(row: Row, at: f32) -> usize {
     row.len() - 1
 }
 
+/// `text` as a secret field shows it: every character but the last four as a dot. Four or fewer
+/// show as typed, so the last four typed are always visible. Shared by the Settings and Setup
+/// SteamGridDB API key fields, so both mask the same way.
+pub fn mask(text: &str) -> String {
+    let hidden = text.chars().count().saturating_sub(4);
+    text.chars()
+        .enumerate()
+        .map(|(i, ch)| if i < hidden { '•' } else { ch })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
