@@ -530,6 +530,44 @@ mod tests {
     }
 
     #[test]
+    fn enter_in_the_field_finishes_as_the_hint_says() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let (mut setup, mut ctx, mut controls) = on_key_by_keyboard(&path);
+        assert_eq!(
+            setup.hints(),
+            [
+                Hint::new(&[Action::Paste], "Paste"),
+                Hint::new(&[Action::Start], "Finish"),
+                Hint::new(&[Action::Back], "Back"),
+            ],
+            "as in mockup 30: Ctrl V Paste, Enter Finish, Esc Back"
+        );
+        let evs = [Ev::Typed(SECRET), down(Keycode::Return)];
+        feed(&mut setup, &mut ctx, &mut controls, &evs, "");
+        assert!(path.exists(), "the Config is written");
+        assert!(ctx.setup_finished.is_some());
+        let saved = config::load_api_key(&path).unwrap();
+        assert_eq!(saved.as_ref().map(config::ApiKey::expose), Some(SECRET));
+    }
+
+    #[test]
+    fn on_a_controller_plus_finishes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let (mut setup, mut ctx) = on_key(&path);
+        let mut controls = Controls::new(InputKind::Controller);
+        let (pad, button) = (sdl3::joystick::JoystickId::new(7), sdl3::gamepad::Button::Start);
+        let plus = [
+            Ev::Event(ControlEvent::PadButtonDown { pad, button }),
+            Ev::Event(ControlEvent::PadButtonUp { pad, button }),
+        ];
+        feed(&mut setup, &mut ctx, &mut controls, &plus, "");
+        assert!(path.exists(), "the Config is written");
+        assert!(ctx.setup_finished.is_some());
+    }
+
+    #[test]
     fn on_a_controller_confirm_on_the_field_opens_the_on_screen_keyboard() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");

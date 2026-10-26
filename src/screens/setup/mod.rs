@@ -21,7 +21,7 @@ use crate::ctx::Ctx;
 use crate::systems::{SYSTEMS, System};
 use crate::ui::cover::ellipsize;
 use crate::ui::gfx::{Align, Gfx, TextStyle};
-use crate::ui::input::{Action, Input, Pointer};
+use crate::ui::input::{Action, Input, InputKind, Pointer};
 use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
 use crate::ui::theme::{ACCENT, BG, Colour, DANGER, DIM, LINE, MUTED, SURFACE, TEXT};
@@ -97,7 +97,8 @@ trait Step {
     /// cancels its downloads, or clears something sensitive such as the typed SteamGridDB key.
     fn leave(&mut self) {}
     fn can_continue(&self, model: &Model) -> bool;
-    /// Handles input other than Back and Continue (+), which the frame handles. Confirm on a
+    /// Handles input other than Back and Continue (+, or Enter in a field typed into in place),
+    /// which the frame handles. Confirm on a
     /// focused [`Button`] returns its [`Go`].
     fn handle(&mut self, input: Input, model: &mut Model, ctx: &mut Ctx) -> Go;
     fn draw(&mut self, gfx: &mut Gfx<'_>, model: &Model, ctx: &Ctx);
@@ -131,6 +132,8 @@ pub struct Setup {
     buttons: Vec<(Rect, Button)>,
     /// Why Finish couldn't write the Config, shown on the last step until it is left.
     error: Option<String>,
+    /// What the player last used, as of the last frame, for the Continue hint.
+    kind: InputKind,
 }
 
 impl Setup {
@@ -149,6 +152,7 @@ impl Setup {
             at: 0,
             buttons: Vec::new(),
             error: None,
+            kind: InputKind::Controller,
         }
     }
 
@@ -245,8 +249,11 @@ impl Screen for Setup {
         let go = match input {
             _ if self.steps[self.at].text_input() => self.steps[self.at].handle(input, &mut self.model, ctx),
             Input::Action(Action::Back) | Input::Pointer(Pointer::Back) => Go::Back,
-            // + outside a text field: Start on a controller arrives as Settings.
+            // + outside a text field: Start on a controller arrives as Settings. Ctrl+comma on the
+            // keyboard too, though no hint shows it.
             Input::Action(Action::Settings) => Go::Next,
+            // Enter in a field the keyboard types into in place.
+            Input::Action(Action::Start) => Go::Next,
             Input::Pointer(Pointer::Click { x, y }) if hit(&self.buttons, x, y).is_some() => {
                 match hit(&self.buttons, x, y).unwrap() {
                     Button::Back => Go::Back,
@@ -259,11 +266,13 @@ impl Screen for Setup {
     }
 
     fn tick(&mut self, ctx: &mut Ctx) -> Transition {
+        self.kind = ctx.input_kind;
         self.steps[self.at].tick(&self.model, ctx);
         Transition::None
     }
 
     fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
+        self.kind = ctx.input_kind;
         let crumb = format!("Setup · step {} of {STEPS}", self.step());
         gfx.text(
             M + 150.0,
@@ -320,13 +329,27 @@ impl Screen for Setup {
         self.buttons = vec![(back_r, Button::Back), (continue_r, Button::Continue)];
     }
 
+    /// The step's hints, then Continue and Back. Continue is + on a controller; on the keyboard it
+    /// is Enter in a field typed into in place, Confirm on the focused Continue, and otherwise not
+    /// shown, as Enter acts on the focus.
     fn hints(&self) -> Vec<Hint> {
-        let mut hints = self.steps[self.at].hints(&self.model);
-        if self.steps[self.at].text_input() {
+        let step = &self.steps[self.at];
+        let mut hints = step.hints(&self.model);
+        if step.text_input() {
             return hints;
         }
-        if self.steps[self.at].can_continue(&self.model) {
-            hints.push(Hint::new(&[Action::Settings], self.continue_label()));
+        if step.can_continue(&self.model) {
+            let label = self.continue_label();
+            match self.kind {
+                InputKind::Controller => hints.push(Hint::new(&[Action::Settings], label)),
+                InputKind::Keyboard if step.types_in_place() => {
+                    hints.push(Hint::new(&[Action::Start], label))
+                }
+                InputKind::Keyboard if step.focused_button() == Some(Button::Continue) => {
+                    hints.push(Hint::new(&[Action::Confirm], label))
+                }
+                InputKind::Keyboard => {}
+            }
         }
         hints.push(Hint::new(&[Action::Back], self.back_label()));
         hints
@@ -528,5 +551,23 @@ mod tests {
         assert_eq!(setup.step(), 1);
         let ticked: Vec<_> = setup.model.ticked().map(|s| s.id).collect();
         assert_eq!(ticked, ["nes"], "the ticks survive going back");
+    }
+
+    /// Enter ticks the focused tile on step 1, so on the keyboard no hint offers Continue there,
+    /// and none shows Ctrl+comma.
+    #[test]
+    fn on_the_keyboard_no_hint_shows_ctrl_comma() {
+        let ctx = &mut Ctx::empty();
+        ctx.input_kind = InputKind::Keyboard;
+        let mut setup = Setup::new(PathBuf::from("/g"));
+        setup.tick(ctx);
+        act(&mut setup, ctx, Action::Confirm);
+        assert_eq!(setup.step(), 1, "Enter ticks the tile");
+        let hints = setup.hints();
+        assert!(
+            hints.iter().all(|h| !h.actions.contains(&Action::Settings)),
+            "{hints:?}"
+        );
+        assert!(hints.iter().all(|h| h.text != "Continue"), "{hints:?}");
     }
 }
