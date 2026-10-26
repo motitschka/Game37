@@ -191,14 +191,9 @@ impl Session {
             fs::create_dir_all(dir).map_err(|e| fail(&format!("Can't create {}: {e}", dir.display())))?;
         }
         let core_path = cores::installed_path(&ctx.data_dir, core_info);
-        let mut core = Core::load(
-            &core_path,
-            &root.join(&game.rel_path),
-            dirs,
-            core_info.options,
-            gl,
-        )
-        .map_err(|e| fail(&e))?;
+        let game_path = root.join(&game.rel_path);
+        let options = core_info.options_for(&game_path);
+        let mut core = Core::load(&core_path, &game_path, dirs, &options, gl).map_err(|e| fail(&e))?;
 
         let srm = saves::srm_path(root, system.id, Path::new(&game.rel_path));
         let save = core.save_ram().map(|ram| {

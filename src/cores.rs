@@ -73,6 +73,45 @@ pub static MUPEN64PLUS_NEXT: CoreInfo = CoreInfo {
     required_bios: &[],
     system_in_data_dir: false,
 };
+
+/// Crops a European (PAL) N64 Game to its picture: such Games draw about 240 lines into the
+/// 288-line PAL frame, which leaves black bands around it. In the Game's own lines and pixels, as
+/// measured on Mario Kart 64 (Europe); the Core allows 0 to 50 for each side. NTSC Games fill
+/// their frame, so they keep the Core's defaults.
+const N64_PAL_CROP: &[(&str, &str)] = &[
+    ("mupen64plus-EnableOverscan", "Enabled"),
+    ("mupen64plus-OverscanTop", "24"),
+    ("mupen64plus-OverscanBottom", "27"),
+    ("mupen64plus-OverscanLeft", "4"),
+    ("mupen64plus-OverscanRight", "4"),
+];
+
+/// Mupen64Plus-Next's options for the N64 Game at `game`: the PAL crop for a European one.
+fn n64_game_options(game: &Path) -> &'static [(&'static str, &'static str)] {
+    let mut header = [0u8; 64];
+    let read = fs::File::open(game).and_then(|mut f| f.read_exact(&mut header));
+    if read.is_ok() && n64_is_pal(&header) {
+        N64_PAL_CROP
+    } else {
+        &[]
+    }
+}
+
+/// Whether an N64 Game file's header names a PAL country, as Mupen64Plus decides it. The country
+/// code is byte 0x3E of the big-endian header; the first 4 bytes tell the file's byte order. An
+/// unknown order counts as NTSC.
+fn n64_is_pal(header: &[u8; 64]) -> bool {
+    let country = match header[..4] {
+        // .z64, big-endian.
+        [0x80, 0x37, 0x12, 0x40] => header[0x3E],
+        // .v64, each 16-bit half swapped.
+        [0x37, 0x80, 0x40, 0x12] => header[0x3F],
+        // .n64, each 32-bit word reversed.
+        [0x40, 0x12, 0x37, 0x80] => header[0x3D],
+        _ => return false,
+    };
+    matches!(country, b'D' | b'F' | b'I' | b'P' | b'S' | b'U' | b'X' | b'Y')
+}
 /// Beetle PSX HW only calls `SET_HW_RENDER` when `GET_VARIABLE` answers its own `renderer`
 /// option, so this is also needed for OpenGL hardware rendering to have any effect (see
 /// `docs/research/m4-cores.md`).
@@ -127,6 +166,17 @@ pub enum GlKind {
 }
 
 impl CoreInfo {
+    /// The option values the Core runs the Game at `game` with: `options`, then those this Core
+    /// reads from the Game's file.
+    pub fn options_for(&self, game: &Path) -> Vec<(&'static str, &'static str)> {
+        let own = if std::ptr::eq(self, &MUPEN64PLUS_NEXT) {
+            n64_game_options(game)
+        } else {
+            &[]
+        };
+        [self.options, own].concat()
+    }
+
     /// Which OpenGL host this Core's context must be made on.
     pub fn gl(&self) -> GlKind {
         if std::ptr::eq(self, &PPSSPP) {
@@ -944,6 +994,96 @@ mod tests {
         assert!(!PPSSPP.stick_is_dpad());
         for core in [&MESEN, &BSNES, &SAMEBOY, &MGBA, &BEETLE_PSX_HW, &MELONDS_DS] {
             assert!(core.stick_is_dpad(), "{}", core.name);
+        }
+    }
+
+    /// A big-endian (.z64) N64 Game file header with `country` at 0x3E.
+    fn n64_header(country: u8) -> [u8; 64] {
+        let mut header = [0u8; 64];
+        header[..4].copy_from_slice(&[0x80, 0x37, 0x12, 0x40]);
+        header[0x3E] = country;
+        header
+    }
+
+    /// `header` in .v64 order: each 16-bit half swapped.
+    fn v64(mut header: [u8; 64]) -> [u8; 64] {
+        header.chunks_mut(2).for_each(|half| half.reverse());
+        header
+    }
+
+    /// `header` in .n64 order: each 32-bit word reversed.
+    fn n64(mut header: [u8; 64]) -> [u8; 64] {
+        header.chunks_mut(4).for_each(|word| word.reverse());
+        header
+    }
+
+    #[test]
+    fn n64_game_headers_name_pal_in_every_byte_order() {
+        for country in *b"DFIPSUXY" {
+            for header in [
+                n64_header(country),
+                v64(n64_header(country)),
+                n64(n64_header(country)),
+            ] {
+                assert!(n64_is_pal(&header), "{}: {:02x?}", country as char, &header[..4]);
+            }
+        }
+        // USA, Japan, and a country code from nowhere.
+        for country in [b'E', b'J', 0] {
+            for header in [
+                n64_header(country),
+                v64(n64_header(country)),
+                n64(n64_header(country)),
+            ] {
+                assert!(!n64_is_pal(&header), "{}: {:02x?}", country as char, &header[..4]);
+            }
+        }
+        let mut garbage = [b'P'; 64];
+        garbage[..4].copy_from_slice(b"GAME");
+        assert!(!n64_is_pal(&garbage), "an unknown byte order counts as NTSC");
+    }
+
+    #[test]
+    fn mupen64plus_next_crops_only_pal_n64_games() {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |name: &str, bytes: &[u8]| {
+            let path = dir.path().join(name);
+            fs::write(&path, bytes).unwrap();
+            path
+        };
+        let pal = [
+            write("pal.z64", &n64_header(b'P')),
+            write("pal.v64", &v64(n64_header(b'D'))),
+            write("pal.n64", &n64(n64_header(b'U'))),
+        ];
+        for game in &pal {
+            assert_eq!(
+                MUPEN64PLUS_NEXT.options_for(game),
+                N64_PAL_CROP,
+                "{}",
+                game.display()
+            );
+        }
+        let ntsc = [
+            write("ntsc.z64", &n64_header(b'E')),
+            write("ntsc.n64", &n64(n64_header(b'J'))),
+            write("short.z64", &n64_header(b'P')[..63]),
+            write("garbage.z64", &[b'P'; 64]),
+            dir.path().join("missing.z64"),
+        ];
+        for game in &ntsc {
+            assert_eq!(MUPEN64PLUS_NEXT.options_for(game), [], "{}", game.display());
+        }
+        for core in [
+            &MESEN,
+            &BSNES,
+            &SAMEBOY,
+            &MGBA,
+            &BEETLE_PSX_HW,
+            &MELONDS_DS,
+            &PPSSPP,
+        ] {
+            assert_eq!(core.options_for(&pal[0]), core.options, "{}", core.name);
         }
     }
 
