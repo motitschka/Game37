@@ -687,9 +687,10 @@ def screen_pause_restart_confirm():
 def screen_ds():
     sv = Svg("08-ds-layout", "DS Layout")
     sv.add(rect(0, 0, W, H, "#06070A"))
-    bx, by, bw, bh = 72, 72, 1248, 936
+    # The Core's hybrid layout at ratio 3: 4 × 256 by 3 × 192, exactly 16:9.
+    bx, by, bw, bh = 0, 0, 1440, 1080
     scene(sv, bx, by, bw, bh, night=True)
-    sx, sy, sw, sh = 1376, 640, 464, 348
+    sx, sy, sw, sh = 1440, 720, 480, 360
     sv.add(rect(sx, sy, sw, sh, "#E9EDF5"))
     sv.add(rect(sx, sy, sw, 44, "#3B4A6B"), text(sx + 18, sy + 29, "MAP", 16, 700, ls=2))
     for r in range(3):
@@ -700,9 +701,8 @@ def screen_ds():
     sv.add(circle(cx, cy, 20, "none", stroke="#0B0D12", sw=3), circle(cx, cy, 4, "#0B0D12"),
            f'<path d="M{cx - 32},{cy} h18 M{cx + 14},{cy} h18 M{cx},{cy - 32} v18 M{cx},{cy + 14} v18"'
            f' stroke="#0B0D12" stroke-width="3" stroke-linecap="round"/>')
-    sv.add(text(bx, by + bh + 34, "Main screen", 16, 600, fill=C["dim"]),
-           text(sx, sy + sh + 34, "Touch screen", 16, 600, fill=C["dim"]))
-    lx = sx
+    lx = sx + 32
+    sv.add(text(lx, sy - 20, "Touch screen", 16, 600, fill=C["dim"]))
     sv.add(text(lx, 140, "Mario Kart DS", 34, 800), text(lx, 178, "Nintendo DS  ·  Large + small layout", 18, 500,
                                                          fill=C["muted"]))
     rows = [(["R3"], "Swap large and small screen"), (["Mouse"], "Click to touch"),

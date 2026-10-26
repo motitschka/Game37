@@ -138,6 +138,10 @@ pub static MELONDS_DS: CoreInfo = CoreInfo {
         ("melonds_number_of_screen_layouts", "2"),
         ("melonds_screen_layout1", "hybrid-top"),
         ("melonds_screen_layout2", "hybrid-bottom"),
+        // The large screen three times the small one: the picture is 4 × 256 by 3 × 192, exactly
+        // 16:9, so on a 16:9 display the large screen fills the height and the small one the rest
+        // of the width (FR-DS-1).
+        ("melonds_hybrid_ratio", "3"),
         ("melonds_hybrid_small_screen", "one"),
         ("melonds_touch_mode", "auto"),
         ("melonds_show_cursor", "always"),
@@ -1136,6 +1140,7 @@ mod tests {
                 ("melonds_number_of_screen_layouts", "2"),
                 ("melonds_screen_layout1", "hybrid-top"),
                 ("melonds_screen_layout2", "hybrid-bottom"),
+                ("melonds_hybrid_ratio", "3"),
                 ("melonds_hybrid_small_screen", "one"),
                 ("melonds_touch_mode", "auto"),
                 ("melonds_show_cursor", "always"),
