@@ -269,16 +269,18 @@ impl Nav {
 
     /// Pushes the `entry` screen over the active one. Only a screen with chrome that is neither a
     /// modal nor typing into a field opens it, and only in a Nav with a library; anywhere else
-    /// `input` goes to the top screen as usual. When the entry screen is already on top, it gets the
-    /// entry's action instead of a second copy being pushed.
+    /// `input` goes to the top screen as usual. When the entry screen is already somewhere on the
+    /// active tab's stack, opening it pops back to it and hands it the entry's action instead of a
+    /// second copy being pushed (opening one while it is already open does nothing).
     fn open(&mut self, entry: Entry, input: Input, ctx: &mut Ctx) -> Flow {
         let top = self.top();
         let shut = top.is_modal() || !top.chrome() || top.text_input();
-        let current = top.entry();
         let Some(entries) = self.entries.as_ref().filter(|_| !shut) else {
             return self.apply(input, ctx);
         };
-        if current == Some(entry) {
+        let stack = &self.tabs[self.active].stack;
+        if let Some(i) = stack.iter().rposition(|s| s.entry() == Some(entry)) {
+            self.tabs[self.active].stack.truncate(i + 1);
             return self.apply(Input::Action(entry.action()), ctx);
         }
         let screen = match entry {
@@ -735,6 +737,49 @@ mod tests {
             ],
             "a click on the pill arrives as the action"
         );
+    }
+
+    #[test]
+    fn opening_settings_already_lower_on_the_stack_pops_back_to_it() {
+        let log = Log::default();
+        let mut nav = library(&log);
+        act(&mut nav, Action::Settings);
+        nav.push(Box::new(spot("Hidden games", &log)));
+        assert_eq!(titles(&nav), ["Home", "Settings", "Hidden games"]);
+        act(&mut nav, Action::Settings);
+        assert_eq!(titles(&nav), ["Home", "Settings"], "pops back to Settings");
+        assert_eq!(
+            log.borrow().last(),
+            Some(&("Settings", Input::Action(Action::Settings))),
+            "Settings gets the action"
+        );
+    }
+
+    #[test]
+    fn opening_search_already_lower_on_the_stack_pops_back_to_it() {
+        let log = Log::default();
+        let mut nav = library(&log);
+        act(&mut nav, Action::Search);
+        nav.push(Box::new(spot("Details Page", &log)));
+        assert_eq!(titles(&nav), ["Home", "Search", "Details Page"]);
+        act(&mut nav, Action::Search);
+        assert_eq!(titles(&nav), ["Home", "Search"], "pops back to Search");
+        assert_eq!(
+            log.borrow().last(),
+            Some(&("Search", Input::Action(Action::Search))),
+            "Search gets the action"
+        );
+    }
+
+    #[test]
+    fn settings_then_search_still_pushes_search_and_settings_pops_back_to_it() {
+        let log = Log::default();
+        let mut nav = library(&log);
+        act(&mut nav, Action::Settings);
+        act(&mut nav, Action::Search);
+        assert_eq!(titles(&nav), ["Home", "Settings", "Search"], "Search is pushed");
+        act(&mut nav, Action::Settings);
+        assert_eq!(titles(&nav), ["Home", "Settings"], "pops back to Settings");
     }
 
     #[test]
