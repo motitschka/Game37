@@ -620,11 +620,8 @@ mod tests {
     fn the_bios_note_shows_only_with_playstation_ticked() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(bios_note(&model(dir.path(), &["nes", "psp"])), None);
-        let bios = dir.path().join("Games/bios");
-        let note = format!(
-            "PlayStation needs a BIOS file: put {ASK_FOR} in {}/.",
-            bios.display()
-        );
+        let bios = tilde(&dir.path().join("Games/bios"), dirs::home_dir().as_deref());
+        let note = format!("PlayStation needs a BIOS file: put {ASK_FOR} in {bios}/.");
         assert_eq!(bios_note(&model(dir.path(), &["nes", "ps1"])), Some(note));
     }
 }
