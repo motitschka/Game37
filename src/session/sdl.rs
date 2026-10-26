@@ -386,6 +386,12 @@ impl Session {
         self.core.unserialize(&state).map_err(|e| e.to_string())
     }
 
+    /// Resets the Core, as the power button would: the Game restarts, but nothing on disk
+    /// changes (FR-EMB-4).
+    fn restart(&mut self) {
+        self.core.reset();
+    }
+
     /// Writes the Resume State the next launch continues from (FR-EMB-6).
     fn write_resume(&mut self) {
         store_resume(&self.states.resume(), self.core.serialize());
@@ -595,6 +601,10 @@ pub fn tick(
                 }
             }
         },
+        Some(Request::Restart) => {
+            running(nav).expect("found above").restart();
+            nav.pop();
+        }
         Some(Request::Quit) => end(nav, ctx),
         None if resume => nav.pop(),
         None => {}
@@ -793,6 +803,76 @@ mod tests {
             run(&mut session, 2),
             after,
             "the next launch continues from that play"
+        );
+    }
+
+    /// Restart game resets the Core, as the power button would, and closes the Pause Menu back
+    /// to play (FR-EMB-4): unlike Quit, nothing on disk changes.
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn restart_resets_the_core_and_closes_the_pause_menu_on_a_real_core() {
+        use crate::screens::Stub;
+        use crate::ui::input::Action;
+        use crate::ui::nav::Hits;
+
+        let _serial = serial();
+        let root = TempDir::new().unwrap();
+        let rel = "snes/240p Test Suite (World).sfc";
+        fs::create_dir_all(root.path().join("snes")).unwrap();
+        fs::copy(Path::new(TESTDATA).join("games").join(rel), root.path().join(rel)).unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = root.path().to_path_buf();
+        ctx.data_dir = Path::new(TESTDATA).join("data");
+        let game = GameRow {
+            id: 1,
+            system: "snes".into(),
+            rel_path: rel.into(),
+            title: "240p Test Suite".into(),
+            date_added: 0,
+            last_played: None,
+            playtime_secs: 0,
+            favorite: false,
+        };
+
+        let mut nav = Nav::single(Box::new(Stub::new("Home")));
+        let none = |_: Scancode| false;
+        let esc = |k: Scancode| k == Scancode::Escape;
+        let tick = |nav: &mut Nav, ctx: &mut Ctx, down: &dyn Fn(Scancode) -> bool| {
+            tick(nav, ctx, &mut NoPicture, 0.02, &[], Mouse::default(), down)
+        };
+        let act = |nav: &mut Nav, ctx: &mut Ctx, action: Action| {
+            nav.handle(Input::Action(action), &Hits::default(), ctx);
+        };
+
+        start(&Play::resume(game.clone()), &mut nav, &ctx, None, None, None);
+        tick(&mut nav, &mut ctx, &none);
+        run(running(&mut nav).unwrap(), 200); // lets the Test Suite's menu settle
+
+        // Moves the Test Suite's on-screen cursor, so the picture after a restart differs from a
+        // continued play unless the Core actually reset.
+        let mut down = crate::libretro::InputState::default();
+        down.set(0, crate::libretro::Button::Down, true);
+        for _ in 0..6 {
+            running(&mut nav).unwrap().core.run_frame(&down);
+        }
+        let moved = run(running(&mut nav).unwrap(), 2);
+
+        tick(&mut nav, &mut ctx, &esc);
+        tick(&mut nav, &mut ctx, &none);
+        assert!(nav.top().pause_menu().is_some(), "Esc pauses");
+        for action in [Action::Down, Action::Down, Action::Down, Action::Confirm] {
+            act(&mut nav, &mut ctx, action);
+        }
+        // The Restart confirmation: Right moves focus from Cancel to Restart, Confirm chooses it.
+        act(&mut nav, &mut ctx, Action::Right);
+        act(&mut nav, &mut ctx, Action::Confirm);
+        tick(&mut nav, &mut ctx, &none);
+
+        assert!(nav.top().pause_menu().is_none(), "Restart closes the Pause Menu");
+        assert_ne!(
+            run(running(&mut nav).unwrap(), 2),
+            moved,
+            "the Core restarted, rather than continuing from the moved cursor"
         );
     }
 
@@ -1083,7 +1163,13 @@ mod tests {
         // Quit to library, then close the window: the Game ends once.
         tick(&mut nav, &mut ctx, &esc);
         tick(&mut nav, &mut ctx, &none);
-        for action in [Action::Down, Action::Down, Action::Down, Action::Confirm] {
+        for action in [
+            Action::Down,
+            Action::Down,
+            Action::Down,
+            Action::Down,
+            Action::Confirm,
+        ] {
             act(&mut nav, &mut ctx, action);
         }
         tick(&mut nav, &mut ctx, &none);

@@ -4,12 +4,12 @@
 
 use crate::ctx::Ctx;
 use crate::session::states::{Rgb, SLOTS};
-use crate::ui::cover::fit_lines;
+use crate::ui::cover::{fit_lines, focus_ring};
 use crate::ui::gfx::{Align, Gfx, TextStyle};
 use crate::ui::input::{Action, Input, Pointer};
 use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
-use crate::ui::theme::{ACCENT, Colour, DIM, LINE, MUTED, SURFACE, SURFACE2, TEXT, WARN};
+use crate::ui::theme::{ACCENT, Colour, DANGER, DIM, LINE, MUTED, SURFACE, SURFACE2, TEXT, WARN};
 use crate::ui::{H, M, Rect, W, hit};
 
 /// What the player asked the session to do.
@@ -18,6 +18,9 @@ pub enum Request {
     /// Save to slot 1 to 3.
     Save(usize),
     Load(usize),
+    /// Resets the Core, as if the power button were pressed: the Resume State never freezes the
+    /// bad moment (FR-EMB-4).
+    Restart,
     Quit,
 }
 
@@ -33,9 +36,25 @@ pub enum View {
     List,
     Save,
     Load,
+    /// Asking "Restart the Game?" over the list, drawn like `screens::confirm::Confirm`.
+    ConfirmRestart,
 }
 
-const ITEMS: [&str; 4] = ["Resume", "Save state", "Load state", "Quit to library"];
+const ITEMS: [&str; 5] = [
+    "Resume",
+    "Save state",
+    "Load state",
+    "Restart game",
+    "Quit to library",
+];
+const RESTART_TITLE: &str = "Restart the Game?";
+const RESTART_BODY: &str = "Progress since your last save is lost. Your In-game Save and Save States stay.";
+const CONFIRM_PAD: f32 = 56.0;
+const CONFIRM_TITLE_H: f32 = 42.0;
+const CONFIRM_BUTTON_W: f32 = 200.0;
+const CONFIRM_BUTTON_H: f32 = 64.0;
+const CONFIRM_BUTTON_GAP: f32 = 16.0;
+const CONFIRM_PANEL_W: f32 = 960.0;
 const THUMB_KEYS: [&str; SLOTS] = ["pause-slot-1", "pause-slot-2", "pause-slot-3"];
 const CARD_W: f32 = 360.0;
 const CARD_H: f32 = 270.0;
@@ -67,6 +86,9 @@ pub struct PauseMenu {
     request: Option<Request>,
     item_hits: Vec<(Rect, usize)>,
     slot_hits: Vec<(Rect, usize)>,
+    /// In `View::ConfirmRestart`: whether "Restart" has the focus rather than Cancel.
+    restart_focused: bool,
+    confirm_hits: Vec<(Rect, bool)>,
 }
 
 impl PauseMenu {
@@ -82,6 +104,8 @@ impl PauseMenu {
             request: None,
             item_hits: Vec::new(),
             slot_hits: Vec::new(),
+            restart_focused: false,
+            confirm_hits: Vec::new(),
         };
         for (i, info) in slots.into_iter().enumerate() {
             menu.slots.push(Slot {
@@ -146,6 +170,10 @@ impl PauseMenu {
                 self.view = View::Load;
                 self.slot = (0..SLOTS).find(|&i| self.selectable(i));
             }
+            3 => {
+                self.view = View::ConfirmRestart;
+                self.restart_focused = false;
+            }
             _ => self.request = Some(Request::Quit),
         }
         Transition::None
@@ -157,6 +185,14 @@ impl PauseMenu {
         for slot in &mut self.slots {
             slot.error = None;
         }
+    }
+
+    /// Closes the restart confirmation, asking the session to restart first if `yes`.
+    fn choose_restart(&mut self, yes: bool) {
+        if yes {
+            self.request = Some(Request::Restart);
+        }
+        self.back_to_list();
     }
 
     fn activate_slot(&mut self, i: usize) {
@@ -182,6 +218,53 @@ impl PauseMenu {
             i += dir;
         }
     }
+
+    /// The "Restart the Game?" dialog, over the Pause Menu's list, laid out like
+    /// `screens::confirm::Confirm`.
+    fn draw_restart_confirm(&mut self, gfx: &mut Gfx<'_>) {
+        gfx.fill_rect(Rect::new(0.0, 0.0, W, H), Colour::hex(0x000000).alpha(0.62));
+        let title_style = TextStyle::new(34, Weight::Bold, TEXT);
+        let body_style = TextStyle::new(22, Weight::Regular, MUTED);
+        let lines = gfx.wrap(RESTART_TITLE, title_style, CONFIRM_PANEL_W - 2.0 * CONFIRM_PAD);
+        let h = CONFIRM_PAD
+            + lines.len() as f32 * CONFIRM_TITLE_H
+            + 24.0
+            + 34.0
+            + 48.0
+            + CONFIRM_BUTTON_H
+            + CONFIRM_PAD;
+        let p = Rect::new((W - CONFIRM_PANEL_W) / 2.0, (H - h) / 2.0, CONFIRM_PANEL_W, h);
+        gfx.fill_round_rect(p, 20.0, SURFACE);
+        gfx.stroke_round_rect(p, 20.0, 1.0, LINE);
+        let x = p.x + CONFIRM_PAD;
+        let mut y = p.y + CONFIRM_PAD - 8.0;
+        for line in &lines {
+            y += CONFIRM_TITLE_H;
+            gfx.text(x, y, line, title_style, Align::Left);
+        }
+        gfx.text(x, y + 24.0 + 34.0, RESTART_BODY, body_style, Align::Left);
+        self.confirm_hits.clear();
+        let top = p.y + p.h - CONFIRM_PAD - CONFIRM_BUTTON_H;
+        let mut right = p.x + p.w - CONFIRM_PAD;
+        for (yes, label) in [(true, "Restart"), (false, "Cancel")] {
+            let r = Rect::new(right - CONFIRM_BUTTON_W, top, CONFIRM_BUTTON_W, CONFIRM_BUTTON_H);
+            if yes == self.restart_focused {
+                focus_ring(gfx, r, 14.0);
+            }
+            gfx.fill_round_rect(r, 14.0, SURFACE2);
+            let ink = if yes { DANGER } else { TEXT };
+            let style = TextStyle::new(22, Weight::Bold, ink);
+            gfx.text(
+                r.x + r.w / 2.0,
+                r.y + r.h / 2.0 + 8.0,
+                label,
+                style,
+                Align::Centre,
+            );
+            self.confirm_hits.push((r, yes));
+            right -= CONFIRM_BUTTON_W + CONFIRM_BUTTON_GAP;
+        }
+    }
 }
 
 impl Screen for PauseMenu {
@@ -194,6 +277,21 @@ impl Screen for PauseMenu {
     }
 
     fn handle(&mut self, input: Input, _: &mut Ctx) -> Transition {
+        if self.view == View::ConfirmRestart {
+            match input {
+                Input::Action(Action::Left) => self.restart_focused = false,
+                Input::Action(Action::Right) => self.restart_focused = true,
+                Input::Action(Action::Confirm) => self.choose_restart(self.restart_focused),
+                Input::Action(Action::Back) | Input::Pointer(Pointer::Back) => self.back_to_list(),
+                Input::Pointer(Pointer::Click { x, y }) => {
+                    if let Some(yes) = hit(&self.confirm_hits, x, y) {
+                        self.choose_restart(yes);
+                    }
+                }
+                _ => {}
+            }
+            return Transition::None;
+        }
         let list = self.view == View::List;
         match input {
             Input::Action(Action::Up) if list => self.item = self.item.saturating_sub(1),
@@ -256,7 +354,7 @@ impl Screen for PauseMenu {
             }
             let weight = if on { Weight::Bold } else { Weight::Medium };
             gfx.text(M, y + 44.0, label, TextStyle::new(24, weight, TEXT), Align::Left);
-            if i == 1 || i == 2 {
+            if i == 1 || i == 2 || i == 3 {
                 let arrow = TextStyle::new(26, Weight::SemiBold, MUTED);
                 gfx.text(M + 408.0, y + 44.0, "›", arrow, Align::Right);
             }
@@ -272,6 +370,10 @@ impl Screen for PauseMenu {
         );
         self.slot_hits.clear();
         if self.view == View::List {
+            return;
+        }
+        if self.view == View::ConfirmRestart {
+            self.draw_restart_confirm(gfx);
             return;
         }
         let heading = if self.view == View::Save {
@@ -322,6 +424,7 @@ impl Screen for PauseMenu {
             View::List => ("Select", "Resume"),
             View::Save => ("Save here", "Back"),
             View::Load => ("Load", "Back"),
+            View::ConfirmRestart => ("Choose", "Cancel"),
         };
         vec![
             Hint::new(&[Action::Confirm], confirm),
@@ -409,5 +512,52 @@ mod tests {
         }
         act(&mut menu, Action::Confirm);
         assert_eq!(menu.take_request(), Some(Request::Quit));
+    }
+
+    #[test]
+    fn the_item_order_is_resume_save_load_restart_quit() {
+        assert_eq!(
+            ITEMS,
+            [
+                "Resume",
+                "Save state",
+                "Load state",
+                "Restart game",
+                "Quit to library"
+            ]
+        );
+    }
+
+    #[test]
+    fn restarting_asks_first_and_only_confirming_yields_a_request() {
+        let mut menu = PauseMenu::new("T", String::new(), vec![None, None, None]);
+        act(&mut menu, Action::Down);
+        act(&mut menu, Action::Down);
+        act(&mut menu, Action::Down);
+        act(&mut menu, Action::Confirm);
+        assert_eq!(menu.view(), View::ConfirmRestart, "asks before restarting");
+        assert_eq!(menu.take_request(), None, "nothing happens until confirmed");
+
+        // Cancel is focused first; confirming without moving focus does nothing.
+        act(&mut menu, Action::Confirm);
+        assert_eq!(menu.take_request(), None, "Cancel does nothing");
+        assert_eq!(menu.view(), View::List, "back to the list either way");
+
+        menu.open(3);
+        act(&mut menu, Action::Right);
+        act(&mut menu, Action::Confirm);
+        assert_eq!(menu.take_request(), Some(Request::Restart));
+        assert_eq!(menu.view(), View::List);
+    }
+
+    #[test]
+    fn back_from_the_restart_confirm_yields_no_request() {
+        let mut menu = PauseMenu::new("T", String::new(), vec![None, None, None]);
+        menu.open(3);
+        assert_eq!(menu.view(), View::ConfirmRestart);
+        act(&mut menu, Action::Right);
+        act(&mut menu, Action::Back);
+        assert_eq!(menu.take_request(), None);
+        assert_eq!(menu.view(), View::List, "Back returns to the list, not a request");
     }
 }
