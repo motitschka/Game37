@@ -98,8 +98,7 @@ trait Step {
     fn leave(&mut self) {}
     fn can_continue(&self, model: &Model) -> bool;
     /// Handles input other than Back and Continue (+, or Enter in a field typed into in place),
-    /// which the frame handles. Confirm on a
-    /// focused [`Button`] returns its [`Go`].
+    /// which the frame handles. Confirm on a focused [`Button`] returns its [`Go`].
     fn handle(&mut self, input: Input, model: &mut Model, ctx: &mut Ctx) -> Go;
     fn draw(&mut self, gfx: &mut Gfx<'_>, model: &Model, ctx: &Ctx);
     /// The hints between A's and Continue's: Continue and Back are added after them.
