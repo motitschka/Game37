@@ -178,7 +178,8 @@ mod real_core_tests {
     use std::collections::HashSet;
     use std::path::Path;
 
-    use sdl3::render::create_renderer;
+    use sdl3::pixels::Color;
+    use sdl3::render::{Canvas, create_renderer};
     use sdl3::sys::render::SDL_FlushRenderer;
     use sdl3::sys::video::SDL_GL_GetCurrentContext;
     use tempfile::TempDir;
@@ -197,15 +198,49 @@ mod real_core_tests {
         Glx,
     }
 
+    /// A Core started through an OpenGL host beside the renderer of a hidden offscreen window.
+    /// Fields drop in order: the Core first, while its window lives.
+    struct OnGl {
+        core: Core,
+        canvas: Canvas<Window>,
+        frontend: SDL_GLContext,
+        _dirs: TempDir,
+        _video: sdl3::VideoSubsystem,
+        _sdl: sdl3::Sdl,
+    }
+
+    impl OnGl {
+        /// Runs `frames` frames; the renderer's context is current again after every one.
+        fn run(&mut self, frames: usize) {
+            for _ in 0..frames {
+                self.core.run_frame(&Default::default());
+                // SAFETY: a plain query.
+                assert_eq!(
+                    unsafe { SDL_GL_GetCurrentContext() },
+                    self.frontend,
+                    "the renderer's context"
+                );
+            }
+        }
+    }
+
     /// Runs `game` on `core` for `frames` frames through an OpenGL host beside the renderer of a
     /// hidden offscreen window, with `system` as its system directory; returns the last frame.
     /// The renderer's context is current again after every frame.
     fn run_on_gl(core: &str, game: &str, system: &Path, frames: usize, host: Host) -> Frame {
+        let mut gl = start_on_gl(core, game, system, (640, 480), host);
+        gl.run(frames);
+        gl.core.frame().clone()
+    }
+
+    /// Starts `game` on `core` with `system` as its system directory, in a `width × height`
+    /// window.
+    fn start_on_gl(core: &str, game: &str, system: &Path, (width, height): (u32, u32), host: Host) -> OnGl {
         let data = Path::new(TESTDATA);
         sdl3::hint::set("SDL_VIDEO_DRIVER", "offscreen");
         let sdl = sdl3::init().unwrap();
         let video = sdl.video().unwrap();
-        let window = video.window("hw", 640, 480).hidden().build().unwrap();
+        let window = video.window("hw", width, height).hidden().build().unwrap();
         let canvas = create_renderer(window, Some(c"opengl")).unwrap();
         // SAFETY: the renderer is alive; flushing makes its context current.
         let frontend = unsafe {
@@ -220,7 +255,7 @@ mod real_core_tests {
         };
 
         let dirs = TempDir::new().unwrap();
-        let mut core = Core::load(
+        let core = Core::load(
             &data.join("data/cores").join(core),
             &data.join("games").join(game),
             CoreDirs {
@@ -231,16 +266,29 @@ mod real_core_tests {
             Some(host),
         )
         .unwrap_or_else(|e| panic!("{e}"));
-        for _ in 0..frames {
-            core.run_frame(&Default::default());
-            // SAFETY: a plain query.
-            assert_eq!(
-                unsafe { SDL_GL_GetCurrentContext() },
-                frontend,
-                "the renderer's context"
-            );
+        OnGl {
+            core,
+            canvas,
+            frontend,
+            _dirs: dirs,
+            _video: video,
+            _sdl: sdl,
         }
-        core.frame().clone()
+    }
+
+    /// The window filled with a green texture by the renderer, as RGBA bytes.
+    fn fill_green(canvas: &mut Canvas<Window>) -> Vec<u8> {
+        let creator = canvas.texture_creator();
+        let mut texture = creator
+            .create_texture_static(sdl3::pixels::PixelFormat::RGBA32, 4, 4)
+            .unwrap();
+        texture.update(None, &[0, 200, 0, 255].repeat(16), 16).unwrap();
+        canvas.set_draw_color(Color::RGB(200, 0, 0));
+        canvas.clear();
+        canvas.copy(&texture, None, None).unwrap();
+        let surface = canvas.read_pixels(None).unwrap();
+        let surface = surface.convert_format(sdl3::pixels::PixelFormat::RGBA32).unwrap();
+        surface.with_lock(|pixels| pixels.to_vec())
     }
 
     /// A frame read back from OpenGL: only those are RGBA.
@@ -289,5 +337,39 @@ mod real_core_tests {
             Host::Sdl,
         );
         assert_drawn_with_gl(&frame);
+    }
+
+    /// Mupen64Plus-Next saves, restores and resets with its own context current: the renderer
+    /// still fills its whole window afterwards. With the renderer's context current, GLideN64
+    /// changes its viewport and texture state behind its back.
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn hw_mupen64plus_next_states_leave_the_renderer_alone() {
+        let _serial = serial();
+        let system = TempDir::new().unwrap();
+        let mut gl = start_on_gl(
+            "mupen64plus_next_libretro.so",
+            "n64/N64 NICCC (World).n64",
+            system.path(),
+            (1280, 720),
+            Host::Sdl,
+        );
+        gl.run(300);
+        let green = |pixels: &[u8]| pixels.chunks(4).filter(|p| p[..3] == [0, 200, 0]).count();
+        assert_eq!(green(&fill_green(&mut gl.canvas)), 1280 * 720, "green before");
+        let state = gl.core.serialize().unwrap();
+        gl.core.unserialize(&state).unwrap();
+        gl.core.reset();
+        // SAFETY: a plain query.
+        assert_eq!(
+            unsafe { SDL_GL_GetCurrentContext() },
+            gl.frontend,
+            "the renderer's context"
+        );
+        assert_eq!(
+            green(&fill_green(&mut gl.canvas)),
+            1280 * 720,
+            "the whole window is green"
+        );
     }
 }
