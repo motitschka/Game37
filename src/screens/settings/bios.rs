@@ -190,7 +190,8 @@ mod tests {
         let (_dir, ctx) = world();
         let rows = Bios::default().rows(&ctx);
         let bios = ctx.games_root.join("bios");
-        let missing = format!("Missing: put {ASK_FOR} in {}/", bios.display());
+        let dir = tilde(&bios, dirs::home_dir().as_deref());
+        let missing = format!("Missing: put {ASK_FOR} in {dir}/");
         assert_eq!(value(&rows, "ps1"), missing);
         for id in ["nes", "gb", "snes", "n64", "gbc", "gba", "nds", "psp"] {
             assert_eq!(value(&rows, id), "No BIOS needed", "{id}");

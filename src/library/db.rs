@@ -1278,7 +1278,13 @@ mod tests {
             "snes",
             &games(
                 "snes",
-                &["Zelda II", "Zelda Classic", "Amazing Zelda", "Gazelle Run"],
+                &[
+                    "Zelda II",
+                    "Zelda Classic",
+                    "Bravo Zelda",
+                    "Amazelle",
+                    "Gazelle Run",
+                ],
             ),
             100,
         )
@@ -1286,10 +1292,18 @@ mod tests {
 
         let rows = lib.search("zel").unwrap();
         // Group 1 (title starts with "zel"), alphabetical; group 2 (a word starts with "zel");
-        // group 3 ("zel" only mid-word, in "Gazelle").
+        // group 3 ("zel" only mid-word, in "Amazelle" and "Gazelle"). "Amazelle" sorts before
+        // "Bravo Zelda" alphabetically, so this pins group 3 staying after group 2 rather than
+        // merging into one alphabetical pass.
         assert_eq!(
             titles(&rows),
-            ["Zelda Classic", "Zelda II", "Amazing Zelda", "Gazelle Run"]
+            [
+                "Zelda Classic",
+                "Zelda II",
+                "Bravo Zelda",
+                "Amazelle",
+                "Gazelle Run"
+            ]
         );
     }
 

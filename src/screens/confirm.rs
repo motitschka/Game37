@@ -121,13 +121,17 @@ impl Screen for Confirm {
     }
 
     fn hints(&self) -> Vec<Hint> {
+        // Back always cancels, so its hint shows regardless of which button has the focus.
         if self.yes_focused {
             vec![
                 Hint::new(&[Action::Confirm], self.yes),
                 Hint::new(&[Action::Back], "Cancel"),
             ]
         } else {
-            vec![Hint::new(&[Action::Confirm], "Cancel")]
+            vec![
+                Hint::new(&[Action::Confirm], "Cancel"),
+                Hint::new(&[Action::Back], "Cancel"),
+            ]
         }
     }
 }
@@ -148,7 +152,14 @@ mod tests {
     fn cancel_is_focused_so_confirm_closes_it_without_acting() {
         let ctx = &mut Ctx::empty();
         let (mut c, done) = dialog();
-        assert_eq!(c.hints(), [Hint::new(&[Action::Confirm], "Cancel")]);
+        // Spec change: Back always cancels, so its hint now shows even with Cancel focused.
+        assert_eq!(
+            c.hints(),
+            [
+                Hint::new(&[Action::Confirm], "Cancel"),
+                Hint::new(&[Action::Back], "Cancel"),
+            ]
+        );
         assert!(matches!(
             c.handle(Input::Action(Action::Confirm), ctx),
             Transition::Pop
