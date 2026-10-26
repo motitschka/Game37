@@ -236,17 +236,17 @@ fn ds_touch_reaches_melonds_ds_and_r3_swaps_the_screens() {
     let (top, _) = run(&mut core, 120);
     eprintln!("frame {}x{}, {:?}", top.width, top.height, core.av_info());
     assert!(distinct_colours(&top) > 2, "hbmenu shows something");
-    // Hybrid, scale 2: the large screen (512×384) on the left, the small one (256×192) below on
-    // its right.
+    // Hybrid, ratio 3: the large screen (768×576) on the left, the small one (256×192) below on
+    // its right, 16:9 in all.
     assert_eq!(
         (top.width, top.height),
-        (768, 384),
+        (1024, 576),
         "one large and one small screen"
     );
 
     let centre = Pointer {
-        x: (640.0 / 768.0 * 2.0 * 32767.0 - 32767.0_f64).round() as i16,
-        y: (288.0 / 384.0 * 2.0 * 32767.0 - 32767.0_f64).round() as i16,
+        x: (896.0 / 1024.0 * 2.0 * 32767.0 - 32767.0_f64).round() as i16,
+        y: (480.0 / 576.0 * 2.0 * 32767.0 - 32767.0_f64).round() as i16,
         pressed: true,
     };
     let mut input = InputState::default();
@@ -289,14 +289,14 @@ fn ds_touch_reaches_melonds_ds_and_r3_swaps_the_screens() {
         core.run_frame(&r3);
     }
     let (after, _) = run(&mut core, 30);
-    assert_eq!((after.width, after.height), (768, 384), "still hybrid");
+    assert_eq!((after.width, after.height), (1024, 576), "still hybrid");
     let (large, small, now_large) = (large_screen(&before), small_screen(&before), large_screen(&after));
     let (to_small, to_large) = (difference(&now_large, &small), difference(&now_large, &large));
     eprintln!("the large screen now differs from the small one by {to_small}, from itself by {to_large}");
     assert!(to_small < to_large, "R3 put the touch screen on the large one");
 }
 
-/// One DS screen's 256×192 RGB bytes, from a 768×384 hybrid frame (in `Xrgb8888`) at `(x, y)`,
+/// One DS screen's 256×192 RGB bytes, from a 1024×576 hybrid frame (in `Xrgb8888`) at `(x, y)`,
 /// every `step`th pixel.
 fn ds_screen(frame: &Frame, x: usize, y: usize, step: usize) -> Vec<u8> {
     let bpp = frame.format.bytes_per_pixel();
@@ -311,14 +311,14 @@ fn ds_screen(frame: &Frame, x: usize, y: usize, step: usize) -> Vec<u8> {
     screen
 }
 
-/// The hybrid layout's large screen, 512×384 at the left, sampled at half size.
+/// The hybrid layout's large screen, 768×576 at the left, sampled at a third of its size.
 fn large_screen(frame: &Frame) -> Vec<u8> {
-    ds_screen(frame, 0, 0, 2)
+    ds_screen(frame, 0, 0, 3)
 }
 
 /// The hybrid layout's small screen, 256×192 at the bottom right.
 fn small_screen(frame: &Frame) -> Vec<u8> {
-    ds_screen(frame, 512, 192, 1)
+    ds_screen(frame, 768, 384, 1)
 }
 
 /// The mean difference per colour byte of two screens.

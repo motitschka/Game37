@@ -107,7 +107,7 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 
 ### Nintendo DS
 
-- **FR-DS-1** DS shows one large screen and one small screen.
+- **FR-DS-1** DS shows one large screen and one small screen, the large one three times the size of the small one: together 16:9, so on a 16:9 display the large screen fills the height and the small one the rest of the width.
 - **FR-DS-2** R3 swaps which screen is large.
 - **FR-DS-3** The touch screen accepts mouse clicks, and a right-stick cursor with a button to tap.
 
