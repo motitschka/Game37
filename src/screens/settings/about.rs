@@ -3,12 +3,18 @@
 
 use std::path::Path;
 
-use super::{RX, Section, TOP};
+use super::{RW, RX, Section, TOP};
 use crate::ctx::Ctx;
 use crate::screens::home::tilde;
+use crate::ui::cover::ellipsize;
 use crate::ui::gfx::{Align, Gfx, TextStyle};
 use crate::ui::text::Weight;
 use crate::ui::theme::{MUTED, TEXT};
+
+/// `env!("CARGO_PKG_LICENSE")`, worded for the About panel ("Licensed under GPL-3.0-or-later").
+pub(crate) fn license_line() -> String {
+    format!("Licensed under {}", env!("CARGO_PKG_LICENSE"))
+}
 
 pub struct About;
 
@@ -24,7 +30,7 @@ impl Section for About {
         let version = format!("Game37 {}", env!("CARGO_PKG_VERSION"));
         let title = TextStyle::new(28, Weight::ExtraBold, TEXT);
         gfx.text(x, TOP + 40.0, &version, title, Align::Left);
-        gfx.text(x, TOP + 80.0, "Licensed under GPL-3.0", muted, Align::Left);
+        gfx.text(x, TOP + 80.0, &license_line(), muted, Align::Left);
         let mut y = TOP + 168.0;
         gfx.text(x, y, "Paths", heading, Align::Left);
         let home = dirs::home_dir();
@@ -38,7 +44,8 @@ impl Section for About {
         for (i, (label, path)) in paths.iter().enumerate() {
             let line = y + 48.0 + i as f32 * 40.0;
             gfx.text(x, line, label, muted, Align::Left);
-            gfx.text(vx, line, path, value, Align::Left);
+            let shown = ellipsize(path, RX + RW - 32.0 - vx, |s| gfx.measure(s, value));
+            gfx.text(vx, line, &shown, value, Align::Left);
         }
         y += 48.0 + 3.0 * 40.0 + 48.0;
         gfx.text(x, y, "Credits", heading, Align::Left);
@@ -46,5 +53,19 @@ impl Section for About {
         for (i, line) in credits.iter().enumerate() {
             gfx.text(x, y + 48.0 + i as f32 * 40.0, line, muted, Align::Left);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_license_line_matches_cargo_toml() {
+        assert_eq!(
+            license_line(),
+            format!("Licensed under {}", env!("CARGO_PKG_LICENSE"))
+        );
+        assert_eq!(license_line(), "Licensed under GPL-3.0-or-later");
     }
 }
