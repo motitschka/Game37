@@ -14,8 +14,7 @@
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 ![Systems](https://img.shields.io/badge/Systems-17%2C%20NES%20%E2%86%92%20PS4-8B7BFF)
 
-[**Download**](https://github.com/motitschka/Game37/releases) &nbsp;·&nbsp;
-[Install](#install) &nbsp;·&nbsp;
+[**Install**](#install) &nbsp;·&nbsp;
 [Systems](#systems) &nbsp;·&nbsp;
 [Setting up](#setting-up) &nbsp;·&nbsp;
 [Known limitations](#known-limitations)
