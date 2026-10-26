@@ -1,9 +1,33 @@
+<div align="center">
+
 # Game37
 
-An all-in-one game library for Nintendo and Sony consoles on Linux. Game37 plays the older Systems
-itself, from NES to PSP, through libretro Cores inside its own window. Newer Systems, from GameCube to
-PS4, are handed to their Standalone Emulators. Drop your games into one folder and browse them all from
-a single console-style menu, with a controller or with mouse and keyboard.
+**An all-in-one game library for Nintendo and Sony consoles on Linux**
+
+[![Release](https://img.shields.io/github/v/release/motitschka/Game37?include_prereleases&color=brightgreen&label=release)](https://github.com/motitschka/Game37/releases)
+[![Downloads](https://img.shields.io/github/downloads/motitschka/Game37/total?color=blue&label=downloads)](https://github.com/motitschka/Game37/releases)
+[![Stars](https://img.shields.io/github/stars/motitschka/Game37?style=flat&color=yellow)](https://github.com/motitschka/Game37/stargazers)
+[![Visitors](https://visitor-badge.laobi.icu/badge?page_id=motitschka.Game37&left_text=visitors)](https://github.com/motitschka/Game37)
+
+![Linux](https://img.shields.io/badge/Linux-Arch%20%C2%B7%20Fedora%20%C2%B7%20Ubuntu%20%C2%B7%20Debian%20%C2%B7%20NixOS-lightgrey?logo=linux&logoColor=white)
+![Rust](https://img.shields.io/badge/rust-2024%20edition-orange?logo=rust&logoColor=white)
+[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
+![Systems](https://img.shields.io/badge/Systems-17%2C%20NES%20%E2%86%92%20PS4-8B7BFF)
+
+[**Download**](https://github.com/motitschka/Game37/releases) &nbsp;·&nbsp;
+[Install](#install) &nbsp;·&nbsp;
+[Systems](#systems) &nbsp;·&nbsp;
+[Setting up](#setting-up) &nbsp;·&nbsp;
+[Known limitations](#known-limitations)
+
+</div>
+
+---
+
+Game37 plays the older Systems itself, from NES to PSP, through libretro Cores inside its own window.
+Newer Systems, from GameCube to PS4, are handed to their Standalone Emulators. Drop your games into one
+folder and browse them all from a single console-style menu, with a controller or with mouse and
+keyboard.
 
 <p align="center">
   <img src="design/mockups/01-home.svg" width="49%" alt="Home with its Shelves (mockup)">
