@@ -766,10 +766,11 @@ mod tests {
         let Transition::Push(mut menu) = home.handle(Input::Action(Action::Options), &mut ctx) else {
             panic!("Y should open the Options Menu");
         };
-        // Past Choose artwork and Rename to Hide (no Save State to load).
-        menu.handle(Input::Action(Action::Down), &mut ctx);
-        menu.handle(Input::Action(Action::Down), &mut ctx);
-        menu.handle(Input::Action(Action::Down), &mut ctx);
+        // Past Start from power-on, Choose artwork and Rename to Hide (no Save State to load, no
+        // save data to delete).
+        for _ in 0..4 {
+            menu.handle(Input::Action(Action::Down), &mut ctx);
+        }
         assert!(matches!(
             menu.handle(Input::Action(Action::Confirm), &mut ctx),
             Transition::Pop

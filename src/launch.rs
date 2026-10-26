@@ -404,6 +404,7 @@ pub fn record(ctx: &mut Ctx, game_id: i64, ended_at: i64, elapsed: Duration) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ctx::Start;
     use crate::emulators::{AZAHAR, CEMU, DOLPHIN, PCSX2, RPCS3, RYUBING, SHADPS4};
     use crate::library::FoundGame;
     use crate::library::db::SortOrder;
@@ -767,7 +768,7 @@ mod tests {
 
         let from_slot = Play {
             game: snes,
-            slot: Some(2),
+            start: Start::Slot(2),
         };
         assert!(matches!(
             confirm_play(from_slot.clone(), &mut w.ctx),

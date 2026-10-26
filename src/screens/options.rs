@@ -4,19 +4,25 @@
 //! opens a wider panel with a text field and an on-screen keyboard (US-3): the menu stays one
 //! modal, so saving closes it like every other action. Loading a Save State shows a picker of
 //! the Game's slots in the same panel, each with its screenshot and time (FR-EMB-5), and starts
-//! the Game from the one chosen. Choose artwork opens the artwork picker over the menu, its own
-//! modal, which goes back to the menu when done.
+//! the Game from the one chosen. Delete save data shows what the Game has in the same panel, and
+//! deletes the part chosen once a confirmation says so; the menu then shows what is left. Choose
+//! artwork opens the artwork picker over the menu, its own modal, which goes back to the menu when
+//! done.
 
-use std::path::Path;
+use std::cell::RefCell;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
-use crate::ctx::{self, Ctx, Play};
+use crate::ctx::{self, Ctx, Play, Start};
 use crate::launch;
 use crate::library::db::GameRow;
 use crate::screens::artwork_picker::ArtworkPicker;
+use crate::screens::confirm::Confirm;
 use crate::screens::message::Message;
-use crate::session::sdl;
-use crate::session::states::{Rgb, SLOTS, StatePaths};
+use crate::session::states::{self, Rgb, SLOTS, SaveData, StatePaths};
+use crate::session::{saves, sdl};
 use crate::systems::{self, Kind};
 use crate::ui::cover::{self, ellipsize, playtime_label};
 use crate::ui::gfx::{Align, Gfx, TextStyle};
@@ -52,6 +58,13 @@ const SLOT_ROW_H: f32 = 160.0;
 const THUMB_W: f32 = 176.0;
 const THUMB_H: f32 = 132.0;
 const THUMB_KEYS: [&str; SLOTS] = ["options-slot-1", "options-slot-2", "options-slot-3"];
+/// The delete view's rows, in order.
+const DELETE_ROWS: [SaveData; 4] = [
+    SaveData::ResumeState,
+    SaveData::SaveStates,
+    SaveData::InGameSave,
+    SaveData::Everything,
+];
 
 /// One action in the menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +74,11 @@ pub enum Item {
     /// Load one of the Game's Save States, with a slot picker; Embedded Systems only, and only
     /// selectable when a slot is filled.
     LoadSaveState,
+    /// Play the Game from power-on, without its Resume State; Embedded Systems only (FR-DET-4).
+    StartFromPowerOn,
+    /// Delete the Game's Resume State, Save States, In-game Save or all of it, in a view of its
+    /// own; Embedded Systems only, and only selectable when the Game has any (FR-DET-4).
+    DeleteSaveData,
     /// Choose different Artwork from SteamGridDB, in the artwork picker (FR-ART-2).
     ChooseArtwork,
     /// Rename the Display Title; the file on disk stays as it is (FR-DET-5).
@@ -75,6 +93,8 @@ impl Item {
             Item::Favorite if favorite => "Remove from favorites",
             Item::Favorite => "Add to favorites",
             Item::LoadSaveState => "Load save state",
+            Item::StartFromPowerOn => "Start from power-on",
+            Item::DeleteSaveData => "Delete save data",
             Item::ChooseArtwork => "Choose artwork",
             Item::Rename => "Rename",
             Item::Hide => "Hide game",
@@ -84,7 +104,10 @@ impl Item {
 
     /// Whether choosing it opens a further view, shown with a "›".
     fn opens_view(self) -> bool {
-        matches!(self, Item::LoadSaveState | Item::ChooseArtwork)
+        matches!(
+            self,
+            Item::LoadSaveState | Item::DeleteSaveData | Item::ChooseArtwork
+        )
     }
 }
 
@@ -97,6 +120,8 @@ pub enum View {
     Rename,
     /// Choose the Save State slot to start the Game from.
     Load,
+    /// Choose which save data to delete.
+    Delete,
 }
 
 /// A filled Save State slot as the slot picker shows it.
@@ -120,8 +145,16 @@ pub struct OptionsMenu {
     favorites: Vec<(GameRow, bool)>,
     /// Whether each Save State slot is filled, slot 1 first; none for an External System.
     filled: Vec<bool>,
+    /// When the Resume State was written, if there is one.
+    resume_when: Option<String>,
+    /// When the In-game Save was written, if there is one.
+    srm_when: Option<String>,
     /// Where the Game's Save States are.
     states: StatePaths,
+    /// The Game's In-game Save.
+    srm: PathBuf,
+    /// What a confirmed delete did, left by the confirmation for the next tick to show.
+    deleted: Rc<RefCell<Option<Result<(), String>>>>,
     /// The slots' times and screenshots, slot 1 first, `None` when empty: read on a thread when
     /// the slot picker first opens (NFR-3), and empty until then.
     slots: Vec<Option<Slot>>,
@@ -154,20 +187,29 @@ impl OptionsMenu {
         let items = [
             Item::Favorite,
             Item::LoadSaveState,
+            Item::StartFromPowerOn,
+            Item::DeleteSaveData,
             Item::ChooseArtwork,
             Item::Rename,
             Item::Hide,
             Item::ShowFile,
         ]
         .into_iter()
-        .filter(|&i| i != Item::LoadSaveState || embedded)
+        .filter(|&i| {
+            embedded
+                || !matches!(
+                    i,
+                    Item::LoadSaveState | Item::StartFromPowerOn | Item::DeleteSaveData
+                )
+        })
         .collect();
-        let states = StatePaths::new(games_root, &game.system, Path::new(&game.rel_path));
-        // Cheap enough to do here; the screenshots wait for the slot picker.
-        let filled = if embedded {
-            (1..=SLOTS).map(|n| states.slot(n).is_file()).collect()
+        let rel_path = Path::new(&game.rel_path);
+        let states = StatePaths::new(games_root, &game.system, rel_path);
+        let srm = saves::srm_path(games_root, &game.system, rel_path);
+        let (filled, resume_when, srm_when) = if embedded {
+            read_save_data(&states, &srm)
         } else {
-            Vec::new()
+            (Vec::new(), None, None)
         };
         OptionsMenu {
             game,
@@ -177,7 +219,11 @@ impl OptionsMenu {
             item: 0,
             favorites: Vec::new(),
             filled,
+            resume_when,
+            srm_when,
             states,
+            srm,
+            deleted: Rc::default(),
             slots: Vec::new(),
             reading: None,
             uploads: Vec::new(),
@@ -194,7 +240,96 @@ impl OptionsMenu {
     pub fn enabled(&self, item: Item) -> bool {
         match item {
             Item::LoadSaveState => self.filled() > 0,
-            Item::Favorite | Item::ChooseArtwork | Item::Rename | Item::Hide | Item::ShowFile => true,
+            Item::DeleteSaveData => self.has(SaveData::Everything),
+            Item::Favorite
+            | Item::StartFromPowerOn
+            | Item::ChooseArtwork
+            | Item::Rename
+            | Item::Hide
+            | Item::ShowFile => true,
+        }
+    }
+
+    /// Whether the Game has `what` to delete; `Everything` when it has any of it.
+    fn has(&self, what: SaveData) -> bool {
+        match what {
+            SaveData::ResumeState => self.resume_when.is_some(),
+            SaveData::SaveStates => self.filled() > 0,
+            SaveData::InGameSave => self.srm_when.is_some(),
+            SaveData::Everything => DELETE_ROWS[..3].iter().any(|&w| self.has(w)),
+        }
+    }
+
+    /// The line under a delete view row: when it was written, how many slots are filled, or
+    /// "None"; none under Everything.
+    fn delete_sub(&self, what: SaveData) -> Option<String> {
+        let none = || "None".to_owned();
+        match what {
+            SaveData::ResumeState => Some(self.resume_when.clone().unwrap_or_else(none)),
+            SaveData::SaveStates => Some(match self.filled() {
+                0 => none(),
+                n => format!("{n} of {SLOTS}"),
+            }),
+            SaveData::InGameSave => Some(self.srm_when.clone().unwrap_or_else(none)),
+            SaveData::Everything => None,
+        }
+    }
+
+    /// The confirmation before deleting `what`, which leaves what it did for [`Self::after_delete`].
+    fn confirm_delete(&self, what: SaveData) -> Confirm {
+        let (title, body) = match what {
+            SaveData::ResumeState => (
+                "Delete the Resume State?".to_owned(),
+                "The next launch starts from power-on. Your In-game Save and Save States stay.",
+            ),
+            SaveData::SaveStates => (
+                match self.filled() {
+                    1 => "Delete the Save State?".to_owned(),
+                    n => format!("Delete {n} Save States?"),
+                },
+                "They are deleted for good, with their screenshots.",
+            ),
+            SaveData::InGameSave => (
+                "Delete the In-game Save?".to_owned(),
+                "Your in-game progress is deleted for good, and so is the Resume State. The next \
+                 launch starts a new save file.",
+            ),
+            SaveData::Everything => (
+                "Delete all save data?".to_owned(),
+                "The In-game Save, the Resume State and every Save State are deleted for good. The \
+                 next launch starts a new save file.",
+            ),
+        };
+        let (states, srm, deleted) = (self.states.clone(), self.srm.clone(), self.deleted.clone());
+        Confirm::new(title, body, "Delete", move |ctx| {
+            *deleted.borrow_mut() = Some(states::delete(what, &states, &srm));
+            // The Details Page's Save State count reloads.
+            ctx.revision += 1;
+        })
+    }
+
+    /// Once a confirmed delete is done: re-reads what the Game has, goes back to the list when
+    /// nothing is left to delete, and says so when something couldn't be deleted.
+    fn after_delete(&mut self) -> Transition {
+        let Some(done) = self.deleted.borrow_mut().take() else {
+            return Transition::None;
+        };
+        (self.filled, self.resume_when, self.srm_when) = read_save_data(&self.states, &self.srm);
+        // The slot picker reads its slots afresh, and forgets the old screenshots.
+        self.reading = None;
+        self.slots.clear();
+        self.uploads = (0..SLOTS).map(|i| (i, None)).collect();
+        if !self.has(SaveData::Everything) {
+            self.back_to_list();
+        } else if !self.pickable(self.pick) {
+            self.pick = self.first_pickable();
+        }
+        if !self.enabled(self.focused()) {
+            self.move_item(-1);
+        }
+        match done {
+            Ok(()) => Transition::None,
+            Err(e) => Transition::Push(Box::new(Message::new("Couldn't delete save data", e))),
         }
     }
 
@@ -274,22 +409,35 @@ impl OptionsMenu {
         }
     }
 
-    /// Whether the open picker's `i`th entry can be chosen: any Favorite, a filled slot.
+    /// Whether the open picker's `i`th entry can be chosen: any Favorite, a filled slot, save
+    /// data the Game has.
     fn pickable(&self, i: usize) -> bool {
         match self.view {
             View::List | View::Rename => false,
             View::Replace => i < self.favorites.len(),
             View::Load => self.filled.get(i).copied().unwrap_or(false),
+            View::Delete => DELETE_ROWS.get(i).is_some_and(|&what| self.has(what)),
         }
+    }
+
+    /// How many entries the open picker has.
+    fn pick_len(&self) -> usize {
+        match self.view {
+            View::List | View::Rename => 0,
+            View::Replace => self.favorites.len(),
+            View::Load => self.filled.len(),
+            View::Delete => DELETE_ROWS.len(),
+        }
+    }
+
+    /// The open picker's first entry that can be chosen, else 0.
+    fn first_pickable(&self) -> usize {
+        (0..self.pick_len()).find(|&i| self.pickable(i)).unwrap_or(0)
     }
 
     /// Moves picker focus one step `dir` (-1 or 1), skipping entries that can't be chosen.
     fn move_pick(&mut self, dir: isize) {
-        let len = match self.view {
-            View::List | View::Rename => 0,
-            View::Replace => self.favorites.len(),
-            View::Load => self.filled.len(),
-        };
+        let len = self.pick_len();
         let mut i = self.pick as isize + dir;
         while (0..len as isize).contains(&i) {
             if self.pickable(i as usize) {
@@ -307,17 +455,18 @@ impl OptionsMenu {
         }
         match self.view {
             View::Replace => self.replace(i, ctx),
-            View::Load => self.load(i, ctx),
+            View::Load => self.play(Start::Slot(i + 1), ctx),
+            View::Delete => Transition::Push(Box::new(self.confirm_delete(DELETE_ROWS[i]))),
             View::List | View::Rename => Transition::None,
         }
     }
 
-    /// Starts the Game from the Save State in the `i`th slot (FR-DET-4). The menu closes; a Core
-    /// download or a missing BIOS message takes its place.
-    fn load(&mut self, i: usize, ctx: &mut Ctx) -> Transition {
+    /// Starts the Game from `start`: a chosen slot's Save State or power-on (FR-DET-4). The menu
+    /// closes; a Core download or a missing BIOS message takes its place.
+    fn play(&mut self, start: Start, ctx: &mut Ctx) -> Transition {
         let play = Play {
             game: self.game.clone(),
-            slot: Some(i + 1),
+            start,
         };
         match launch::confirm_play(play, ctx) {
             Transition::None => Transition::Pop,
@@ -368,7 +517,13 @@ impl OptionsMenu {
             Item::LoadSaveState => {
                 self.read_slots();
                 self.view = View::Load;
-                self.pick = (0..SLOTS).find(|&n| self.pickable(n)).unwrap_or(0);
+                self.pick = self.first_pickable();
+                return Transition::None;
+            }
+            Item::StartFromPowerOn => return self.play(Start::PowerOn, ctx),
+            Item::DeleteSaveData => {
+                self.view = View::Delete;
+                self.pick = self.first_pickable();
                 return Transition::None;
             }
             Item::ChooseArtwork => return Transition::Push(Box::new(ArtworkPicker::new(self.game.clone()))),
@@ -518,6 +673,39 @@ impl OptionsMenu {
         }
     }
 
+    /// The delete view: what the Game has of each kind of save data, the kinds it has none of
+    /// dimmed and never focused.
+    fn draw_delete(&mut self, gfx: &mut Gfx<'_>) {
+        self.pick_hits.clear();
+        let heading = TextStyle::new(24, Weight::ExtraBold, TEXT);
+        gfx.text(PANEL_X + 48.0, 238.0, "Delete save data", heading, Align::Left);
+        let sub = TextStyle::new(18, Weight::Medium, MUTED);
+        gfx.text(PANEL_X + 48.0, 268.0, "Choose what to delete", sub, Align::Left);
+        for (i, &what) in DELETE_ROWS.iter().enumerate() {
+            let y = PICK_Y + i as f32 * PICK_PITCH;
+            let r = Rect::new(PANEL_X + 24.0, y, PANEL_W - 48.0, 100.0);
+            let has = self.has(what);
+            if i == self.pick && has {
+                gfx.fill_round_rect(r, 14.0, SURFACE2);
+                gfx.fill_round_rect(Rect::new(r.x, y + 30.0, 5.0, 40.0), 2.0, ACCENT);
+            }
+            let (ink, sub_ink) = if has { (TEXT, MUTED) } else { (DIM, DIM) };
+            let name = TextStyle::new(22, Weight::Bold, ink);
+            let label = delete_label(what);
+            match self.delete_sub(what) {
+                Some(line) => {
+                    gfx.text(PANEL_X + 48.0, y + 46.0, label, name, Align::Left);
+                    let style = TextStyle::new(18, Weight::Medium, sub_ink);
+                    gfx.text(PANEL_X + 48.0, y + 76.0, &line, style, Align::Left);
+                }
+                None => {
+                    gfx.text(PANEL_X + 48.0, y + 58.0, label, name, Align::Left);
+                }
+            }
+            self.pick_hits.push((r, i));
+        }
+    }
+
     fn draw_replace(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
         self.pick_hits.clear();
         let heading = TextStyle::new(24, Weight::ExtraBold, TEXT);
@@ -554,6 +742,27 @@ impl OptionsMenu {
     }
 }
 
+/// Whether each Save State slot of `states` is filled, and when the Resume State and the In-game
+/// Save `srm` were written, if they exist: file metadata only, cheap enough for the UI thread.
+fn read_save_data(states: &StatePaths, srm: &Path) -> (Vec<bool>, Option<String>, Option<String>) {
+    let written = |path: &Path| {
+        let modified = fs::metadata(path).ok().filter(|m| m.is_file())?.modified().ok()?;
+        Some(sdl::when_label(modified))
+    };
+    let filled = (1..=SLOTS).map(|n| states.slot(n).is_file()).collect();
+    (filled, written(&states.resume()), written(srm))
+}
+
+/// A delete view row's name.
+fn delete_label(what: SaveData) -> &'static str {
+    match what {
+        SaveData::ResumeState => "Resume State",
+        SaveData::SaveStates => "Save States",
+        SaveData::InGameSave => "In-game Save",
+        SaveData::Everything => "Everything",
+    }
+}
+
 /// Ends an action: the library changed, so screens reload; the menu closes.
 fn finish(done: Result<(), crate::library::db::DbError>, ctx: &mut Ctx) -> Transition {
     if let Err(e) = done {
@@ -573,6 +782,17 @@ fn icon(gfx: &mut Gfx<'_>, item: Item, cx: f32, cy: f32, c: Colour) {
                 &[(cx - 13.0, cy - 6.0), (cx - 5.0, cy - 6.0), (cx - 9.0, cy + 1.0)],
                 c,
             );
+        }
+        // To the start: a bar and a triangle pointing at it.
+        Item::StartFromPowerOn => {
+            gfx.fill_rect(Rect::new(cx - 10.0, cy - 9.0, 3.0, 18.0), c);
+            gfx.fill_polygon(&[(cx + 10.0, cy - 9.0), (cx + 10.0, cy + 9.0), (cx - 5.0, cy)], c);
+        }
+        // A bin: lid, handle and body.
+        Item::DeleteSaveData => {
+            gfx.line(cx - 11.0, cy - 6.0, cx + 11.0, cy - 6.0, 2.5, c);
+            gfx.fill_rect(Rect::new(cx - 4.0, cy - 11.0, 8.0, 3.0), c);
+            gfx.stroke_round_rect(Rect::new(cx - 8.0, cy - 3.0, 16.0, 14.0), 2.0, 2.5, c);
         }
         Item::ChooseArtwork => {
             gfx.stroke_round_rect(Rect::new(cx - 10.0, cy - 10.0, 20.0, 20.0), 3.0, 2.5, c);
@@ -650,7 +870,7 @@ impl Screen for OptionsMenu {
 
     fn tick(&mut self, _: &mut Ctx) -> Transition {
         self.poll_slots();
-        Transition::None
+        self.after_delete()
     }
 
     fn busy(&self) -> bool {
@@ -697,6 +917,10 @@ impl Screen for OptionsMenu {
                 self.item_hits.clear();
                 self.draw_load(gfx);
             }
+            View::Delete => {
+                self.item_hits.clear();
+                self.draw_delete(gfx);
+            }
         }
     }
 
@@ -713,6 +937,10 @@ impl Screen for OptionsMenu {
             View::Rename => TextEntry::hints(self.kind, "Save"),
             View::Load => vec![
                 Hint::new(&[Action::Confirm], "Load"),
+                Hint::new(&[Action::Back], "Back"),
+            ],
+            View::Delete => vec![
+                Hint::new(&[Action::Confirm], "Delete"),
                 Hint::new(&[Action::Back], "Back"),
             ],
         }
@@ -951,11 +1179,24 @@ mod tests {
         use Item::*;
         assert_eq!(
             menu.items(),
-            [Favorite, LoadSaveState, ChooseArtwork, Rename, Hide, ShowFile]
+            [
+                Favorite,
+                LoadSaveState,
+                StartFromPowerOn,
+                DeleteSaveData,
+                ChooseArtwork,
+                Rename,
+                Hide,
+                ShowFile
+            ]
         );
         assert!(!menu.enabled(LoadSaveState), "no Save State to load");
+        assert!(!menu.enabled(DeleteSaveData), "no save data to delete");
         act(&mut menu, &mut ctx, Action::Down);
-        assert_eq!(menu.focused(), ChooseArtwork, "focus skips it");
+        assert_eq!(menu.focused(), StartFromPowerOn, "focus skips it");
+        act(&mut menu, &mut ctx, Action::Down);
+        assert_eq!(menu.focused(), ChooseArtwork, "and Delete save data");
+        act(&mut menu, &mut ctx, Action::Up);
         act(&mut menu, &mut ctx, Action::Up);
         assert_eq!(menu.focused(), Favorite);
         act(&mut menu, &mut ctx, Action::Up);
@@ -984,6 +1225,7 @@ mod tests {
         let (_dir, mut ctx, games) = world(1);
         let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
         act(&mut menu, &mut ctx, Action::Down);
+        act(&mut menu, &mut ctx, Action::Down);
         assert_eq!(menu.focused(), Item::ChooseArtwork);
         assert!(menu.enabled(Item::ChooseArtwork));
         let mut nav = Nav::single(Box::new(OptionsMenu::new(games[0].clone(), &ctx.games_root)));
@@ -1006,13 +1248,13 @@ mod tests {
     }
 
     #[test]
-    fn load_save_state_is_listed_for_embedded_systems_only() {
+    fn save_data_items_are_listed_for_embedded_systems_only() {
         let mut game = world(1).2.remove(0);
         game.system = "gc".into();
-        assert!(
-            !OptionsMenu::new(game, Path::new("/nonexistent"))
-                .items()
-                .contains(&Item::LoadSaveState)
+        use Item::*;
+        assert_eq!(
+            OptionsMenu::new(game, Path::new("/nonexistent")).items(),
+            [Favorite, ChooseArtwork, Rename, Hide, ShowFile]
         );
     }
 
@@ -1151,7 +1393,7 @@ mod tests {
         ));
         let want = Play {
             game: games[0].clone(),
-            slot: Some(2),
+            start: Start::Slot(2),
         };
         assert_eq!(ctx.play.take(), Some(want.clone()));
 
@@ -1209,13 +1451,238 @@ mod tests {
     }
 
     #[test]
+    fn start_from_power_on_asks_to_play_the_game_from_power_on_and_closes_the_menu() {
+        let (dir, mut ctx, games) = world(1);
+        install_snes_core(&mut ctx, dir.path());
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        assert!(menu.enabled(Item::StartFromPowerOn), "even with no save data");
+        act(&mut menu, &mut ctx, Action::Down);
+        assert_eq!(menu.focused(), Item::StartFromPowerOn);
+        assert!(matches!(
+            act(&mut menu, &mut ctx, Action::Confirm),
+            Transition::Pop
+        ));
+        let want = Play {
+            game: games[0].clone(),
+            start: Start::PowerOn,
+        };
+        assert_eq!(ctx.play.take(), Some(want));
+    }
+
+    /// Writes a dummy Resume State and In-game Save for `game`, as asked.
+    fn write_saves(ctx: &Ctx, game: &GameRow, resume: bool, srm: bool) {
+        let rel = Path::new(&game.rel_path);
+        if resume {
+            let states = StatePaths::new(&ctx.games_root, &game.system, rel);
+            saves::write(&states.resume(), b"resume").unwrap();
+        }
+        if srm {
+            saves::write(&saves::srm_path(&ctx.games_root, &game.system, rel), b"srm").unwrap();
+        }
+    }
+
+    /// Opens the delete view from the list.
+    fn open_delete(menu: &mut OptionsMenu, ctx: &mut Ctx) {
+        while menu.focused() != Item::DeleteSaveData {
+            act(menu, ctx, Action::Down);
+        }
+        assert!(matches!(act(menu, ctx, Action::Confirm), Transition::None));
+        assert_eq!(menu.view(), View::Delete);
+    }
+
+    fn delete_subs(menu: &OptionsMenu) -> Vec<Option<String>> {
+        DELETE_ROWS.iter().map(|&w| menu.delete_sub(w)).collect()
+    }
+
+    fn pickable_rows(menu: &OptionsMenu) -> Vec<bool> {
+        (0..DELETE_ROWS.len()).map(|i| menu.pickable(i)).collect()
+    }
+
+    /// Chooses the focused delete view row and answers its confirmation, Delete when `yes`, else
+    /// Cancel. Returns the confirmation's title and the menu's next tick.
+    fn answer(menu: &mut OptionsMenu, ctx: &mut Ctx, yes: bool) -> (String, Transition) {
+        let Transition::Push(mut confirm) = act(menu, ctx, Action::Confirm) else {
+            panic!("expected a confirmation");
+        };
+        let title = confirm.title().to_owned();
+        if yes {
+            confirm.handle(Input::Action(Action::Right), ctx);
+        }
+        let closes = confirm.handle(Input::Action(Action::Confirm), ctx);
+        assert!(matches!(closes, Transition::Pop));
+        (title, menu.tick(ctx))
+    }
+
+    /// Every file under the Games Root.
+    fn files(ctx: &Ctx) -> Vec<PathBuf> {
+        let mut all: Vec<_> = walkdir::WalkDir::new(&ctx.games_root)
+            .into_iter()
+            .map(|e| e.unwrap().into_path())
+            .filter(|p| p.is_file())
+            .collect();
+        all.sort();
+        all
+    }
+
+    #[test]
+    fn delete_save_data_is_enabled_by_any_save_data() {
+        type Fill = fn(&Ctx, &GameRow);
+        let cases: [(&str, Fill); 3] = [
+            ("a Resume State", |ctx, g| write_saves(ctx, g, true, false)),
+            ("a Save State", |ctx, g| fill_slots(ctx, g, &[2])),
+            ("an In-game Save", |ctx, g| write_saves(ctx, g, false, true)),
+        ];
+        for (what, fill) in cases {
+            let (_dir, ctx, games) = world(1);
+            let menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+            assert!(!menu.enabled(Item::DeleteSaveData), "nothing yet");
+            fill(&ctx, &games[0]);
+            let menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+            assert!(menu.enabled(Item::DeleteSaveData), "{what}");
+        }
+    }
+
+    #[test]
+    fn the_delete_view_dims_and_skips_what_the_game_has_none_of() {
+        let (_dir, mut ctx, games) = world(1);
+        write_saves(&ctx, &games[0], true, false);
+        fill_slots(&ctx, &games[0], &[1, 3]);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        open_delete(&mut menu, &mut ctx);
+        assert_eq!(menu.hints()[0], Hint::new(&[Action::Confirm], "Delete"));
+        let subs = delete_subs(&menu);
+        assert!(subs[0].as_deref().unwrap().starts_with("Today, "), "{subs:?}");
+        assert_eq!(subs[1..], [Some("2 of 3".into()), Some("None".into()), None]);
+        assert_eq!(pickable_rows(&menu), [true, true, false, true], "no In-game Save");
+        assert_eq!(menu.picked(), 0);
+        act(&mut menu, &mut ctx, Action::Down);
+        act(&mut menu, &mut ctx, Action::Down);
+        assert_eq!(menu.picked(), 3, "the In-game Save is skipped");
+
+        // Neither the pointer nor a click takes the dimmed row.
+        menu.pick_hits = vec![(Rect::new(PANEL_X, 514.0, 100.0, 100.0), 2)];
+        let at = (PANEL_X + 1.0, 520.0);
+        menu.handle(Input::Pointer(Pointer::Move { x: at.0, y: at.1 }), &mut ctx);
+        assert_eq!(menu.picked(), 3);
+        assert!(matches!(click(&mut menu, &mut ctx, at), Transition::None));
+
+        assert!(matches!(act(&mut menu, &mut ctx, Action::Back), Transition::None));
+        assert_eq!(menu.view(), View::List, "Back returns to the list");
+        assert_eq!(menu.focused(), Item::DeleteSaveData);
+    }
+
+    #[test]
+    fn cancelling_a_delete_deletes_nothing() {
+        let (_dir, mut ctx, games) = world(1);
+        write_saves(&ctx, &games[0], true, true);
+        fill_slots(&ctx, &games[0], &[1]);
+        let before = files(&ctx);
+        assert_eq!(before.len(), 4);
+        let revision = ctx.revision;
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        open_delete(&mut menu, &mut ctx);
+        for row in 0..DELETE_ROWS.len() {
+            menu.pick = row;
+            assert!(matches!(answer(&mut menu, &mut ctx, false).1, Transition::None));
+            assert_eq!(files(&ctx), before, "row {row}");
+            assert_eq!(menu.view(), View::Delete);
+        }
+        assert_eq!(ctx.revision, revision);
+    }
+
+    #[test]
+    fn deleting_the_save_states_shows_what_is_left() {
+        let (_dir, mut ctx, games) = world(1);
+        fill_slots(&ctx, &games[0], &[2]);
+        let menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        assert_eq!(
+            menu.confirm_delete(SaveData::SaveStates).title(),
+            "Delete the Save State?"
+        );
+
+        write_saves(&ctx, &games[0], true, false);
+        fill_slots(&ctx, &games[0], &[1, 3]);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        open_delete(&mut menu, &mut ctx);
+        act(&mut menu, &mut ctx, Action::Down);
+        let revision = ctx.revision;
+        let (title, next) = answer(&mut menu, &mut ctx, true);
+        assert_eq!(title, "Delete 3 Save States?");
+        assert!(matches!(next, Transition::None));
+        assert!(ctx.revision > revision, "the Details Page reloads its count");
+        let states = StatePaths::new(&ctx.games_root, "snes", Path::new(&games[0].rel_path));
+        assert_eq!(files(&ctx), [states.resume()]);
+
+        assert_eq!(menu.view(), View::Delete, "the Resume State is left");
+        assert_eq!(delete_subs(&menu)[1].as_deref(), Some("None"));
+        assert_eq!(pickable_rows(&menu), [true, false, false, true]);
+        assert_eq!(menu.picked(), 0, "focus leaves the emptied row");
+        assert!(!menu.enabled(Item::LoadSaveState));
+        assert_eq!(menu.uploads.len(), SLOTS, "the slot screenshots are forgotten");
+    }
+
+    #[test]
+    fn deleting_everything_returns_to_the_list() {
+        let (_dir, mut ctx, games) = world(1);
+        write_saves(&ctx, &games[0], true, true);
+        fill_slots(&ctx, &games[0], &[1, 2, 3]);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        open_delete(&mut menu, &mut ctx);
+        for _ in 0..3 {
+            act(&mut menu, &mut ctx, Action::Down);
+        }
+        let (title, next) = answer(&mut menu, &mut ctx, true);
+        assert_eq!(title, "Delete all save data?");
+        assert!(matches!(next, Transition::None));
+        assert_eq!(files(&ctx), Vec::<PathBuf>::new());
+        assert_eq!(menu.view(), View::List, "nothing is left to delete");
+        assert!(!menu.enabled(Item::DeleteSaveData));
+        assert_eq!(
+            menu.focused(),
+            Item::StartFromPowerOn,
+            "focus leaves the disabled item"
+        );
+    }
+
+    #[test]
+    fn deleting_the_in_game_save_takes_the_resume_state_and_a_failure_says_so() {
+        let (_dir, mut ctx, games) = world(1);
+        write_saves(&ctx, &games[0], true, true);
+        fill_slots(&ctx, &games[0], &[1]);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        open_delete(&mut menu, &mut ctx);
+        menu.pick = 2;
+        let (title, _) = answer(&mut menu, &mut ctx, true);
+        assert_eq!(title, "Delete the In-game Save?");
+        assert_eq!(pickable_rows(&menu), [false, true, false, true]);
+        assert_eq!(menu.picked(), 1);
+
+        // A folder where the Resume State goes can't be deleted as a file.
+        let rel = Path::new(&games[0].rel_path);
+        let states = StatePaths::new(&ctx.games_root, "snes", rel);
+        std::fs::create_dir(states.resume()).unwrap();
+        write_saves(&ctx, &games[0], false, true);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        open_delete(&mut menu, &mut ctx);
+        menu.pick = 2;
+        match answer(&mut menu, &mut ctx, true).1 {
+            Transition::Push(message) => assert_eq!(message.title(), "Couldn't delete save data"),
+            _ => panic!("expected a message"),
+        }
+        assert!(
+            saves::srm_path(&ctx.games_root, "snes", rel).exists(),
+            "kept with the Resume State"
+        );
+    }
+
+    #[test]
     fn hide_hides_the_game_and_unfavorites_it() {
         let (_dir, mut ctx, games) = world(2);
         ctx.library.set_favorite(games[0].id, true, 0).unwrap();
         let mut menu = OptionsMenu::new(fresh(&ctx, &games[0]), &ctx.games_root);
-        act(&mut menu, &mut ctx, Action::Down);
-        act(&mut menu, &mut ctx, Action::Down);
-        act(&mut menu, &mut ctx, Action::Down);
+        for _ in 0..4 {
+            act(&mut menu, &mut ctx, Action::Down);
+        }
         assert_eq!(menu.focused(), Item::Hide);
         let revision = ctx.revision;
         assert!(matches!(
@@ -1233,10 +1700,9 @@ mod tests {
     fn show_file_asks_for_the_games_file_and_a_folder_game_for_its_folder() {
         let (_dir, mut ctx, games) = world(1);
         let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
-        act(&mut menu, &mut ctx, Action::Down);
-        act(&mut menu, &mut ctx, Action::Down);
-        act(&mut menu, &mut ctx, Action::Down);
-        act(&mut menu, &mut ctx, Action::Down);
+        for _ in 0..5 {
+            act(&mut menu, &mut ctx, Action::Down);
+        }
         assert_eq!(menu.focused(), Item::ShowFile);
         let revision = ctx.revision;
         assert!(matches!(
@@ -1283,8 +1749,9 @@ mod tests {
         std::fs::create_dir_all(&snes).unwrap();
         std::fs::write(snes.join("G0.sfc"), b"not a game").unwrap();
         let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
-        act(&mut menu, &mut ctx, Action::Down);
-        act(&mut menu, &mut ctx, Action::Down);
+        for _ in 0..3 {
+            act(&mut menu, &mut ctx, Action::Down);
+        }
         assert_eq!(menu.focused(), Item::Rename);
         assert!(matches!(
             act(&mut menu, &mut ctx, Action::Confirm),
@@ -1360,8 +1827,9 @@ mod tests {
             let (_dir, mut ctx, game, _) = renaming();
             ctx.library.rename(game.id, Some("Mine".into())).unwrap();
             let mut menu = OptionsMenu::new(fresh(&ctx, &game), &ctx.games_root);
-            act(&mut menu, &mut ctx, Action::Down);
-            act(&mut menu, &mut ctx, Action::Down);
+            for _ in 0..3 {
+                act(&mut menu, &mut ctx, Action::Down);
+            }
             act(&mut menu, &mut ctx, Action::Confirm);
             for _ in 0.."Mine".len() {
                 act(&mut menu, &mut ctx, Action::Options);

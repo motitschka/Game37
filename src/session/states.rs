@@ -76,6 +76,57 @@ pub fn write_slot(
     Ok(())
 }
 
+/// What the player can delete of a Game's save data (FR-DET-4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveData {
+    ResumeState,
+    /// Every Save State slot, with its screenshot.
+    SaveStates,
+    /// The In-game Save, and the Resume State with it.
+    InGameSave,
+    Everything,
+}
+
+impl SaveData {
+    /// The files deleting it removes for the Game whose states are at `states` and whose In-game
+    /// Save is `srm`, in the order they go. The Resume State goes before the In-game Save, so a
+    /// failure in between never leaves one over a new save file.
+    pub fn paths(self, states: &StatePaths, srm: &Path) -> Vec<PathBuf> {
+        let slots = || (1..=SLOTS).flat_map(|n| [states.slot(n), states.thumb(n)]);
+        match self {
+            SaveData::ResumeState => vec![states.resume()],
+            SaveData::SaveStates => slots().collect(),
+            SaveData::InGameSave => vec![
+                // A Resume State holds the old save memory: resuming would bring the old progress
+                // back and write it over the new save file.
+                states.resume(),
+                srm.to_path_buf(),
+            ],
+            SaveData::Everything => [states.resume(), srm.to_path_buf()]
+                .into_iter()
+                .chain(slots())
+                .collect(),
+        }
+    }
+}
+
+/// Deletes `what` for good: exactly the files [`SaveData::paths`] names, no folder and nothing
+/// else. A file that isn't there is fine. Stops at the first file that can't be deleted, and
+/// returns the error, naming it.
+pub fn delete(what: SaveData, states: &StatePaths, srm: &Path) -> Result<(), String> {
+    for path in what.paths(states, srm) {
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => {
+                eprintln!("game37: can't delete {}: {e}", path.display());
+                return Err(format!("{} couldn't be deleted: {e}.", path.display()));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// An RGB image, 3 bytes per pixel, rows packed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Rgb {
@@ -267,6 +318,92 @@ mod tests {
             "a failed state keeps the old screenshot"
         );
         assert!(!saves::tmp_path(&thumb).exists());
+    }
+
+    /// Every save file of `p` and its In-game Save `srm`, with a tiny dummy in each.
+    fn fill(p: &StatePaths, srm: &Path) -> Vec<PathBuf> {
+        let mut all = vec![p.resume(), srm.to_path_buf()];
+        all.extend((1..=SLOTS).flat_map(|n| [p.slot(n), p.thumb(n)]));
+        for path in &all {
+            saves::write(path, b"x").unwrap();
+        }
+        all
+    }
+
+    #[test]
+    fn each_delete_removes_exactly_its_files_and_no_other_games() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let game = |rel: &str| {
+            let rel = Path::new(rel);
+            (
+                StatePaths::new(root, "nds", rel),
+                saves::srm_path(root, "nds", rel),
+            )
+        };
+        let (p, srm) = game("nds/Mario.nds");
+        let every = fill(&p, &srm);
+        let cases = [
+            (SaveData::ResumeState, vec![p.resume()]),
+            (
+                SaveData::SaveStates,
+                (1..=SLOTS).flat_map(|n| [p.slot(n), p.thumb(n)]).collect(),
+            ),
+            (SaveData::InGameSave, vec![p.resume(), srm.clone()]),
+            (SaveData::Everything, every),
+        ];
+        for (what, gone) in cases {
+            let mine = fill(&p, &srm);
+            // Another Game with the same stem in a subfolder, and one with another stem beside it.
+            let others: Vec<_> = ["nds/hacks/Mario.nds", "nds/Mario Kart.nds"]
+                .into_iter()
+                .flat_map(|rel| {
+                    let (p, srm) = game(rel);
+                    fill(&p, &srm)
+                })
+                .collect();
+            delete(what, &p, &srm).unwrap();
+            for path in &mine {
+                assert_eq!(
+                    path.exists(),
+                    !gone.contains(path),
+                    "{what:?}: {}",
+                    path.display()
+                );
+            }
+            for path in &others {
+                assert!(path.exists(), "{what:?} deleted {}", path.display());
+            }
+            assert!(root.join("states/nds").is_dir() && root.join("saves/nds").is_dir());
+            delete(what, &p, &srm).expect("deleting what is already gone is fine");
+        }
+    }
+
+    #[test]
+    fn deleting_the_in_game_save_deletes_the_resume_state_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let rel = Path::new("nds/Mario.nds");
+        let p = StatePaths::new(dir.path(), "nds", rel);
+        let srm = saves::srm_path(dir.path(), "nds", rel);
+        fill(&p, &srm);
+        delete(SaveData::InGameSave, &p, &srm).unwrap();
+        assert!(!srm.exists());
+        assert!(!p.resume().exists(), "resuming would bring the old save back");
+        assert!(p.slot(1).exists(), "the Save States stay");
+    }
+
+    #[test]
+    fn a_file_that_cant_be_deleted_is_an_error_naming_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let rel = Path::new("snes/T.sfc");
+        let p = StatePaths::new(dir.path(), "snes", rel);
+        let srm = saves::srm_path(dir.path(), "snes", rel);
+        // A folder where the Resume State would be: `remove_file` refuses it.
+        fs::create_dir_all(p.resume()).unwrap();
+        saves::write(&srm, b"x").unwrap();
+        let e = delete(SaveData::InGameSave, &p, &srm).unwrap_err();
+        assert!(e.contains("T.resume.state couldn't be deleted"), "{e}");
+        assert!(srm.exists(), "the In-game Save stays while the Resume State does");
     }
 
     #[test]

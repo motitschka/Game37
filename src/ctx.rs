@@ -13,18 +13,42 @@ use crate::systems::SYSTEMS;
 use crate::ui::gfx::WindowMode;
 use crate::ui::input::{ButtonStyle, InputKind};
 
-/// A request to play a Game of an Embedded System: from its Resume State, as every launch does
-/// (FR-EMB-6), or from the Save State in `slot` (1 to 3) the player chose (FR-DET-4).
+/// A request to play a Game of an Embedded System from `start`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Play {
     pub game: GameRow,
-    pub slot: Option<usize>,
+    pub start: Start,
+}
+
+/// Where a Game starts. Its In-game Save is loaded either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Start {
+    /// From its Resume State, as every launch does (FR-EMB-6); from power-on when it has none.
+    Resume,
+    /// From the Save State in slot `n` (1 to 3) the player chose (FR-DET-4).
+    Slot(usize),
+    /// From power-on, loading no state, as the player chose (FR-DET-4). The Resume State stays
+    /// on disk until quitting overwrites it.
+    PowerOn,
+}
+
+impl Start {
+    /// The chosen Save State slot, if any.
+    pub fn slot(self) -> Option<usize> {
+        match self {
+            Start::Slot(n) => Some(n),
+            Start::Resume | Start::PowerOn => None,
+        }
+    }
 }
 
 impl Play {
     /// Plays `game` from its Resume State, if it has one.
     pub fn resume(game: GameRow) -> Play {
-        Play { game, slot: None }
+        Play {
+            game,
+            start: Start::Resume,
+        }
     }
 }
 

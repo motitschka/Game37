@@ -23,7 +23,7 @@ use super::saves::{self, Tracker};
 use super::states::{self, SLOTS, StatePaths};
 use super::timing::{self, AUDIO_MAX, PlayTimer, Scheduler};
 use crate::cores::{self, CoreInfo, GlKind};
-use crate::ctx::{self, Ctx, Play};
+use crate::ctx::{self, Ctx, Play, Start};
 use crate::launch::{self, FAILED_TITLE};
 use crate::libretro::{Core, CoreDirs, Frame, GlHost, Stick};
 use crate::screens::message::Message;
@@ -209,8 +209,9 @@ impl Session {
             (srm, tracker)
         });
         let states = StatePaths::new(root, system.id, Path::new(&game.rel_path));
-        // Continue where the player quit (FR-EMB-6), or from the Save State they chose (FR-DET-4).
-        let start_message = load_start_state(&states, play.slot, |state| {
+        // Continue where the player quit (FR-EMB-6), or from the Save State or power-on they chose
+        // (FR-DET-4).
+        let start_message = load_start_state(&states, play.start, |state| {
             core.unserialize(state).map_err(|e| e.to_string())
         });
         let av = core.av_info();
@@ -484,16 +485,21 @@ fn start_state(states: &StatePaths, slot: Option<usize>) -> PathBuf {
 /// The title of the message pushed when a chosen Save State slot couldn't be loaded.
 const SLOT_FAILED_TITLE: &str = "Couldn't load the save";
 
-/// Reads the start state for `slot`'s Save State (FR-DET-4) or the Resume State (FR-EMB-6) from
-/// `states`, and hands its bytes to `restore` (`Core::unserialize` in [`Session::start`], a stub
-/// in tests). Returns the message to show the player when `slot` was chosen and its state
-/// couldn't be loaded — missing, unreadable, or refused by `restore` — so starting fresh isn't
-/// silent. The Resume State falls back to a fresh start silently either way.
+/// Reads the start state for `start`, a chosen slot's Save State (FR-DET-4) or the Resume State
+/// (FR-EMB-6), from `states`, and hands its bytes to `restore` (`Core::unserialize` in
+/// [`Session::start`], a stub in tests). Returns the message to show the player when a slot was
+/// chosen and its state couldn't be loaded — missing, unreadable, or refused by `restore` — so
+/// starting fresh isn't silent. The Resume State falls back to a fresh start silently either way.
+/// From power-on, nothing is read and nothing said.
 fn load_start_state(
     states: &StatePaths,
-    slot: Option<usize>,
+    start: Start,
     restore: impl FnOnce(&[u8]) -> Result<(), String>,
 ) -> Option<String> {
+    if start == Start::PowerOn {
+        return None;
+    }
+    let slot = start.slot();
     let from = start_state(states, slot);
     let failed = match fs::read(&from) {
         Ok(state) => match restore(&state) {
@@ -637,7 +643,7 @@ pub fn slot_infos(states: &StatePaths) -> Vec<Option<SlotInfo>> {
 }
 
 /// A file time as the Pause Menu shows it, in local time (see [`states::when_label`]).
-fn when_label(time: std::time::SystemTime) -> String {
+pub fn when_label(time: std::time::SystemTime) -> String {
     let then = time
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos() as i64);
@@ -773,7 +779,7 @@ mod tests {
         // State on quitting.
         let from = Play {
             game: game.clone(),
-            slot: Some(1),
+            start: Start::Slot(1),
         };
         let mut session = Session::start(&from, &ctx, None, None, None).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(run(&mut session, 2), from_slot, "the launch starts from slot 1");
@@ -817,7 +823,10 @@ mod tests {
         fs::create_dir_all(states.slot(2).parent().unwrap()).unwrap();
         fs::write(states.slot(2), b"not a real save state").unwrap();
 
-        let play = Play { game, slot: Some(2) };
+        let play = Play {
+            game,
+            start: Start::Slot(2),
+        };
         let mut session = Session::start(&play, &ctx, None, None, None).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(
             session.start_message.as_deref(),
@@ -880,7 +889,7 @@ mod tests {
         let states = StatePaths::new(dir.path(), "snes", Path::new("Game.sfc"));
 
         // Slot 2 was chosen but there's no such file.
-        let message = load_start_state(&states, Some(2), |_| panic!("not reached: missing file"));
+        let message = load_start_state(&states, Start::Slot(2), |_| panic!("not reached: missing file"));
         assert_eq!(
             message,
             Some("Slot 2 couldn't be loaded, so the Game started from the beginning.".to_string())
@@ -889,21 +898,47 @@ mod tests {
         // Slot 1 was chosen, its file exists, but the Core refuses it.
         fs::create_dir_all(states.slot(1).parent().unwrap()).unwrap();
         fs::write(states.slot(1), b"junk").unwrap();
-        let message = load_start_state(&states, Some(1), |_| Err("bad state".to_string()));
+        let message = load_start_state(&states, Start::Slot(1), |_| Err("bad state".to_string()));
         assert_eq!(
             message,
             Some("Slot 1 couldn't be loaded, so the Game started from the beginning.".to_string())
         );
 
         // Slot 1 was chosen, its file exists, and the Core accepts it: no message.
-        let message = load_start_state(&states, Some(1), |_| Ok(()));
+        let message = load_start_state(&states, Start::Slot(1), |_| Ok(()));
         assert_eq!(message, None);
 
         // No slot was chosen (Resume State): missing or refused still says nothing.
-        assert_eq!(load_start_state(&states, None, |_| panic!("not reached")), None);
+        assert_eq!(
+            load_start_state(&states, Start::Resume, |_| panic!("not reached")),
+            None
+        );
         fs::write(states.resume(), b"junk").unwrap();
-        let message = load_start_state(&states, None, |_| Err("bad state".to_string()));
+        let message = load_start_state(&states, Start::Resume, |_| Err("bad state".to_string()));
         assert_eq!(message, None, "the Resume State falls back silently");
+    }
+
+    /// Start from power-on (FR-DET-4) reads no state, though a Resume State and a slot are there,
+    /// and says nothing; the Resume State still loads on a normal launch, and stays on disk.
+    #[test]
+    fn power_on_reads_no_state_and_a_resume_still_does() {
+        let dir = TempDir::new().unwrap();
+        let states = StatePaths::new(dir.path(), "nds", Path::new("nds/Mario.nds"));
+        fs::create_dir_all(states.resume().parent().unwrap()).unwrap();
+        fs::write(states.resume(), b"frozen").unwrap();
+        fs::write(states.slot(1), b"slot").unwrap();
+        let message = load_start_state(&states, Start::PowerOn, |state| {
+            panic!("power-on read {:?}", String::from_utf8_lossy(state))
+        });
+        assert_eq!(message, None);
+        assert!(states.resume().exists(), "the Resume State stays");
+
+        let mut read = Vec::new();
+        let message = load_start_state(&states, Start::Resume, |state| {
+            read = state.to_vec();
+            Ok(())
+        });
+        assert_eq!((message, read.as_slice()), (None, &b"frozen"[..]));
     }
 
     /// Held arrow keys reach port 0's left stick only on a stick-mode System (N64, PSP), as

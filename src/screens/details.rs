@@ -747,6 +747,31 @@ mod tests {
     }
 
     #[test]
+    fn deleting_the_save_states_from_the_options_menu_updates_the_count() {
+        let (_dir, mut ctx, game) = world("snes", "snes/Zelda.sfc");
+        let paths = StatePaths::new(&ctx.games_root, "snes", Path::new(&game.rel_path));
+        touch(&paths.slot(1));
+        let mut page = DetailsPage::new(game, &ctx);
+        assert_eq!(stat(&page, "SAVE STATES").as_deref(), Some("1 of 3"));
+        let Transition::Push(mut menu) = act(&mut page, &mut ctx, Action::Options) else {
+            panic!("Y should open the Options Menu");
+        };
+        // Past Load save state and Start from power-on to Delete save data, whose first row with
+        // anything to delete is Save States.
+        for action in [Action::Down, Action::Down, Action::Down, Action::Confirm] {
+            menu.handle(Input::Action(action), &mut ctx);
+        }
+        let Transition::Push(mut confirm) = menu.handle(Input::Action(Action::Confirm), &mut ctx) else {
+            panic!("expected a confirmation");
+        };
+        assert_eq!(confirm.title(), "Delete the Save State?");
+        confirm.handle(Input::Action(Action::Right), &mut ctx);
+        confirm.handle(Input::Action(Action::Confirm), &mut ctx);
+        act(&mut page, &mut ctx, Action::Right);
+        assert_eq!(stat(&page, "SAVE STATES").as_deref(), Some("0 of 3"));
+    }
+
+    #[test]
     fn details_input_never_waits_for_the_size_which_shows_once_measured() {
         let (_dir, mut ctx, game) = world("gc", "gc/Zelda.iso");
         // A measurement that hasn't finished: its sender is still held.

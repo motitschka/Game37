@@ -241,6 +241,7 @@ mod tests {
     use crate::cores::PPSSPP;
     use crate::cores::SAMEBOY;
     use crate::cores::testing::{assets_zip, core_zip, spawn, spawn_assets, spawn_failing};
+    use crate::ctx::Start;
     use crate::launch::{confirm_game, confirm_play};
     use crate::library::FoundGame;
     use crate::library::db::{GameRow, SortOrder};
@@ -325,7 +326,7 @@ mod tests {
         ctx.start_download = Box::new(|core, data_dir| spawn(core, data_dir, core_zip(core), None));
         let play = Play {
             game: g,
-            slot: Some(2),
+            start: Start::Slot(2),
         };
         let Transition::Push(mut screen) = confirm_play(play.clone(), &mut ctx) else {
             panic!("the Core download should start");

@@ -962,7 +962,13 @@ mod tests {
         frame(
             &mut nav,
             &mut ctx,
-            &[Keycode::Down, Keycode::Down, Keycode::Return, Keycode::F],
+            &[
+                Keycode::Down,
+                Keycode::Down,
+                Keycode::Down,
+                Keycode::Return,
+                Keycode::F,
+            ],
         );
         assert!(nav.top().text_input(), "the rename field is open");
         frame(&mut nav, &mut ctx, &[Keycode::Return]);
