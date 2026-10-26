@@ -24,7 +24,9 @@ struct RawConfig {
 #[derive(Debug)]
 pub enum ConfigError {
     Read(PathBuf, std::io::Error),
-    Parse(PathBuf, toml::de::Error),
+    /// A Config or secrets file couldn't be parsed. Carries only `toml`'s `message()`, never the error
+    /// itself, whose `Debug` includes the raw input text (which in `secrets.toml` may hold the API key).
+    Parse(PathBuf, String),
     /// `secrets.toml`'s SteamGridDB API key has characters no key has. The message never shows it.
     BadApiKey(PathBuf),
     /// Couldn't create, write or replace a Config or secrets file.
@@ -39,9 +41,7 @@ impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ConfigError::Read(path, e) => write!(f, "Can't read {}: {e}", path.display()),
-            // `message()`, not the error itself: its `Display` quotes the offending line, which in
-            // `secrets.toml` may hold the API key.
-            ConfigError::Parse(path, e) => write!(f, "{} is not valid: {}", path.display(), e.message()),
+            ConfigError::Parse(path, message) => write!(f, "{} is not valid: {message}", path.display()),
             ConfigError::BadApiKey(path) => {
                 write!(
                     f,
@@ -114,7 +114,8 @@ pub fn load_api_key(config_path: &Path) -> Result<Option<ApiKey>, ConfigError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(ConfigError::Read(path, e)),
     };
-    let raw: RawSecrets = toml::from_str(&text).map_err(|e| ConfigError::Parse(path.clone(), e))?;
+    let raw: RawSecrets =
+        toml::from_str(&text).map_err(|e| ConfigError::Parse(path.clone(), e.message().to_owned()))?;
     parse_api_key(&raw.steamgriddb_api_key.unwrap_or_default()).map_err(|_| ConfigError::BadApiKey(path))
 }
 
@@ -148,7 +149,8 @@ pub fn load(path: &Path) -> Result<Option<Config>, ConfigError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(ConfigError::Read(path.to_owned(), e)),
     };
-    let raw: RawConfig = toml::from_str(&text).map_err(|e| ConfigError::Parse(path.to_owned(), e))?;
+    let raw: RawConfig =
+        toml::from_str(&text).map_err(|e| ConfigError::Parse(path.to_owned(), e.message().to_owned()))?;
     let games_root = expand_home(raw.games_root.as_deref().unwrap_or("~/Games"));
     // `notify` reports absolute paths, so a relative root (relative to the current directory,
     // not canonicalised: the folder may not exist yet) would never match its events.
@@ -185,11 +187,16 @@ fn portable_games_root(path: &Path) -> String {
 }
 
 /// Writes `config.games_root` into the Config at `path`, keeping everything else in the file (other
-/// keys, comments, formatting). Creates the file and its parent folder if either is missing.
+/// keys, comments, formatting). Creates the file and its parent folder if either is missing. Keeps
+/// the existing file's mode if it has one, or 0644 for a new file: unlike `save_api_key`, the Config
+/// holds no secret, so it doesn't need to be mode 600.
 pub fn save(path: &Path, config: &Config) -> Result<(), ConfigError> {
     let mut doc = read_document(path)?;
     doc["games_root"] = toml_edit::value(portable_games_root(&config.games_root));
-    write_atomic(path, doc.to_string().as_bytes(), None)
+    let mode = std::fs::metadata(path)
+        .map(|m| m.permissions().mode() & 0o777)
+        .unwrap_or(0o644);
+    write_atomic(path, doc.to_string().as_bytes(), Some(mode))
 }
 
 /// Sets or removes the SteamGridDB API key in `secrets.toml` next to the Config at `config_path`.
@@ -236,6 +243,9 @@ fn write_atomic(path: &Path, bytes: &[u8], mode: Option<u32>) -> Result<(), Conf
             .set_permissions(std::fs::Permissions::from_mode(mode))
             .map_err(|e| ConfigError::Write(path.to_owned(), e))?;
     }
+    tmp.as_file()
+        .sync_all()
+        .map_err(|e| ConfigError::Write(path.to_owned(), e))?;
     tmp.persist(path)
         .map_err(|e| ConfigError::Write(path.to_owned(), e.error))?;
     Ok(())
@@ -337,6 +347,16 @@ mod tests {
     }
 
     #[test]
+    fn malformed_secrets_never_show_the_key_in_the_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = write_secrets(&dir, "steamgriddb_api_key = \"abc123secret\n");
+        let e = load_api_key(&config).unwrap_err();
+        assert!(matches!(e, ConfigError::Parse(..)), "{e}");
+        assert!(!e.to_string().contains("abc123secret"), "{e}");
+        assert!(!format!("{e:?}").contains("abc123secret"), "{e:?}");
+    }
+
+    #[test]
     fn example_config_parses() {
         let text = include_str!("../config.example.toml");
         let dir = tempfile::tempdir().unwrap();
@@ -387,6 +407,29 @@ mod tests {
     fn mode(path: &Path) -> u32 {
         use std::os::unix::fs::PermissionsExt;
         std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn save_over_an_existing_0644_file_leaves_it_0644() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(&dir, "games_root = \"/old\"\n");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let config = Config {
+            games_root: PathBuf::from("/mnt/games"),
+        };
+        save(&path, &config).unwrap();
+        assert_eq!(mode(&path), 0o644);
+    }
+
+    #[test]
+    fn save_to_a_new_file_comes_out_0644() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = Config {
+            games_root: PathBuf::from("/mnt/games"),
+        };
+        save(&path, &config).unwrap();
+        assert_eq!(mode(&path), 0o644);
     }
 
     #[test]

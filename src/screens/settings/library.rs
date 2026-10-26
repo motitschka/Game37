@@ -22,8 +22,10 @@ const RESET: usize = 3;
 pub struct Library {
     /// Visible and Hidden Games, as of `ctx.revision` `.0`.
     counts: Option<(u64, usize, usize)>,
-    /// What the last rescan found, shown in its row in place of the Game count.
-    rescanned: Option<String>,
+    /// What the last rescan found and the `ctx.revision` it was produced at, shown in its row in
+    /// place of the Game count only while the revision hasn't moved on since (e.g. the watcher
+    /// picking up a later change to the library).
+    rescanned: Option<(u64, String)>,
 }
 
 impl Library {
@@ -49,7 +51,10 @@ impl Section for Library {
     fn rows(&mut self, ctx: &Ctx) -> Vec<Row> {
         let (visible, hidden) = self.counts(ctx);
         let root = tilde(&ctx.games_root, dirs::home_dir().as_deref());
-        let count = self.rescanned.clone().unwrap_or_else(|| games(visible));
+        let count = match &self.rescanned {
+            Some((revision, text)) if *revision == ctx.revision => text.clone(),
+            _ => games(visible),
+        };
         vec![
             Row::new("Games Root location").value(root),
             Row::new("Rescan library").value(count).verb("Rescan"),
@@ -64,7 +69,10 @@ impl Section for Library {
     fn confirm(&mut self, i: usize, ctx: &mut Ctx) -> Transition {
         match i {
             GAMES_ROOT => return Transition::Push(Box::new(GamesRootEntry::new(ctx))),
-            RESCAN => self.rescanned = Some(rescan(ctx)),
+            RESCAN => {
+                let text = rescan(ctx);
+                self.rescanned = Some((ctx.revision, text));
+            }
             HIDDEN => return Transition::Push(Box::new(HiddenGames::new(ctx))),
             RESET => return Transition::Push(Box::new(reset())),
             _ => {}
@@ -207,6 +215,16 @@ mod tests {
         fs::remove_file(ctx.games_root.join("snes/B.sfc")).unwrap();
         fs::remove_file(ctx.games_root.join("snes/C.sfc")).unwrap();
         assert_eq!(rescan_value(&mut lib, &mut ctx).as_deref(), Some("2 gone"));
+    }
+
+    #[test]
+    fn a_later_revision_clears_the_rescan_result() {
+        let (_dir, mut ctx) = world(&["A", "B"]);
+        let mut lib = Library::default();
+        add(&ctx.games_root, "C");
+        assert_eq!(rescan_value(&mut lib, &mut ctx).as_deref(), Some("1 new Game"));
+        ctx.revision += 1;
+        assert_eq!(lib.rows(&ctx)[RESCAN].value.as_deref(), Some("3 Games"));
     }
 
     /// Settings in a Nav over a root screen, so pushes and pops show.
