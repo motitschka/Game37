@@ -251,6 +251,17 @@ impl Hw {
         host(|h| h.make_frontend_current());
     }
 
+    /// Runs `f`, a call into the Core outside `retro_run` (serializing, unserializing, a reset), with
+    /// the Core's context current, then makes the frontend's current again. A Core may draw or read
+    /// its framebuffers in any call; with the frontend's context current that would clobber the
+    /// frontend's state.
+    pub fn with_context<R>(&mut self, f: impl FnOnce() -> R) -> R {
+        host(|h| h.make_core_current());
+        let result = f();
+        host(|h| h.make_frontend_current());
+        result
+    }
+
     /// Remakes the FBO at `size` with the Core's context current, between `context_destroy` and
     /// `context_reset` as RetroArch does. Should it fail, the Core keeps drawing into the old one.
     fn resize(&mut self, size: (u32, u32)) {
@@ -864,6 +875,160 @@ mod tests {
         // Stopping clears the process-wide FBO and loader, so no later test inherits them.
         hw.stop(|| {});
         callbacks::remove();
+    }
+
+    thread_local! {
+        /// Which context the [`Tracking`] host last made current.
+        static CURRENT: std::cell::Cell<&'static str> = const { std::cell::Cell::new("frontend") };
+        /// Each call into the fake Core, with the context current during it.
+        static CORE_CALLS: RefCell<Vec<(&'static str, &'static str)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn core_call(name: &'static str) {
+        CORE_CALLS.with(|c| c.borrow_mut().push((name, CURRENT.get())));
+    }
+
+    /// A host with every OpenGL function `Fbo::new` needs, which notes the context made current.
+    struct Tracking;
+
+    impl GlHost for Tracking {
+        fn create_context(&mut self, _: GlRequest) -> Result<(), String> {
+            Ok(())
+        }
+        fn make_core_current(&mut self) {
+            CURRENT.set("core");
+        }
+        fn make_frontend_current(&mut self) {
+            CURRENT.set("frontend");
+        }
+        fn loader(&self) -> HwGetProcAddressFn {
+            fake_gl_loader
+        }
+        fn destroy_context(&mut self) {}
+    }
+
+    unsafe extern "C" fn fake_set<T>(_: T) {}
+    unsafe extern "C" fn fake_nothing() {}
+    unsafe extern "C" fn fake_api_version() -> std::ffi::c_uint {
+        1
+    }
+    unsafe extern "C" fn fake_system_info(_: *mut super::super::ffi::RetroSystemInfo) {}
+    unsafe extern "C" fn fake_av_info(_: *mut super::super::ffi::RetroSystemAvInfo) {}
+    unsafe extern "C" fn fake_load_game(_: *const super::super::ffi::RetroGameInfo) -> bool {
+        true
+    }
+    unsafe extern "C" fn fake_memory_data(_: std::ffi::c_uint) -> *mut c_void {
+        std::ptr::null_mut()
+    }
+    unsafe extern "C" fn fake_memory_size(_: std::ffi::c_uint) -> usize {
+        0
+    }
+    unsafe extern "C" fn fake_serialize_size() -> usize {
+        core_call("serialize_size");
+        4
+    }
+    unsafe extern "C" fn fake_serialize(_: *mut c_void, _: usize) -> bool {
+        core_call("serialize");
+        true
+    }
+    unsafe extern "C" fn fake_unserialize(_: *const c_void, _: usize) -> bool {
+        core_call("unserialize");
+        true
+    }
+    unsafe extern "C" fn fake_reset() {
+        core_call("reset");
+    }
+
+    #[test]
+    fn a_cores_state_and_reset_calls_run_with_its_context_current() {
+        use super::super::{Claim, Core, Frame, ffi::Api};
+
+        let _serial = crate::libretro::tests::serial();
+        FBO_FAIL_AT.store(0, Ordering::SeqCst);
+        CURRENT.set("frontend");
+        CORE_CALLS.with(|c| c.borrow_mut().clear());
+        let mut state = callbacks::State::new(c"/sys".into(), c"/save".into());
+        state.gl_host = Some(Box::new(Tracking));
+        callbacks::install(state);
+        let request = HwRequest {
+            gl: GlRequest {
+                core_profile: true,
+                major: 3,
+                minor: 3,
+            },
+            depth: false,
+            stencil: false,
+            bottom_left_origin: true,
+            context_reset: None,
+            context_destroy: None,
+        };
+        let hw = Hw::start(request, 640, 480, || panic!("the FBO builds")).expect("the FBO builds");
+        let api = Api {
+            set_environment: fake_set,
+            set_video_refresh: fake_set,
+            set_audio_sample: fake_set,
+            set_audio_sample_batch: fake_set,
+            set_input_poll: fake_set,
+            set_input_state: fake_set,
+            init: fake_nothing,
+            deinit: fake_nothing,
+            api_version: fake_api_version,
+            get_system_info: fake_system_info,
+            get_system_av_info: fake_av_info,
+            reset: fake_reset,
+            run: fake_nothing,
+            serialize_size: fake_serialize_size,
+            serialize: fake_serialize,
+            unserialize: fake_unserialize,
+            load_game: fake_load_game,
+            unload_game: fake_nothing,
+            get_memory_data: fake_memory_data,
+            get_memory_size: fake_memory_size,
+        };
+        // Dropping it stops `hw` and removes the callbacks' state.
+        let mut core = Core {
+            api,
+            initialised: true,
+            game_loaded: true,
+            video: Frame::default(),
+            hw: Some(hw),
+            duped: false,
+            audio: Vec::new(),
+            game_path: c"/game".into(),
+            game_data: None,
+            lib: None,
+            _claim: Claim::take().expect("no other Core is loaded"),
+            _not_send: std::marker::PhantomData,
+        };
+
+        let saved = core.serialize().expect("the fake Core serializes");
+        assert_eq!(
+            CURRENT.get(),
+            "frontend",
+            "the frontend's context is current after serialize"
+        );
+        core.unserialize(&saved).expect("the fake Core unserializes");
+        assert_eq!(
+            CURRENT.get(),
+            "frontend",
+            "the frontend's context is current after unserialize"
+        );
+        core.reset();
+        assert_eq!(
+            CURRENT.get(),
+            "frontend",
+            "the frontend's context is current after reset"
+        );
+        drop(core);
+        assert_eq!(
+            CORE_CALLS.with(|c| c.take()),
+            [
+                ("serialize_size", "core"),
+                ("serialize", "core"),
+                ("unserialize", "core"),
+                ("reset", "core"),
+            ]
+        );
     }
 
     #[test]

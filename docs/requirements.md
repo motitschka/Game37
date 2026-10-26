@@ -103,6 +103,7 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 - **FR-EMB-10** In-game buttons map by position to the original console's controller.
 - **FR-EMB-11** There is no fast-forward.
 - **FR-EMB-12** If a required BIOS is missing, Game37 says which file to place in which folder instead of failing silently.
+- European (PAL) N64 Games are cropped to their picture, without the PAL frame's black borders.
 
 ### Nintendo DS
 

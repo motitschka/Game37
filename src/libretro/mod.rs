@@ -473,25 +473,37 @@ impl Core {
         &self.video
     }
 
+    /// Calls into the Core outside `retro_run`: a Core rendering with OpenGL gets its context
+    /// current, as during a frame, and the frontend's is current again afterwards.
+    fn call<R>(&mut self, f: impl FnOnce(&Api) -> R) -> R {
+        match &mut self.hw {
+            Some(hw) => hw.with_context(|| f(&self.api)),
+            None => f(&self.api),
+        }
+    }
+
     /// The Core's state, for [`Core::unserialize`] later.
     pub fn serialize(&mut self) -> Result<Vec<u8>, CoreError> {
-        // SAFETY: the Core is loaded with a Game.
-        let size = unsafe { (self.api.serialize_size)() };
-        if size == 0 {
-            return Err(CoreError::Serialize);
-        }
-        let mut buf = vec![0u8; size];
-        // SAFETY: `buf` is writable for the `size` bytes the Core asked for.
-        if unsafe { (self.api.serialize)(buf.as_mut_ptr().cast(), size) } {
-            Ok(buf)
-        } else {
-            Err(CoreError::Serialize)
-        }
+        self.call(|api| {
+            // SAFETY: the Core is loaded with a Game.
+            let size = unsafe { (api.serialize_size)() };
+            if size == 0 {
+                return Err(CoreError::Serialize);
+            }
+            let mut buf = vec![0u8; size];
+            // SAFETY: `buf` is writable for the `size` bytes the Core asked for.
+            if unsafe { (api.serialize)(buf.as_mut_ptr().cast(), size) } {
+                Ok(buf)
+            } else {
+                Err(CoreError::Serialize)
+            }
+        })
     }
 
     pub fn unserialize(&mut self, state: &[u8]) -> Result<(), CoreError> {
         // SAFETY: `state` is readable for its whole length during the call.
-        if unsafe { (self.api.unserialize)(state.as_ptr().cast(), state.len()) } {
+        let restored = self.call(|api| unsafe { (api.unserialize)(state.as_ptr().cast(), state.len()) });
+        if restored {
             Ok(())
         } else {
             Err(CoreError::Unserialize)
@@ -500,7 +512,7 @@ impl Core {
 
     pub fn reset(&mut self) {
         // SAFETY: the Core is loaded with a Game.
-        unsafe { (self.api.reset)() }
+        self.call(|api| unsafe { (api.reset)() })
     }
 
     /// The Game's battery-backed save memory, which the Core owns; `None` if it has none.
