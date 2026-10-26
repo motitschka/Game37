@@ -35,6 +35,9 @@ pub struct Key {
     entry: TextEntry,
     /// Whether the on-screen keyboard is open, for a controller's Confirm on the field.
     keyboard_open: bool,
+    /// The field's text when the on-screen keyboard opened, which Cancel puts back. Like `entry`,
+    /// never shown, and cleared when the step is left.
+    opened_with: String,
     /// Set just before Skip returns `Go::Next`, so `before_finish` saves nothing.
     skip: bool,
     /// Why the key wasn't saved. Never holds any of the key itself.
@@ -54,6 +57,7 @@ impl Key {
             focus: Focus::Field,
             entry: TextEntry::new("", MAX_KEY_CHARS),
             keyboard_open: false,
+            opened_with: String::new(),
             skip: false,
             error: None,
             secrets: String::new(),
@@ -78,7 +82,10 @@ impl Key {
     /// keyboard types into the field in place.
     fn confirm(&mut self) -> Go {
         match self.focus {
-            Focus::Field if self.kind == InputKind::Controller => self.keyboard_open = true,
+            Focus::Field if self.kind == InputKind::Controller => {
+                self.keyboard_open = true;
+                self.opened_with = self.entry.text().to_owned();
+            }
             Focus::Field => {}
             Focus::Skip => {
                 self.skip = true;
@@ -194,6 +201,7 @@ impl super::Step for Key {
 
     fn leave(&mut self) {
         self.entry = TextEntry::new("", MAX_KEY_CHARS);
+        self.opened_with.clear();
         self.keyboard_open = false;
         self.skip = false;
         self.error = None;
@@ -221,8 +229,14 @@ impl super::Step for Key {
     fn handle(&mut self, input: Input, _model: &mut Model, _ctx: &mut Ctx) -> Go {
         if self.keyboard_open {
             match self.entry.handle(input) {
-                Outcome::Submit => self.keyboard_open = false,
-                Outcome::Cancel => self.keyboard_open = false,
+                Outcome::Submit => {
+                    self.keyboard_open = false;
+                    self.opened_with.clear();
+                }
+                Outcome::Cancel => {
+                    self.keyboard_open = false;
+                    self.entry = TextEntry::new(&std::mem::take(&mut self.opened_with), MAX_KEY_CHARS);
+                }
                 Outcome::Changed => self.error = None,
                 Outcome::None => {}
             }
@@ -547,6 +561,23 @@ mod tests {
         feed(&mut setup, &mut ctx, &mut controls, &evs, "");
         assert!(path.exists(), "the Config is written");
         assert!(ctx.setup_finished.is_some());
+        let saved = config::load_api_key(&path).unwrap();
+        assert_eq!(saved.as_ref().map(config::ApiKey::expose), Some(SECRET));
+    }
+
+    #[test]
+    fn cancel_on_the_on_screen_keyboard_puts_the_old_text_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let (mut setup, mut ctx) = on_key(&path);
+        typed(&mut setup, &mut ctx, SECRET);
+        act(&mut setup, &mut ctx, Action::Confirm);
+        assert!(setup.text_input(), "the on-screen keyboard is open");
+        typed(&mut setup, &mut ctx, "zz");
+        act(&mut setup, &mut ctx, Action::Back);
+        assert!(!setup.text_input(), "Cancel closes it");
+        assert_eq!(setup.step(), 5);
+        act(&mut setup, &mut ctx, Action::Settings);
         let saved = config::load_api_key(&path).unwrap();
         assert_eq!(saved.as_ref().map(config::ApiKey::expose), Some(SECRET));
     }
