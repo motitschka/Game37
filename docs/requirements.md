@@ -94,7 +94,7 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 - **FR-EMB-1** Game37 loads Cores and supports libretro OpenGL hardware rendering, so all nine Embedded Systems run in v1.
 - **FR-EMB-2** Game37 downloads each Core from the libretro build server the first time it is needed and stores it under `~/.local/share/game37/cores/`.
 - **FR-EMB-3** The Pause Menu opens with the Guide button, with Select+Start, or with Esc.
-- **FR-EMB-4** The Pause Menu offers: resume, save to slot, load from slot, and quit to library.
+- **FR-EMB-4** The Pause Menu offers: resume, save to slot, load from slot, restart, and quit to library.
 - **FR-EMB-5** Each Game has 3 manual Save State slots. Each slot shows a screenshot and a timestamp.
 - **FR-EMB-6** Quitting an embedded Game writes a Resume State. The next launch of that Game continues from it.
 - **FR-EMB-7** In-game Saves are always written to disk, regardless of Save States.

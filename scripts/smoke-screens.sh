@@ -68,6 +68,8 @@ shot m3-gbc "$root/cfg.toml" "nexttab,right,right,right,right,confirm,confirm,co
 shot m3-gba "$root/cfg.toml" "nexttab,right,right,right,right,right,confirm,confirm,confirm" --frames 240
 shot m3-pause-saved "$root/cfg.toml" \
     "nexttab,right,right,confirm,confirm,confirm,wait:120,back,down,confirm,confirm,confirm"
+shot m3-pause-restart-confirm "$root/cfg.toml" \
+    "nexttab,right,right,confirm,confirm,confirm,wait:120,back,down,down,down,confirm"
 # M4: OpenGL Cores (N64, PSP), DS layout, PS1 without a BIOS
 shot m4-n64 "$root/cfg.toml" "nexttab,right,right,right,confirm,confirm,confirm" --frames 300
 shot m4-ds "$root/cfg.toml" "nexttab,right,right,right,right,right,right,right,confirm,confirm,confirm" \

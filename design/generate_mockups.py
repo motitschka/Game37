@@ -580,22 +580,32 @@ def screen_options():
     sv.save()
 
 
+PAUSE_ITEMS = ["Resume", "Save state", "Load state", "Restart game", "Quit to library"]
+
+
+def pause_panel(sv, highlight=1):
+    """The Pause Menu's sidebar: PAUSED, title, meta and the item list. `highlight` is the
+    focused item's index."""
+    sv.add(rect(0, 0, 600, H, C["surface"], opacity=0.94), rect(600, 0, 1, H, C["line"]))
+    sv.add(text(M, 170, "PAUSED", 15, 700, fill=C["accent"], ls=3), text(M, 228, "Super Mario World", 40, 800),
+           text(M, 266, "SNES  ·  12h 40m played", 19, 500, fill=C["muted"]))
+    for i, label in enumerate(PAUSE_ITEMS):
+        y = 320 + i * 84
+        on = i == highlight
+        if on:
+            sv.add(rect(M - 24, y, 456, 70, C["surface2"], rx=14), rect(M - 24, y + 15, 5, 40, C["accent"], rx=2))
+        sv.add(text(M, y + 44, label, 24, 700 if on else 500))
+        if i in (1, 2, 3):
+            sv.add(text(M + 408, y + 44, "›", 26, 600, fill=C["muted"], anchor="end"))
+    sv.add(text(M, 960, "Opens with Guide, Select + Start, or Esc", 16, 500, fill=C["dim"]))
+
+
 def screen_pause():
     sv = Svg("07-pause-menu", "Pause Menu")
     sv.add(rect(0, 0, W, H, "#000000"))
     scene(sv, 240, 0, 1440, 1080)
     dim(sv, 0.6)
-    sv.add(rect(0, 0, 600, H, C["surface"], opacity=0.94), rect(600, 0, 1, H, C["line"]))
-    sv.add(text(M, 170, "PAUSED", 15, 700, fill=C["accent"], ls=3), text(M, 228, "Super Mario World", 40, 800),
-           text(M, 266, "SNES  ·  12h 40m played", 19, 500, fill=C["muted"]))
-    for i, label in enumerate(["Resume", "Save state", "Load state", "Quit to library"]):
-        y = 320 + i * 84
-        if i == 1:
-            sv.add(rect(M - 24, y, 456, 70, C["surface2"], rx=14), rect(M - 24, y + 15, 5, 40, C["accent"], rx=2))
-        sv.add(text(M, y + 44, label, 24, 700 if i == 1 else 500))
-        if i in (1, 2):
-            sv.add(text(M + 408, y + 44, "›", 26, 600, fill=C["muted"], anchor="end"))
-    sv.add(text(M, 960, "Opens with Guide, Select + Start, or Esc", 16, 500, fill=C["dim"]))
+    pause_panel(sv, highlight=1)
     sv.add(text(680, 330, "Save to slot", 30, 800))
     slots = [("Slot 1", "Today, 21:14"), ("Slot 2", "Yesterday, 18:02"), ("Slot 3", "Empty")]
     for i, (name, when) in enumerate(slots):
@@ -609,6 +619,35 @@ def screen_pause():
             sv.add(rect(x, y, 360, 270, "none", rx=12, stroke=C["line"], sw=2))
         sv.add(text(x, y + 312, name, 22, 700), text(x, y + 340, when, 18, 500, fill=C["muted"]))
     hintbar(sv, [(["A"], "Save here"), (["B"], "Back")])
+    sv.save()
+
+
+def screen_pause_restart_confirm():
+    """The "Restart the Game?" confirmation over the Pause Menu (FR-EMB-4): Cancel is focused,
+    Restart is the danger action, laid out like a `Confirm` dialog."""
+    sv = Svg("34-pause-restart-confirm", "Pause Menu: Restart confirm")
+    sv.add(rect(0, 0, W, H, "#000000"))
+    scene(sv, 240, 0, 1440, 1080)
+    dim(sv, 0.6)
+    pause_panel(sv, highlight=3)
+    dim(sv, 0.62)
+    pw, ph = 960, 280
+    px, py = (W - pw) / 2, (H - ph) / 2
+    sv.add(rect(px, py, pw, ph, C["surface"], rx=20, stroke=C["line"], sw=1))
+    sv.add(text(px + 56, py + 90, "Restart the Game?", 34, 700))
+    sv.add(text(px + 56, py + 148, "Progress since your last save is lost. Your In-game Save and", 22, 400,
+                fill=C["muted"]))
+    sv.add(text(px + 56, py + 178, "Save States stay.", 22, 400, fill=C["muted"]))
+    bw, bh, gap = 200, 64, 16
+    by = py + ph - 56 - bh
+    cancel_x = px + pw - 56 - bw
+    restart_x = cancel_x - gap - bw
+    sv.add(rect(cancel_x - 5, by - 5, bw + 10, bh + 10, "none", rx=19, stroke="#FFFFFF", sw=4))
+    sv.add(rect(cancel_x, by, bw, bh, C["surface2"], rx=14), text(cancel_x + bw / 2, by + bh / 2 + 8, "Cancel",
+                                                                    22, 700, anchor="middle"))
+    sv.add(rect(restart_x, by, bw, bh, C["surface2"], rx=14),
+           text(restart_x + bw / 2, by + bh / 2 + 8, "Restart", 22, 700, fill=C["danger"], anchor="middle"))
+    hintbar(sv, [(["A"], "Choose"), (["B"], "Cancel")])
     sv.save()
 
 
@@ -1540,6 +1579,7 @@ if __name__ == "__main__":
                screen_settings_library, screen_settings_bios, screen_settings_cores, screen_settings_api_key,
                screen_controller_test, screen_search, screen_search_controller, screen_search_results, screen_search_empty,
                screen_setup_systems, screen_setup_emulators, screen_setup_folders, screen_setup_cores,
-               screen_setup_key, screen_settings_controls, screen_settings_about]:
+               screen_setup_key, screen_settings_controls, screen_settings_about,
+               screen_pause_restart_confirm]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))
