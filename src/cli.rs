@@ -116,6 +116,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
         }
         return Ok(options);
     };
+    if options.config.is_none() || options.data_dir.is_none() {
+        return Err(
+            "--screenshot needs --config and --data-dir, so it never touches your real Config and data"
+                .to_owned(),
+        );
+    }
     options.screenshot = Some(Screenshot {
         out,
         steps: parse_steps(actions.as_deref().unwrap_or(""))?,
@@ -212,10 +218,33 @@ mod tests {
         s.split_whitespace().map(str::to_owned).collect()
     }
 
+    /// `args`, with `--config` and `--data-dir` always supplied, for tests whose `--screenshot`
+    /// isn't itself about that requirement.
+    fn shot_args(s: &str) -> Vec<String> {
+        shot_args_vec(args(s))
+    }
+
+    fn shot_args_vec(extra: Vec<String>) -> Vec<String> {
+        let mut out = args("--config c.toml --data-dir d");
+        out.extend(extra);
+        out
+    }
+
+    #[test]
+    fn screenshot_needs_config_and_data_dir() {
+        let err = parse(args("--screenshot out.bmp")).unwrap_err();
+        assert!(err.contains("--config") && err.contains("--data-dir"), "{err}");
+        let err = parse(args("--screenshot out.bmp --config c.toml")).unwrap_err();
+        assert!(err.contains("--data-dir"), "{err}");
+        let err = parse(args("--screenshot out.bmp --data-dir d")).unwrap_err();
+        assert!(err.contains("--config"), "{err}");
+        assert!(parse(shot_args("--screenshot out.bmp")).is_ok());
+    }
+
     #[test]
     fn screenshot_with_actions() {
-        let options = parse(args(
-            "--screenshot out.bmp --config c.toml --actions nexttab,click:900:60,wait:30,back",
+        let options = parse(shot_args(
+            "--screenshot out.bmp --actions nexttab,click:900:60,wait:30,back",
         ))
         .unwrap();
         assert_eq!(options.config, Some(PathBuf::from("c.toml")));
@@ -235,25 +264,25 @@ mod tests {
     #[test]
     fn frames_default_to_one_and_take_a_count() {
         assert_eq!(
-            parse(args("--screenshot o.bmp"))
+            parse(shot_args("--screenshot o.bmp"))
                 .unwrap()
                 .screenshot
                 .unwrap()
                 .frames,
             1
         );
-        let shot = parse(args("--screenshot o.bmp --actions confirm --frames 180"))
+        let shot = parse(shot_args("--screenshot o.bmp --actions confirm --frames 180"))
             .unwrap()
             .screenshot
             .unwrap();
         assert_eq!((shot.frames, shot.steps.len()), (180, 1));
         for bad in ["0", "-1", "ten", ""] {
-            let err = parse(vec![
+            let err = parse(shot_args_vec(vec![
                 "--screenshot".into(),
                 "o.bmp".into(),
                 "--frames".into(),
                 bad.into(),
-            ])
+            ]))
             .unwrap_err();
             assert!(err.contains("--frames"), "{err}");
         }
@@ -264,7 +293,7 @@ mod tests {
 
     #[test]
     fn artwork_is_off_unless_asked_for_and_only_works_with_screenshot() {
-        let shot = |a: &str| parse(args(a)).unwrap().screenshot.unwrap();
+        let shot = |a: &str| parse(shot_args(a)).unwrap().screenshot.unwrap();
         assert!(!shot("--screenshot o.bmp").artwork);
         assert!(shot("--screenshot o.bmp --artwork --frames 2").artwork);
         assert!(shot("--artwork --screenshot o.bmp").artwork);
@@ -275,7 +304,7 @@ mod tests {
 
     #[test]
     fn screen_opens_the_controller_test_and_only_works_with_screenshot() {
-        let shot = |a: &str| parse(args(a)).unwrap().screenshot.unwrap();
+        let shot = |a: &str| parse(shot_args(a)).unwrap().screenshot.unwrap();
         assert_eq!(shot("--screenshot o.bmp").screen, None);
         assert_eq!(
             shot("--screen controller-test --screenshot o.bmp").screen,
@@ -283,7 +312,7 @@ mod tests {
         );
         let err = parse(args("--screen controller-test")).unwrap_err();
         assert!(err.contains("--screen") && err.contains("--screenshot"), "{err}");
-        let err = parse(args("--screenshot o.bmp --screen settings")).unwrap_err();
+        let err = parse(shot_args("--screenshot o.bmp --screen settings")).unwrap_err();
         assert!(err.contains("controller-test"), "{err}");
         assert!(USAGE.contains("[--screen controller-test]"));
     }
@@ -295,15 +324,15 @@ mod tests {
 
     #[test]
     fn unknown_action_is_an_error() {
-        let err = parse(args("--screenshot o.bmp --actions jump")).unwrap_err();
+        let err = parse(shot_args("--screenshot o.bmp --actions jump")).unwrap_err();
         assert!(err.contains("jump"), "{err}");
-        assert!(parse(args("--screenshot o.bmp --actions click:1")).is_err());
-        assert!(parse(args("--screenshot o.bmp --actions text:")).is_err());
+        assert!(parse(shot_args("--screenshot o.bmp --actions click:1")).is_err());
+        assert!(parse(shot_args("--screenshot o.bmp --actions text:")).is_err());
     }
 
     #[test]
     fn a_text_step_types_each_character_in_one_frame() {
-        let shot = parse(args("--screenshot o.bmp --actions search,text:Mé1,down"))
+        let shot = parse(shot_args("--screenshot o.bmp --actions search,text:Mé1,down"))
             .unwrap()
             .screenshot
             .unwrap();
@@ -329,7 +358,7 @@ mod tests {
 
     #[test]
     fn missing_emulators_marks_only_the_named_systems() {
-        let options = parse(args("--screenshot o.bmp --missing-emulators wiiu,ps3")).unwrap();
+        let options = parse(shot_args("--screenshot o.bmp --missing-emulators wiiu,ps3")).unwrap();
         let emulators = options.screenshot.unwrap().missing_emulators;
         assert_eq!(
             emulators.missing(systems::by_id("wiiu").unwrap()),
@@ -348,7 +377,7 @@ mod tests {
 
     #[test]
     fn no_missing_emulators_flag_leaves_everything_installed() {
-        let options = parse(args("--screenshot o.bmp")).unwrap();
+        let options = parse(shot_args("--screenshot o.bmp")).unwrap();
         let emulators = options.screenshot.unwrap().missing_emulators;
         assert_eq!(emulators.missing(systems::by_id("wiiu").unwrap()), None);
     }
@@ -361,13 +390,13 @@ mod tests {
 
     #[test]
     fn an_unknown_system_id_is_an_error() {
-        let err = parse(args("--screenshot o.bmp --missing-emulators dreamcast")).unwrap_err();
+        let err = parse(shot_args("--screenshot o.bmp --missing-emulators dreamcast")).unwrap_err();
         assert!(err.contains("dreamcast"), "{err}");
     }
 
     #[test]
     fn an_embedded_system_id_is_an_error() {
-        let err = parse(args("--screenshot o.bmp --missing-emulators snes")).unwrap_err();
+        let err = parse(shot_args("--screenshot o.bmp --missing-emulators snes")).unwrap_err();
         assert!(err.contains("snes"), "{err}");
     }
 }
