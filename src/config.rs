@@ -24,7 +24,9 @@ struct RawConfig {
 #[derive(Debug)]
 pub enum ConfigError {
     Read(PathBuf, std::io::Error),
-    Parse(PathBuf, toml::de::Error),
+    /// A Config or secrets file couldn't be parsed. Carries only `toml`'s `message()`, never the error
+    /// itself, whose `Debug` includes the raw input text (which in `secrets.toml` may hold the API key).
+    Parse(PathBuf, String),
     /// `secrets.toml`'s SteamGridDB API key has characters no key has. The message never shows it.
     BadApiKey(PathBuf),
     /// Couldn't create, write or replace a Config or secrets file.
@@ -39,9 +41,7 @@ impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ConfigError::Read(path, e) => write!(f, "Can't read {}: {e}", path.display()),
-            // `message()`, not the error itself: its `Display` quotes the offending line, which in
-            // `secrets.toml` may hold the API key.
-            ConfigError::Parse(path, e) => write!(f, "{} is not valid: {}", path.display(), e.message()),
+            ConfigError::Parse(path, message) => write!(f, "{} is not valid: {message}", path.display()),
             ConfigError::BadApiKey(path) => {
                 write!(
                     f,
@@ -114,7 +114,8 @@ pub fn load_api_key(config_path: &Path) -> Result<Option<ApiKey>, ConfigError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(ConfigError::Read(path, e)),
     };
-    let raw: RawSecrets = toml::from_str(&text).map_err(|e| ConfigError::Parse(path.clone(), e))?;
+    let raw: RawSecrets =
+        toml::from_str(&text).map_err(|e| ConfigError::Parse(path.clone(), e.message().to_owned()))?;
     parse_api_key(&raw.steamgriddb_api_key.unwrap_or_default()).map_err(|_| ConfigError::BadApiKey(path))
 }
 
@@ -148,7 +149,8 @@ pub fn load(path: &Path) -> Result<Option<Config>, ConfigError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(ConfigError::Read(path.to_owned(), e)),
     };
-    let raw: RawConfig = toml::from_str(&text).map_err(|e| ConfigError::Parse(path.to_owned(), e))?;
+    let raw: RawConfig =
+        toml::from_str(&text).map_err(|e| ConfigError::Parse(path.to_owned(), e.message().to_owned()))?;
     let games_root = expand_home(raw.games_root.as_deref().unwrap_or("~/Games"));
     // `notify` reports absolute paths, so a relative root (relative to the current directory,
     // not canonicalised: the folder may not exist yet) would never match its events.
@@ -334,6 +336,16 @@ mod tests {
         let message = load_api_key(&config).unwrap_err().to_string();
         assert!(matches!(load_api_key(&config), Err(ConfigError::BadApiKey(_))));
         assert!(!message.contains("secret key"), "{message}");
+    }
+
+    #[test]
+    fn malformed_secrets_never_show_the_key_in_the_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = write_secrets(&dir, "steamgriddb_api_key = \"abc123secret\n");
+        let e = load_api_key(&config).unwrap_err();
+        assert!(matches!(e, ConfigError::Parse(..)), "{e}");
+        assert!(!e.to_string().contains("abc123secret"), "{e}");
+        assert!(!format!("{e:?}").contains("abc123secret"), "{e:?}");
     }
 
     #[test]
