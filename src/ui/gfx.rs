@@ -36,6 +36,59 @@ impl TextStyle {
     }
 }
 
+/// Whether the window opens fullscreen (FR-UI-3, US-33). A change takes effect at the next start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WindowMode {
+    /// As it was when Game37 last quit or F11 last toggled it; windowed the first time.
+    #[default]
+    RememberLast,
+    AlwaysFullscreen,
+    AlwaysWindowed,
+}
+
+impl WindowMode {
+    pub const ALL: [WindowMode; 3] = [
+        WindowMode::RememberLast,
+        WindowMode::AlwaysFullscreen,
+        WindowMode::AlwaysWindowed,
+    ];
+
+    /// The name the library's `settings` table stores it under.
+    pub fn id(self) -> &'static str {
+        match self {
+            WindowMode::RememberLast => "remember_last",
+            WindowMode::AlwaysFullscreen => "always_fullscreen",
+            WindowMode::AlwaysWindowed => "always_windowed",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<WindowMode> {
+        WindowMode::ALL.into_iter().find(|m| m.id() == id)
+    }
+
+    /// The label its Settings row shows.
+    pub fn label(self) -> &'static str {
+        match self {
+            WindowMode::RememberLast => "Remember last",
+            WindowMode::AlwaysFullscreen => "Always fullscreen",
+            WindowMode::AlwaysWindowed => "Always windowed",
+        }
+    }
+
+    /// The next mode in [`WindowMode::ALL`], wrapping around.
+    pub fn next(self) -> WindowMode {
+        let i = WindowMode::ALL.iter().position(|&m| m == self).unwrap_or(0);
+        WindowMode::ALL[(i + 1) % WindowMode::ALL.len()]
+    }
+
+    /// The previous mode in [`WindowMode::ALL`], wrapping around.
+    pub fn prev(self) -> WindowMode {
+        let n = WindowMode::ALL.len();
+        let i = WindowMode::ALL.iter().position(|&m| m == self).unwrap_or(0);
+        WindowMode::ALL[(i + n - 1) % n]
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct TextKey {
     text: String,
@@ -861,16 +914,46 @@ impl<'tc> Gfx<'tc> {
         }
     }
 
+    pub fn is_fullscreen(&self) -> bool {
+        self.canvas.window().fullscreen_state() != sdl3::video::FullscreenType::Off
+    }
+
+    pub fn set_fullscreen(&mut self, on: bool) {
+        let _ = self.canvas.window_mut().set_fullscreen(on);
+    }
+
     pub fn toggle_fullscreen(&mut self) {
-        let window = self.canvas.window_mut();
-        let fullscreen = window.fullscreen_state() != sdl3::video::FullscreenType::Off;
-        let _ = window.set_fullscreen(!fullscreen);
+        self.set_fullscreen(!self.is_fullscreen());
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_modes_cycle_both_ways_and_wrap() {
+        use WindowMode::{AlwaysFullscreen, AlwaysWindowed, RememberLast};
+        let all = [RememberLast, AlwaysFullscreen, AlwaysWindowed];
+        assert_eq!(WindowMode::ALL, all);
+        assert_eq!(
+            all.map(WindowMode::next),
+            [AlwaysFullscreen, AlwaysWindowed, RememberLast]
+        );
+        assert_eq!(
+            all.map(WindowMode::prev),
+            [AlwaysWindowed, RememberLast, AlwaysFullscreen]
+        );
+        assert_eq!(WindowMode::default(), RememberLast);
+        assert_eq!(
+            all.map(WindowMode::label),
+            ["Remember last", "Always fullscreen", "Always windowed"]
+        );
+        for mode in all {
+            assert_eq!(WindowMode::from_id(mode.id()), Some(mode));
+        }
+        assert_eq!(WindowMode::from_id("kiosk"), None);
+    }
 
     #[test]
     fn an_entry_used_every_frame_is_never_evicted() {

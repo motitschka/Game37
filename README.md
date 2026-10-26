@@ -14,8 +14,8 @@ a single console-style menu, with a controller or with mouse and keyboard.
 
 ## Status
 
-Game37 is in development. The library, both ways of playing, Artwork, the Details Page and the Options
-Menu work today. Settings, search and First-run Setup are still to come.
+Game37 v1 is complete: First-run Setup, the library, both ways of playing, Artwork, the Details Page,
+the Options Menu, Settings and search all work today.
 
 | Milestone | What it brings | State |
 |---|---|---|
@@ -24,7 +24,7 @@ Menu work today. Settings, search and First-run Setup are still to come.
 | M3 Embedded player | libretro Cores, Pause Menu, Save States, In-game Saves | Done |
 | M4 OpenGL rendering | N64, DS, PS1 and PSP inside Game37 | Done |
 | M5 Artwork, Details Page, Options Menu | SteamGridDB covers, per-Game page and actions | Done |
-| M6 Settings, search, First-run Setup | Everything a new player needs, without editing files | Planned |
+| M6 Settings, search, First-run Setup | Everything a new player needs, without editing files | Done |
 | M7 Speedrun timer | Your own Splits per Game, LiveSplit-compatible | Planned |
 
 Details are in [docs/milestones.md](docs/milestones.md), and the current state in
@@ -85,14 +85,23 @@ Systems played with a Core are **Embedded Systems**; the others are **External S
 
 - Linux on x86_64. Game37 is developed on Arch Linux with GNOME on Wayland; other platforms aren't
   supported.
-- To build: Rust 1.88 or newer, a C compiler, SDL3 and SDL3_ttf.
-- At runtime: OpenGL, fontconfig and the Adwaita Sans font (GNOME's interface font; fontconfig picks a
-  fallback if it's missing), Flatpak for the External Systems, and XWayland or an X session for PSP.
+- To build: the Rust toolchain (1.88 or newer), a C compiler (`build.rs` compiles a small C file), and
+  the SDL3 and SDL3_ttf development packages for your distribution.
+- At runtime: OpenGL, `fc-match` (from fontconfig) to find the Adwaita Sans font (GNOME's interface
+  font; fontconfig picks a fallback if it's missing, and Game37 won't start if `fc-match` itself isn't
+  on your `PATH`), Flatpak with the Flathub remote enabled for the External Systems' Standalone
+  Emulators, and XWayland or an X session for PSP.
 
 On Arch Linux:
 
 ```bash
 sudo pacman -S --needed rust base-devel sdl3 sdl3_ttf fontconfig adwaita-fonts flatpak
+```
+
+If Flathub isn't set up yet, add it once:
+
+```bash
+flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 ```
 
 ## Build and run
@@ -108,44 +117,54 @@ Game37 isn't packaged; you run it from the build. F11 switches between window an
 
 ## Setting up
 
-First-run Setup arrives in M6. Until then, set Game37 up by hand.
+Without `~/.config/game37/config.toml`, Game37 opens First-run Setup, which walks through everything a
+new player needs:
 
-**1. Write the Config.** Without `~/.config/game37/config.toml`, Game37 only shows a message asking for
-it. Copy the example; its one setting is the Games Root, which defaults to `~/Games`:
+1. **Pick your Systems:** tick every System you want to play.
+2. **Install the emulators:** for each ticked External System, its Standalone Emulator and whether it's
+   already installed, and one `flatpak install flathub …` command for the ones that aren't, with a Copy
+   button. Passed over if you ticked only Embedded Systems.
+3. **Make your folders:** the Games Root, defaulting to `~/Games` (Change lets you pick another), and
+   one folder per ticked System plus `bios/`, which this step creates.
+4. **Download the Cores** for the Embedded Systems you ticked, from the libretro buildbot.
+5. **Optionally add a SteamGridDB API key** for covers and hero images; Ctrl+V pastes it.
+
+Finish writes the Config and opens Home. Nothing before Finish writes it, so quitting Setup early
+brings it back next time.
+
+After Setup, or once it's done:
+
+- **Add your games.** Put each game in its System's folder, using the file types from the
+  [Systems](#systems) table:
+  - Subfolders are fine: `ps1/Final Fantasy VII/…` is found too.
+  - A multi-disc PS1 game appears once if you add an `.m3u` playlist that lists its discs.
+  - Games copied in while Game37 runs appear without a restart.
+- **The PS1 BIOS.** Put one of `scph5500.bin`, `scph5501.bin`, `scph5502.bin`, `scph5503.bin`,
+  `scph7003.bin` or `scph5552.bin` in the Games Root's `bios/` folder. Game37 tells you which file is
+  missing if there is none, in Settings → BIOS too. No other Embedded System needs a BIOS.
+- **Emulators that need files from your own console**, set up inside the emulator itself rather than in
+  the Games Root: Switch keys for Ryubing, the PS3 firmware for RPCS3, and the PS4 modules for shadPS4.
+
+The Cores need no further setup beyond Setup's download step: a Core not yet downloaded still downloads
+automatically the first time you play its System, with a progress screen.
+
+### Setting up by hand
+
+If you'd rather not go through First-run Setup, write the Config yourself before first starting Game37.
+Copy the example; its one setting is the Games Root, which defaults to `~/Games`:
 
 ```bash
 mkdir -p ~/.config/game37 && cp config.example.toml ~/.config/game37/config.toml
 ```
 
-**2. Make the System folders** in the Games Root:
+Then make the System folders in the Games Root yourself, the same ones Setup's "Make your folders" step
+would:
 
 ```bash
 mkdir -p ~/Games/{nes,gb,snes,n64,gbc,gba,gc,nds,wii,3ds,wiiu,switch,ps1,ps2,psp,ps3,ps4,bios}
 ```
 
-**3. Add your games.** Put each game in its System's folder, using the file types from the
-[Systems](#systems) table:
-
-- Subfolders are fine: `ps1/Final Fantasy VII/…` is found too.
-- A multi-disc PS1 game appears once if you add an `.m3u` playlist that lists its discs.
-- Games copied in while Game37 runs appear without a restart.
-
-**4. Add a PS1 BIOS** if you play PlayStation games. Put one of `scph5500.bin`, `scph5501.bin`,
-`scph5502.bin`, `scph5503.bin`, `scph7003.bin` or `scph5552.bin` in `~/Games/bios/`. Game37 tells you
-which file is missing if there is none. No other Embedded System needs a BIOS.
-
-**5. Install the emulators** for the External Systems you want, from Flathub:
-
-```bash
-flatpak install flathub org.DolphinEmu.dolphin-emu info.cemu.Cemu org.azahar_emu.Azahar io.github.ryubing.Ryujinx net.pcsx2.PCSX2 net.rpcs3.RPCS3 net.shadps4.shadPS4
-```
-
-Dolphin covers both GameCube and Wii. Some emulators need files from your own console, set up inside
-the emulator itself rather than in `~/Games`: Switch keys for Ryubing, the PS3 firmware for RPCS3, and
-the PS4 modules for shadPS4.
-
-**6. Optional: add a SteamGridDB API key** for covers and hero images. Get a free key from your
-SteamGridDB profile under Preferences → API, then save it where only you can read it:
+To add a SteamGridDB API key without using Settings → Artwork, save it where only you can read it:
 
 ```bash
 install -m 600 /dev/null ~/.config/game37/secrets.toml
@@ -157,14 +176,36 @@ and put this line in that file:
 steamgriddb_api_key = "your-key-here"
 ```
 
-Game37 reads the key when it starts. Settings will let you enter it from inside Game37 in M6.
+Game37 reads the key when it starts; Settings → Artwork is the place to enter or remove it afterwards,
+without a restart.
 
-The Cores need no setup. Each one downloads from the libretro build server the first time you play its
-System, with a progress screen.
+## Settings
+
+Open Settings with Start on a controller, Ctrl+, on the keyboard, or the gear in the top bar. It has
+seven sections, down the left:
+
+- **Library:** the Games Root location (Change it), Rescan library, Hidden games (bring one back), and
+  Reset Playtime and stats.
+- **Artwork:** the SteamGridDB API key, entered or removed; covers and hero images start loading
+  without a restart.
+- **BIOS:** every System's BIOS status, in System Order.
+- **Cores:** Update all, or redownload a single one.
+- **Controls:** Menu button style (Nintendo, where the right face button confirms; or Xbox or
+  PlayStation, where the bottom face button confirms) and Controller test, which exits by holding B.
+- **Display:** Startup window mode (Remember last, Always fullscreen or Always windowed), which applies
+  the next time Game37 starts.
+- **About:** the version, the licence and the paths Game37 uses.
+
+## Search
+
+Ctrl+F on the keyboard, L3 on a controller, or the search pill in the top bar opens Search. Results
+filter live by Display Title across every System, ignoring case and accents. With a controller, you
+type on the on-screen keyboard. Hidden Games never show in Search.
 
 ## Controls
 
-Menus use Nintendo-style buttons: the right face button confirms and the bottom one goes back.
+Menus use Nintendo-style buttons by default: the right face button confirms and the bottom one goes
+back; Settings → Controls → Menu button style switches to Xbox or PlayStation layout instead.
 
 | In menus | Controller | Keyboard | Mouse |
 |---|---|---|---|
@@ -174,6 +215,9 @@ Menus use Nintendo-style buttons: the right face button confirms and the bottom 
 | Switch between Home and the Carousel | L1 / R1 | Q / E or Tab | Click a tab |
 | Open a Game's Options Menu | Left face button (Y) | F | Right-click |
 | Change the sort order on a Console Page | Top face button (X) | S | |
+| Search | L3 | Ctrl+F | Click the search pill |
+| Settings | Start | Ctrl+, | Click the gear |
+| Paste, in a text field | | Ctrl+V | |
 | Fullscreen | | F11 | |
 
 In an embedded game, buttons map by position to the original console's controller. Controllers become
@@ -208,9 +252,14 @@ players 1 to 4 in the order they connect. Without a controller, the keyboard pla
 | `~/.local/share/game37/library.db` | The library: Playtime, last played, date added, Favorites, renames, hidden Games, chosen Artwork, sort order |
 | `~/.local/share/game37/artwork/` | Cached covers and hero images |
 
+`secrets.toml` only exists once you've added a SteamGridDB API key, from Setup, Settings → Artwork, or
+by hand; it sits next to the Config and is kept at mode 600. The menu settings you change in Settings →
+Controls and Settings → Display (the button style and the window mode) live in `library.db`, not in the
+Config.
+
 All your progress lives in the Games Root, so copying `~/Games` backs up games, saves and states in one
 go. Cores and cached Artwork download again if deleted, but back up `library.db` too if you want to keep
-your Playtime, Favorites and renames.
+your Playtime, Favorites, renames and these settings.
 
 ## Privacy
 
@@ -226,8 +275,7 @@ a second at most.
 - Azahar, Ryubing and shadPS4 stay open in their own game list when a game stops, so Playtime keeps
   counting until you close the emulator's window.
 - Two Games in the same folder with the same name but different extensions share their save files.
-- Hidden Games can only be brought back from Settings, which arrives in M6. Hiding a Game also removes it
-  from Favorites.
+- Hiding a Game also removes it from Favorites.
 - When SteamGridDB has no Artwork for a Game, Game37 remembers that and doesn't ask again unless you
   rename the Game.
 

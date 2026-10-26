@@ -1,11 +1,11 @@
-//! The chrome every screen shares, after `background`, `glyph`, `hintbar`, `logo` and `topbar` in
-//! `design/generate_mockups.py`.
+//! The chrome every screen shares, after `background`, `glyph`, `hintbar`, `logo`, `gear_button`
+//! and `topbar` in `design/generate_mockups.py`.
 
 use super::gfx::{Align, Gfx, TextStyle};
 use super::input::{Action, ButtonStyle, InputKind, glyph_label};
 use super::nav::Hint;
 use super::text::Weight;
-use super::theme::{ACCENT, BG, Colour, LINE, MUTED, SURFACE2, TEXT};
+use super::theme::{ACCENT, BG, Colour, LINE, MUTED, SURFACE, SURFACE2, TEXT};
 use super::{H, M, Rect, W};
 
 pub fn background(gfx: &mut Gfx<'_>) {
@@ -22,9 +22,52 @@ pub fn background_tinted(gfx: &mut Gfx<'_>, colour: Colour, opacity: f32) {
 const GLYPH_LABEL: TextStyle = TextStyle::new(14, Weight::Bold, TEXT);
 const GLYPH_LETTER: TextStyle = TextStyle::new(16, Weight::Bold, TEXT);
 
-/// Face-button letters are drawn round, everything else as a key cap.
+/// Face-button letters and symbols, and Xbox's menu button, are drawn round, everything else as a
+/// key cap.
 pub fn is_round(label: &str) -> bool {
-    matches!(label, "A" | "B" | "X" | "Y")
+    matches!(label, "A" | "B" | "X" | "Y") || is_symbol(label)
+}
+
+/// The labels [`symbol`] draws as shapes: Adwaita Sans has no ✕ or ≡, and its ○ □ △ don't match
+/// them.
+pub fn is_symbol(label: &str) -> bool {
+    matches!(label, "✕" | "○" | "□" | "△" | "≡")
+}
+
+/// Draws a PlayStation face-button symbol or Xbox's menu button ≡ in `ink`, about `size` across and
+/// centred on (`cx`, `cy`), over a button filled with `fill`. Draws nothing for other labels.
+pub fn symbol(gfx: &mut Gfx<'_>, cx: f32, cy: f32, size: f32, label: &str, ink: Colour, fill: Colour) {
+    let stroke = size * 0.18;
+    let h = size / 2.0;
+    match label {
+        "✕" => {
+            let d = h * 0.8;
+            gfx.line(cx - d, cy - d, cx + d, cy + d, stroke, ink);
+            gfx.line(cx - d, cy + d, cx + d, cy - d, stroke, ink);
+        }
+        "○" => gfx.stroke_circle(cx, cy, h * 0.9, stroke, ink),
+        "□" => {
+            let d = h * 0.8;
+            gfx.stroke_round_rect(Rect::new(cx - d, cy - d, 2.0 * d, 2.0 * d), 1.0, stroke, ink);
+        }
+        "△" => {
+            // An outline as a filled triangle with the button's fill inset by the stroke; centred
+            // by its height, so the centroid sits a quarter of the circumradius below the centre.
+            let r = h * 1.05;
+            let tri = |r: f32| {
+                let (cy, sin, cos) = (cy + h * 1.05 / 4.0, 0.866 * r, 0.5 * r);
+                [(cx, cy - r), (cx + sin, cy + cos), (cx - sin, cy + cos)]
+            };
+            gfx.fill_polygon(&tri(r), ink);
+            gfx.fill_polygon(&tri(r - 2.0 * stroke), fill);
+        }
+        "≡" => {
+            for dy in [-0.6 * h, 0.0, 0.6 * h] {
+                gfx.line(cx - h * 0.8, cy + dy, cx + h * 0.8, cy + dy, stroke, ink);
+            }
+        }
+        _ => {}
+    }
 }
 
 pub fn glyph_width(gfx: &mut Gfx<'_>, label: &str) -> f32 {
@@ -40,7 +83,11 @@ pub fn glyph(gfx: &mut Gfx<'_>, x: f32, cy: f32, label: &str) -> f32 {
     if is_round(label) {
         gfx.fill_circle(x + 16.0, cy, 16.0, SURFACE2);
         gfx.stroke_circle(x + 16.0, cy, 16.0, 2.0, TEXT);
-        gfx.text(x + 16.0, cy + 6.0, label, GLYPH_LETTER, Align::Centre);
+        if is_symbol(label) {
+            symbol(gfx, x + 16.0, cy, 13.0, label, TEXT, SURFACE2);
+        } else {
+            gfx.text(x + 16.0, cy + 6.0, label, GLYPH_LETTER, Align::Centre);
+        }
         return 32.0;
     }
     let w = glyph_width(gfx, label);
@@ -113,7 +160,13 @@ pub struct TopBar<'a> {
     pub tabs: Option<(&'a [&'a str], usize)>,
     /// Title of the screen Back returns to, for the "‹ title" affordance.
     pub back: Option<&'a str>,
-    pub clock: &'a str,
+    /// The time, when the clock shows.
+    pub clock: Option<&'a str>,
+    /// Whether the search pill shows: only with a library, and not under the Search screen, which
+    /// draws its own field there.
+    pub search: bool,
+    /// Whether the Settings gear shows: only with a library.
+    pub settings: bool,
     pub kind: InputKind,
     pub style: ButtonStyle,
     pub pointer: Option<(f32, f32)>,
@@ -123,6 +176,8 @@ pub struct TopBar<'a> {
 pub struct TopBarHits {
     pub tabs: Vec<(Rect, usize)>,
     pub back: Option<Rect>,
+    pub search: Option<Rect>,
+    pub settings: Option<Rect>,
 }
 
 /// Horizontal distance between neighbouring tab label centres.
@@ -184,12 +239,70 @@ pub fn topbar(gfx: &mut Gfx<'_>, bar: &TopBar<'_>) -> TopBarHits {
         }
     }
 
-    gfx.text(
-        W - M,
-        76.0,
-        bar.clock,
-        TextStyle::new(24, Weight::SemiBold, TEXT),
-        Align::Right,
-    );
-    TopBarHits { tabs, back }
+    let search = bar.search.then(|| {
+        let pill = Rect::new(W - M - 504.0, 44.0, 330.0, 48.0);
+        search_pill(gfx, pill, bar, hovered(pill));
+        pill
+    });
+    let settings = bar.settings.then(|| {
+        let (cx, cy) = (W - M - 134.0, 68.0);
+        let button = Rect::new(cx - 24.0, cy - 24.0, 48.0, 48.0);
+        gear_button(gfx, cx, cy, hovered(button));
+        button
+    });
+
+    if let Some(clock) = bar.clock {
+        let style = TextStyle::new(24, Weight::SemiBold, TEXT);
+        gfx.text(W - M, 76.0, clock, style, Align::Right);
+    }
+    TopBarHits {
+        tabs,
+        back,
+        search,
+        settings,
+    }
+}
+
+/// The top bar's "Search games" pill, with both its keyboard and controller glyphs.
+fn search_pill(gfx: &mut Gfx<'_>, pill: Rect, bar: &TopBar<'_>, hover: bool) {
+    let sx = pill.x;
+    gfx.fill_round_rect(pill, 24.0, SURFACE);
+    gfx.stroke_round_rect(pill, 24.0, 1.0, LINE);
+    gfx.stroke_circle(sx + 30.0, 66.0, 8.0, 2.5, MUTED);
+    gfx.line(sx + 36.0, 72.0, sx + 42.0, 78.0, 2.5, MUTED);
+    // Round caps, as in the mockup.
+    gfx.fill_circle(sx + 36.0, 72.0, 1.25, MUTED);
+    gfx.fill_circle(sx + 42.0, 78.0, 1.25, MUTED);
+    let colour = if hover { TEXT } else { MUTED };
+    let label = TextStyle::new(18, Weight::Regular, colour);
+    gfx.text(sx + 52.0, 74.0, "Search games", label, Align::Left);
+    let pad = glyph_label(Action::Search, InputKind::Controller, bar.style);
+    let keys = glyph_label(Action::Search, InputKind::Keyboard, bar.style);
+    let pad_x = pill.x + pill.w - 14.0 - glyph_width(gfx, pad);
+    glyph(gfx, pad_x, 68.0, pad);
+    let keys_x = pad_x - 8.0 - glyph_width(gfx, keys);
+    glyph(gfx, keys_x, 68.0, keys);
+}
+
+/// The top bar's Settings button: a 48 px circle with the gear in it.
+fn gear_button(gfx: &mut Gfx<'_>, cx: f32, cy: f32, hover: bool) {
+    gfx.fill_circle(cx, cy, 24.0, SURFACE);
+    gfx.stroke_circle(cx, cy, 24.0, 1.0, LINE);
+    gear(gfx, cx, cy, 13.0, if hover { TEXT } else { MUTED }, SURFACE);
+}
+
+/// A Settings gear of outer radius `r`: eight teeth round a ring, its hole filled with `hole`.
+fn gear(gfx: &mut Gfx<'_>, cx: f32, cy: f32, r: f32, fill: Colour, hole: Colour) {
+    use std::f32::consts::TAU;
+    // The outline isn't convex, but every point of it sees the centre: fan out from there.
+    let mut points = vec![(cx, cy)];
+    for k in 0..8 {
+        let a = TAU * k as f32 / 8.0;
+        for (da, rr) in [(-0.27, r * 0.74), (-0.16, r), (0.16, r), (0.27, r * 0.74)] {
+            points.push((cx + rr * (a + da).cos(), cy + rr * (a + da).sin()));
+        }
+    }
+    points.push(points[1]);
+    gfx.fill_polygon(&points, fill);
+    gfx.fill_circle(cx, cy, r * 0.36, hole);
 }

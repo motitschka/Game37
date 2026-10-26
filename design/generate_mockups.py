@@ -3,6 +3,7 @@
 
 Cover art is placeholder gradients: real art comes from SteamGridDB at runtime.
 """
+import math
 import textwrap
 from html import escape
 from pathlib import Path
@@ -26,6 +27,7 @@ C = {
     "ahead": "#3DDC84",  # Split delta: ahead of the comparison
     "behind": "#FF5C6C",  # Split delta: behind the comparison
     "best": "#FFD23F",  # Split delta: new Best Segment
+    "danger": "#FF8F98",  # a destructive Settings row: softer than `behind`, so it reads as care, not alarm
 }
 
 PALETTE = [
@@ -179,6 +181,22 @@ def logo(sv, x=M, y=72):
            f' letter-spacing="1">GAME<tspan fill="{C["accent"]}">37</tspan></text>')
 
 
+def gear(sv, cx, cy, r, fill, hole):
+    """A Settings gear of outer radius r: eight teeth round a ring, its hole filled with `hole`."""
+    pts = []
+    for k in range(8):
+        a = 2 * math.pi * k / 8
+        for da, rr in [(-0.27, r * 0.74), (-0.16, r), (0.16, r), (0.27, r * 0.74)]:
+            pts.append(f"{cx + rr * math.cos(a + da):.1f},{cy + rr * math.sin(a + da):.1f}")
+    sv.add(f'<polygon points="{" ".join(pts)}" fill="{fill}"/>', circle(cx, cy, r * 0.36, hole))
+
+
+def gear_button(sv, cx, cy):
+    """The top bar's Settings button: a 48 px circle with the gear in it."""
+    sv.add(circle(cx, cy, 24, C["surface"], stroke=C["line"], sw=1))
+    gear(sv, cx, cy, 13, C["muted"], C["surface"])
+
+
 def topbar(sv, active=None, crumb=None):
     logo(sv)
     if crumb:
@@ -192,8 +210,13 @@ def topbar(sv, active=None, crumb=None):
             sv.add(text(x, 70, label, 24, 700 if on else 500, fill=C["text"] if on else C["muted"], anchor="middle"))
             if on:
                 sv.add(rect(x - tw(label, 24, 700) / 2, 86, tw(label, 24, 700), 4, C["accent"], rx=2))
-    # search pill + clock
-    sx = W - M - 110 - 330
+    search_and_gear(sv)
+    sv.add(text(W - M, 76, "21:42", 24, 600, anchor="end"))
+
+
+def search_and_gear(sv):
+    """The top bar's search pill and Settings gear, left of the clock; every screen with chrome has them."""
+    sx = W - M - 504
     sv.add(rect(sx, 44, 330, 48, C["surface"], rx=24, stroke=C["line"], sw=1),
            circle(sx + 30, 66, 8, "none", stroke=C["muted"], sw=2.5),
            f'<line x1="{sx + 36}" y1="{72}" x2="{sx + 42}" y2="{78}" stroke="{C["muted"]}" stroke-width="2.5"'
@@ -202,7 +225,7 @@ def topbar(sv, active=None, crumb=None):
     l3_x = sx + 330 - 14 - 40
     glyph(sv, l3_x, 68, "L3")
     glyph(sv, l3_x - 8 - (tw("Ctrl F", 14, 700) + 18), 68, "Ctrl F")
-    sv.add(text(W - M, 76, "21:42", 24, 600, anchor="end"))
+    gear_button(sv, W - M - 134, 68)
 
 
 def cover(sv, x, y, w, h, g, focused=False, show_sys=True):
@@ -338,6 +361,9 @@ def console_card(sv, cx, cy, size, sysid, opacity=1.0):
 
 
 WARN = "#FFB020"
+# The Standalone Emulator of each External System; every other System is Embedded.
+EMULATORS = {"gc": "Dolphin", "wii": "Dolphin", "3ds": "Azahar", "wiiu": "Cemu", "switch": "Ryubing",
+             "ps2": "PCSX2", "ps3": "RPCS3", "ps4": "shadPS4"}
 
 
 def screen_carousel(focus="3ds", missing={"wiiu": "Cemu"}, games=12):
@@ -358,8 +384,7 @@ def screen_carousel(focus="3ds", missing={"wiiu": "Cemu"}, games=12):
                    text(cx, 450 + size / 2 + 40, f"{missing[sysid]} not installed", 18, 600, fill=WARN, anchor="middle"))
     sv.add(rect(705, 195, 510, 510, "none", rx=46, stroke="#FFFFFF", sw=4))
     console_card(sv, 960, 450, 500, focus)
-    emulator = {"3ds": "Azahar", "gc": "Dolphin", "wii": "Dolphin", "wiiu": "Cemu", "switch": "Ryubing",
-                "ps2": "PCSX2", "ps3": "RPCS3", "ps4": "shadPS4"}.get(focus, "Game37")
+    emulator = EMULATORS.get(focus, "Game37")
     sv.add(text(960, 790, f"{games} games  ·  Plays in {emulator}", 26, 600, fill=C["muted"], anchor="middle"))
     n = len(SYSTEMS)
     for i in range(n):
@@ -462,6 +487,7 @@ def details_page(name, title, g, sysid, emulator, stats, path, favorite=False, m
     logo(sv)
     sv.add(text(M + 150, 70, f"{SYS[sysid][1]}   ›   {g['title']}", 20, 500, fill=C["muted"]),
            text(W - M, 76, "21:42", 24, 600, anchor="end"))
+    search_and_gear(sv)
     cover(sv, M, 176, 380, 570, g, show_sys=False)
     x = 560
     label = SHORT[sysid]
@@ -663,6 +689,7 @@ def speedrun_header(sv, crumb, eyebrow, title, sub):
     background(sv, glow=SYS["snes"][3], glow_opacity=0.35)
     logo(sv)
     sv.add(text(M + 150, 70, crumb, 20, 500, fill=C["muted"]), text(W - M, 76, "21:42", 24, 600, anchor="end"))
+    search_and_gear(sv)
     cover(sv, M, 136, 92, 138, SMW, show_sys=False)
     x = M + 124
     sv.add(text(x, 168, eyebrow, 15, 700, fill=C["accent"], ls=3), text(x - 2, 224, title, 48, 800),
@@ -895,10 +922,624 @@ def screen_timer_window():
     sv.save()
 
 
+# ---------- Settings (M6) ----------
+
+SECTIONS = ["Library", "Artwork", "BIOS", "Cores", "Controls", "Display", "About"]
+RX = M + 448  # left edge of the rows column
+RW = W - M - RX
+TOP = 240  # first section and first row
+
+
+def settings_page(sv, section, section_focused=False):
+    """Settings with `section` open and the focus in its rows: the section stays marked in accent.
+    With `section_focused`, the focus is on the section itself, drawn as the Options Menu draws it."""
+    background(sv)
+    topbar(sv, crumb="Home")
+    sv.add(text(M, 196, "Settings", 48, 800))
+    for i, name in enumerate(SECTIONS):
+        y = TOP + i * 76
+        on = name == section
+        if on and section_focused:
+            sv.add(rect(M - 24, y, 360, 64, C["surface2"], rx=14), rect(M - 24, y + 12, 5, 40, C["accent"], rx=2))
+            sv.add(text(M, y + 41, name, 24, 700))
+            continue
+        if on:
+            sv.add(rect(M - 24, y, 360, 64, C["surface"], rx=14))
+        sv.add(text(M, y + 41, name, 24, 700 if on else 500, fill=C["accent"] if on else C["muted"]))
+    sv.add(rect(M + 400, TOP, 1, 740, C["line"]))
+
+
+def settings_row(sv, y, h, label, value=None, sub=None, focused=False, more=False, fill=None, mono=False):
+    """A Settings row card; returns the x its right-aligned value ends at."""
+    if focused:
+        sv.add(rect(RX, y, RW, h, C["surface2"], rx=14), rect(RX, y + h / 2 - 20, 5, 40, C["accent"], rx=2))
+    else:
+        sv.add(rect(RX, y, RW, h, C["surface"], rx=14, opacity=0.6))
+    base = y + h / 2 + (8 if sub is None else -6)
+    sv.add(text(RX + 32, base, label, 22, 700 if focused else 600, fill=fill))
+    if sub:
+        sv.add(text(RX + 32, base + 30, sub, 16, 500, fill=C["muted"]))
+    r = RX + RW - 32
+    if more:
+        sv.add(text(r, y + h / 2 + 9, "›", 26, 600, fill=C["muted"], anchor="end"))
+        r -= 36
+    if value:
+        sv.add(text(r, y + h / 2 + 7, value, 18, 500, fill=C["muted"], anchor="end", font=MONO if mono else FONT))
+    return r
+
+
+def screen_settings_library():
+    sv = Svg("17-settings-library", "Settings: Library")
+    settings_page(sv, "Library")
+    rows = [("Games Root location", "~/Games", True), ("Rescan library", "23 Games", False),
+            ("Hidden games", "2 hidden", False)]
+    for i, (label, value, mono) in enumerate(rows):
+        settings_row(sv, TOP + i * 88, 76, label, value, focused=label == "Hidden games",
+                     more=label == "Hidden games", mono=mono)
+    settings_row(sv, TOP + 3 * 88 + 24, 92, "Reset Playtime and stats",
+                 sub="Clears Playtime and last played for every Game. Favorites and saves stay.", fill=C["danger"])
+    hintbar(sv, [(["A"], "Open"), (["B"], "Back")])
+    sv.save()
+
+
+def screen_settings_bios():
+    sv = Svg("18-settings-bios", "Settings: BIOS")
+    settings_page(sv, "BIOS")
+    pitch, top, status_x = 41, TOP + 28, RX + 320
+    sv.add(text(RX + 32, TOP + 13, "SYSTEM", 13, 700, fill=C["muted"], ls=1.5),
+           text(status_x, TOP + 13, "BIOS", 13, 700, fill=C["muted"], ls=1.5))
+    for i, (sysid, name, _, _) in enumerate(SYSTEMS):
+        y = top + i * pitch
+        focused = sysid == "ps1"
+        if focused:
+            sv.add(rect(RX, y, RW, pitch, C["surface2"], rx=10), rect(RX, y + pitch / 2 - 13, 5, 26, C["accent"], rx=2))
+        elif i:
+            sv.add(rect(RX + 16, y, RW - 32, 1, C["line"]))
+        base = y + pitch / 2 + 7
+        sv.add(text(RX + 32, base, name, 19, 700 if focused else 500))
+        if sysid == "ps1":
+            sv.add(circle(status_x + 11, base - 6, 11, WARN),
+                   text(status_x + 11, base - 1, "!", 15, 800, fill=C["bg"], anchor="middle"),
+                   text(status_x + 32, base, "Missing: put scph5500.bin, scph5501.bin or scph5502.bin in "
+                                          "~/Games/bios/", 18, 500, fill=WARN))
+        elif sysid in EMULATORS:
+            sv.add(text(status_x, base, f"Handled by {EMULATORS[sysid]}", 18, 500, fill=C["muted"]))
+        else:
+            sv.add(text(status_x, base, "No BIOS needed", 18, 500, fill=C["muted"]))
+    hintbar(sv, [(["B"], "Back")])
+    sv.save()
+
+
+# Each Embedded System's Core, by the System Order of its first System, with its state in the mockup.
+CORES = [("Mesen", ["nes"], "Installed"), ("SameBoy", ["gb", "gbc"], "Installed"), ("bsnes", ["snes"], "Installed"),
+         ("Mupen64Plus-Next", ["n64"], 45), ("mGBA", ["gba"], "Installed"),
+         ("melonDS DS", ["nds"], "Not downloaded"), ("Beetle PSX HW", ["ps1"], "Failed"),
+         ("PPSSPP", ["psp"], "Not downloaded")]
+
+
+def screen_settings_cores():
+    sv = Svg("19-settings-cores", "Settings: Cores")
+    settings_page(sv, "Cores")
+    installed = sum(state == "Installed" for _, _, state in CORES)
+    settings_row(sv, TOP, 64, "Update all", f"Redownloads the {installed} installed Cores")
+    for i, (name, systems, state) in enumerate(CORES):
+        y, h = TOP + 78 + i * 78, 70
+        r = settings_row(sv, y, h, name, sub=", ".join(SYS[k][1] for k in systems), focused=state == "Failed")
+        base = y + h / 2 + 7
+        if state == "Failed":
+            sv.add(text(r, base, "Download failed · Retry", 18, 600, fill=WARN, anchor="end"))
+        elif isinstance(state, int):
+            bw = 240
+            sv.add(rect(r - bw, y + h / 2 - 4, bw, 8, C["line"], rx=4),
+                   rect(r - bw, y + h / 2 - 4, bw * state / 100, 8, C["accent"], rx=4),
+                   text(r - bw - 20, base, f"Downloading {state}%", 18, 500, fill=C["text"], anchor="end"))
+        else:
+            sv.add(text(r, base, state, 18, 500, fill=C["muted"] if state == "Installed" else C["dim"],
+                        anchor="end"))
+    hintbar(sv, [(["A"], "Download"), (["B"], "Back")])
+    sv.save()
+
+
+# ---------- Settings: key entry, Controls, Controller test, About (M6) ----------
+
+KEY_X, KEY_Y, KEY_W, KEY_H = 340, 120, 1240, 768  # the key entry card, as the rename card in options.rs
+
+
+def screen_settings_api_key():
+    sv = Svg("20-settings-api-key", "Settings: SteamGridDB API key")
+    settings_page(sv, "Artwork")
+    settings_row(sv, TOP, 92, "SteamGridDB API key", "Set · ends in 3f9a",
+                 sub="Get a key at steamgriddb.com → Profile → Preferences → API", focused=True)
+    settings_row(sv, TOP + 104, 76, "Remove key", fill=C["danger"])
+    dim(sv, 0.62)
+    sv.add(rect(KEY_X, KEY_Y, KEY_W, KEY_H, C["surface"], rx=20, stroke=C["line"], sw=1))
+    x = KEY_X + (KEY_W - OSK_W) / 2
+    sv.add(text(x, KEY_Y + 72, "SteamGridDB API key", 28, 800))
+    fy = KEY_Y + 136
+    dots, tail = 28, "3f9a"
+    tx = x + 28
+    shown_w = dots * 32 * 0.35 + tw(tail, 32, 600)  # a dot is narrower than tw() assumes
+    sv.add(rect(x, fy, OSK_W, 88, C["surface2"], rx=14, stroke=C["accent"], sw=2),
+           text(tx, fy + 44 + 12, "•" * dots + tail, 32, 600),
+           rect(tx + shown_w + 3, fy + 18, 3, 88 - 36, C["accent"]))
+    sv.add(text(x, KEY_Y + 256, "Saved to ~/.config/game37/secrets.toml on this device only", 16, 500,
+                fill=C["muted"]))
+    osk(sv, x, KEY_Y + KEY_H - 48 - OSK_H, "a")
+    # TextEntry::hints for the controller, then the keyboard's paste
+    hintbar(sv, [(["A"], "Type"), (["Y"], "Backspace"), (["X"], "Space"), (["B"], "Cancel"), (["+"], "Save"),
+                 (["Ctrl V"], "Paste")])
+    sv.save()
+
+
+def pad_button(sv, cx, cy, r, label, lit=False):
+    sv.add(circle(cx, cy, r, C["accent"] if lit else C["surface2"], stroke=C["accent"] if lit else C["line"], sw=2),
+           text(cx, cy + 6, label, 17, 700, fill=C["text"] if lit else C["muted"], anchor="middle"))
+
+
+def pad_stick(sv, cx, cy, x, y, moved=False):
+    """A stick well with its cap pushed to (x, y), each from -1 to 1."""
+    sv.add(circle(cx, cy, 56, C["bg"], stroke=C["line"], sw=2),
+           circle(cx + x * 26, cy + y * 26, 30, C["text"] if moved else C["surface2"],
+                  stroke=C["line"], sw=2, opacity=0.9 if moved else 1))
+
+
+def pad_trigger(sv, x, y, w, label, amount):
+    sv.add(text(x + w / 2, y - 12, label, 16, 700, fill=C["text"] if amount else C["muted"], anchor="middle"),
+           rect(x, y, w, 20, C["surface2"], rx=10, stroke=C["line"], sw=1))
+    if amount:
+        sv.add(rect(x, y, w * amount, 20, C["accent"], rx=10))
+
+
+def pad_shoulder(sv, x, y, w, label, lit=False):
+    sv.add(rect(x, y, w, 40, C["accent"] if lit else C["surface2"], rx=20, stroke=C["accent"] if lit else C["line"],
+                sw=2),
+           text(x + w / 2, y + 27, label, 17, 700, fill=C["text"] if lit else C["muted"], anchor="middle"))
+
+
+def screen_controller_test():
+    sv = Svg("21-controller-test", "Controller test")
+    background(sv)
+    topbar(sv, crumb="Settings")
+    sv.add(text(M, 196, "Controller test", 48, 800))
+    sv.add(text(M, TOP + 28, "Controllers", 20, 700, fill=C["muted"]))
+    for i, name in enumerate(["Xbox Wireless Controller", "8BitDo Pro 2"]):
+        y = TOP + 52 + i * 76
+        if i == 0:
+            sv.add(rect(M - 24, y, 400, 64, C["surface2"], rx=14), rect(M - 24, y + 12, 5, 40, C["accent"], rx=2))
+        sv.add(text(M, y + 40, name, 20, 700 if i == 0 else 500, fill=C["text"] if i == 0 else C["muted"]))
+    sv.add(rect(M + 400, TOP, 1, 740, C["line"]))
+    # the pad: a body and two grips, outlined as one shape (outline pass, then fill pass)
+    cx = (RX + W - M) / 2
+    for fill, extra in [(C["line"], f' stroke="{C["line"]}" stroke-width="4"'), (C["surface"], "")]:
+        for gx, a in [(cx - 290, 20), (cx + 290, -20)]:
+            sv.add(f'<ellipse cx="{gx:.1f}" cy="690" rx="110" ry="160" fill="{fill}"{extra}'
+                   f' transform="rotate({a} {gx:.1f} 690)"/>')
+        sv.add(f'<rect x="{cx - 390:.1f}" y="400" width="780" height="300" rx="150" fill="{fill}"{extra}/>')
+    pad_trigger(sv, cx - 330, 300, 170, "L2", 0)
+    pad_trigger(sv, cx + 160, 300, 170, "R2 60%", 0.6)
+    pad_shoulder(sv, cx - 330, 346, 170, "L1", lit=True)
+    pad_shoulder(sv, cx + 160, 346, 170, "R1")
+    # left stick, pushed up and right
+    pad_stick(sv, cx - 240, 490, 0.62, -0.41, moved=True)
+    sv.add(text(cx - 240, 580, "x 0.62 · y −0.41", 16, 500, fill=C["muted"], anchor="middle", font=MONO))
+    # d-pad
+    dx, dy = cx - 120, 640
+    sv.add(rect(dx - 18, dy - 50, 36, 100, C["surface2"], rx=6, stroke=C["line"], sw=2),
+           rect(dx - 50, dy - 18, 100, 36, C["surface2"], rx=6, stroke=C["line"], sw=2),
+           rect(dx - 16, dy - 16, 32, 32, C["surface2"]))
+    # face buttons, labelled as the menus label them (Nintendo style: A right, B bottom)
+    fx, fy = cx + 240, 490
+    for label, ox, oy in [("X", 0, -50), ("A", 50, 0), ("B", 0, 50), ("Y", -50, 0)]:
+        pad_button(sv, fx + ox, fy + oy, 22, label, lit=label == "A")
+    pad_stick(sv, cx + 120, 640, 0, 0)
+    # Select, Guide, Start
+    sv.add(circle(cx, 450, 26, C["surface2"], stroke=C["line"], sw=2),
+           text(cx, 498, "Guide", 14, 600, fill=C["muted"], anchor="middle"))
+    for label, sx in [("Select", cx - 80), ("Start", cx + 80)]:
+        sv.add(rect(sx - 22, 516, 44, 22, C["surface2"], rx=11, stroke=C["line"], sw=2),
+               text(sx, 560, label, 14, 600, fill=C["muted"], anchor="middle"))
+    sv.add(text(cx, 920, "Menu buttons don't act here.", 20, 500, fill=C["muted"], anchor="middle"))
+    hintbar(sv, [(["B"], "Hold to exit")])
+    sv.save()
+
+
+def screen_settings_controls():
+    sv = Svg("31-settings-controls", "Settings: Controls")
+    settings_page(sv, "Controls")
+    y, h = TOP, 92
+    r = settings_row(sv, y, h, "Menu button style", sub="Right button confirms, bottom button goes back",
+                     focused=True)
+    base = y + h / 2 + 9
+    value = "Nintendo"
+    sv.add(text(r, base, "›", 26, 600, fill=C["accent"], anchor="end"),
+           text(r - 30, base - 2, value, 20, 600, anchor="end"),
+           text(r - 30 - tw(value, 20, 600) - 8, base, "‹", 26, 600, fill=C["accent"], anchor="end"))
+    settings_row(sv, TOP + 104, 76, "Controller test", more=True)
+    hintbar(sv, [(["←", "→"], "Change"), (["B"], "Back")])
+    sv.save()
+
+
+def screen_settings_about():
+    sv = Svg("32-settings-about", "Settings: About")
+    settings_page(sv, "About", section_focused=True)
+    x, vx = RX + 32, RX + 32 + 240
+    sv.add(text(x, TOP + 40, "Game37 0.6.0", 28, 800),
+           text(x, TOP + 80, "Licensed under GPL-3.0", 20, 500, fill=C["muted"]))
+    y = TOP + 168
+    sv.add(text(x, y, "Paths", 22, 700))
+    for i, (label, value) in enumerate([("Config", "~/.config/game37/config.toml"), ("Games Root", "~/Games"),
+                                        ("Data folder", "~/.local/share/game37")]):
+        sv.add(text(x, y + 48 + i * 40, label, 20, 500, fill=C["muted"]),
+               text(vx, y + 48 + i * 40, value, 20, 500, font=MONO))
+    y += 48 + 3 * 40 + 48
+    sv.add(text(x, y, "Credits", 22, 700))
+    for i, line in enumerate(["Cores from the libretro buildbot", "Artwork from SteamGridDB"]):
+        sv.add(text(x, y + 48 + i * 40, line, 20, 500, fill=C["muted"]))
+    hintbar(sv, [(["B"], "Back")])
+    sv.save()
+
+
+# ---------- search (M6) ----------
+
+def search_topbar(sv, query, focused):
+    """The Search screen's top bar: the search pill grown into the field, then the gear and the clock."""
+    logo(sv)
+    sv.add(text(M + 150, 70, "Home", 20, 500, fill=C["muted"]))
+    fx, fy, fw, fh = M + 300, 40, W - M - 174 - (M + 300), 56
+    sv.add(rect(fx, fy, fw, fh, C["surface"], rx=fh / 2, stroke=C["accent"] if focused else C["line"],
+                sw=2 if focused else 1),
+           circle(fx + 32, 66, 9, "none", stroke=C["muted"], sw=2.5),
+           f'<line x1="{fx + 39}" y1="73" x2="{fx + 45}" y2="79" stroke="{C["muted"]}" stroke-width="2.5"'
+           f' stroke-linecap="round"/>')
+    tx = fx + 62
+    if query:
+        sv.add(text(tx, 76, query, 22, 500))
+    if focused:
+        sv.add(rect(tx + tw(query, 22, 500) + 5, fy + 15, 3, fh - 30, C["accent"]))
+    if not query:
+        sv.add(text(tx + 14, 76, "Search games", 22, 400, fill=C["muted"]))
+    gear_button(sv, W - M - 134, 68)
+    sv.add(text(W - M, 76, "21:42", 24, 600, anchor="end"))
+
+
+def search_order(games, query):
+    """Titles starting with the query, then with a word starting with it, then any other match."""
+    q = query.lower()
+
+    def group(g):
+        t = g["title"].lower()
+        return 0 if t.startswith(q) else 1 if any(w.startswith(q) for w in t.split()) else 2
+
+    return sorted((g for g in games if q in g["title"].lower()), key=lambda g: (group(g), g["title"].lower()))
+
+
+SEARCH_QUERY = "mar"
+SEARCH_RESULTS = search_order([
+    game("Mario Kart 8 Deluxe", "switch"), game("Mario Party DS", "nds"), game("Mario Kart: Double Dash!!", "gc"),
+    game("Super Mario World", "snes"), game("Paper Mario", "n64"), game("Super Mario Galaxy", "wii"),
+    game("Nightmare Creatures", "ps1")], SEARCH_QUERY)
+SEARCH_TOTAL = 23  # all Games that aren't hidden
+
+
+def search_results(sv, focus=None):
+    """The count line and the results grid, sized like the Console Page's."""
+    sv.add(text(M, 160, f"{len(SEARCH_RESULTS)} Games", 20, 500, fill=C["muted"]))
+    cols, top, pitch = 8, 196, CH + 72
+    for i, g in enumerate(SEARCH_RESULTS):
+        r, c = divmod(i, cols)
+        x, y = M + c * (CW + GAP), top + r * pitch
+        cover(sv, x, y, CW, CH, g, focused=(i == focus), show_sys=True)
+        if i == focus:
+            sv.add(text(x, y + CH + 40, g["title"], 22, 700),
+                   text(x, y + CH + 68, SYS[g["sys"]][1], 17, 400, fill=C["muted"]))
+
+
+def screen_search():
+    sv = Svg("22-search", "Search")
+    background(sv)
+    search_topbar(sv, SEARCH_QUERY, focused=True)
+    search_results(sv)
+    hintbar(sv, [(["↓"], "Results"), (["Esc"], "Close")])
+    sv.save()
+
+
+# The rename on-screen keyboard (src/ui/text_entry.rs): keys and their widths in half keys, 20 per row.
+OSK_ROWS = [[(k, 2) for k in "1234567890"], [(k, 2) for k in "qwertyuiop"], [(k, 2) for k in "asdfghjkl'"],
+            [("Shift", 3)] + [(k, 2) for k in "zxcvbnm"] + [("Backspace", 3)],
+            [("?123", 4), ("-", 2), ("Space", 8), (":", 2), ("Done", 4)]]
+OSK_HALF, OSK_GAP, OSK_KEY_H = 57, 10, 76
+OSK_W, OSK_H = 20 * OSK_HALF - OSK_GAP, 5 * (OSK_KEY_H + OSK_GAP) - OSK_GAP
+
+
+def osk(sv, x, y, focus):
+    """The on-screen keyboard with its top left at (x, y); `focus` is the focused key's label."""
+    for r, row in enumerate(OSK_ROWS):
+        start = 0
+        for label, halves in row:
+            kx, ky, kw = x + start * OSK_HALF, y + r * (OSK_KEY_H + OSK_GAP), halves * OSK_HALF - OSK_GAP
+            start += halves
+            char = len(label) == 1
+            on = label == focus
+            sv.add(rect(kx, ky, kw, OSK_KEY_H, C["accent"] if on else C["surface2"] if char or label == "Space"
+                        else C["line"], rx=12))
+            ink = C["text"] if on or char else C["muted"]
+            sv.add(text(kx + kw / 2, ky + OSK_KEY_H / 2 + (10 if char else 7), label, 28 if char else 20, 600,
+                        fill=ink, anchor="middle"))
+
+
+def screen_search_controller():
+    sv = Svg("23-search-controller", "Search (on-screen keyboard)")
+    background(sv)
+    search_topbar(sv, SEARCH_QUERY, focused=True)
+    search_results(sv)
+    ty = 1010 - 24 - OSK_H - 24
+    sv.add(rect(0, ty, W, 1010 - ty, C["surface"]), rect(0, ty, W, 1, C["line"]))
+    osk(sv, (W - OSK_W) / 2, ty + 24, "r")
+    hintbar(sv, [(["A"], "Type"), (["Y"], "Backspace"), (["X"], "Space"), (["+"], "Results"), (["B"], "Close")])
+    sv.save()
+
+
+def screen_search_results():
+    sv = Svg("24-search-results", "Search (results)")
+    background(sv)
+    search_topbar(sv, SEARCH_QUERY, focused=False)
+    search_results(sv, focus=1)
+    hintbar(sv, [(["A"], "Details"), (["Y"], "Options"), (["B"], "Close")])
+    sv.save()
+
+
+def screen_search_empty():
+    sv = Svg("25-search-empty", "Search (empty)")
+    background(sv)
+    search_topbar(sv, "", focused=True)
+    sv.add(text(W / 2, 520, f"Type to search {SEARCH_TOTAL} Games", 26, 500, fill=C["muted"], anchor="middle"))
+    hintbar(sv, [(["Esc"], "Close")])
+    sv.save()
+
+# ---------- First-run Setup (M6) ----------
+
+SETUP_STEPS = 5
+SETUP_W = 1200  # width of the lists and boxes below the title, left-aligned at M
+# The Standalone Emulator each External System needs; every other System is Embedded.
+EXTERNAL = {"gc": "Dolphin", "wii": "Dolphin", "3ds": "Azahar", "wiiu": "Cemu", "switch": "Ryubing",
+            "ps2": "PCSX2", "ps3": "RPCS3", "ps4": "shadPS4"}
+SETUP_TICKED = ["nes", "snes", "gba", "gc", "switch", "ps1", "ps2", "psp"]  # in System Order
+
+
+def setup_frame(sv, step, title, explanation):
+    """The header, title and explanation every First-run Setup step shares."""
+    background(sv)
+    logo(sv)
+    sv.add(text(M + 150, 70, f"Setup · step {step} of {SETUP_STEPS}", 20, 500, fill=C["muted"]))
+    seg, gap = 44, 10
+    x = W - M - SETUP_STEPS * seg - (SETUP_STEPS - 1) * gap
+    for i in range(1, SETUP_STEPS + 1):
+        fill = "#FFFFFF" if i == step else C["accent"] if i < step else C["line"]
+        sv.add(rect(x, 60, seg, 8, fill, rx=4))
+        x += seg + gap
+    sv.add(text(M - 2, 200, title, 44, 800), text(M, 244, explanation, 20, 500, fill=C["muted"]))
+
+
+def setup_buttons(sv, buttons, y=906):
+    """Right-aligned pills above the hint bar. buttons: (label, kind), kind in
+    normal / primary / disabled / focused (a focused primary)."""
+    x = W - M
+    for label, kind in reversed(buttons):
+        w = max(160, tw(label, 22, 700) * 1.1 + 72)
+        x -= w
+        if kind == "focused":  # white, as an accent ring would vanish against the accent fill
+            sv.add(rect(x - 6, y - 6, w + 12, 76, "none", rx=38, stroke="#FFFFFF", sw=3))
+        if kind in ("primary", "focused"):
+            sv.add(rect(x, y, w, 64, C["accent"], rx=32), text(x + w / 2, y + 40, label, 22, 800, anchor="middle"))
+        elif kind == "disabled":
+            sv.add(rect(x, y, w, 64, C["accent"], rx=32, opacity=0.25),
+                   text(x + w / 2, y + 40, label, 22, 800, fill=C["dim"], anchor="middle"))
+        else:
+            sv.add(rect(x, y, w, 64, C["surface"], rx=32, stroke=C["line"], sw=2, opacity=0.85),
+                   text(x + w / 2, y + 40, label, 22, 700, anchor="middle"))
+        x -= 16
+
+
+def system_chip(sv, x, y, size, sysid):
+    """A small swatch in the System's colour, styled like a console_card."""
+    color = SYS[sysid][3]
+    sv.add(rect(x, y, size, size, sv.lin([(0, color), (1, C["bg"])], 0, 0, 0.7, 1), rx=size * 0.2),
+           circle(x + size * 0.7, y + size * 0.3, size * 0.26, "#FFFFFF", 0.1))
+
+
+def check_path(x, y, color, sw=3):
+    """A tick mark about 18 x 13, its top-left at (x, y)."""
+    return (f'<path d="M{x},{y + 7} l6,6 l12,-13" fill="none" stroke="{color}" stroke-width="{sw}"'
+            f' stroke-linecap="round" stroke-linejoin="round"/>')
+
+
+def checkbox(sv, x, y, on, size=30):
+    if on:
+        sv.add(rect(x, y, size, size, C["accent"], rx=8), check_path(x + 6, y + 9, "#FFFFFF"))
+    else:
+        sv.add(rect(x, y, size, size, "none", rx=8, stroke=C["muted"], sw=2))
+
+
+def screen_setup_systems():
+    sv = Svg("26-setup-systems", "First-run Setup: Systems")
+    setup_frame(sv, 1, "Pick your Systems",
+                "Tick the Systems you have Games for. You can add folders for others later.")
+    cols, gap, th, top = 6, 24, 148, 296
+    tile_w = (W - 2 * M - (cols - 1) * gap) / cols
+    for i, (sysid, name, _, _) in enumerate(SYSTEMS):
+        r, c = divmod(i, cols)
+        x, y = M + c * (tile_w + gap), top + r * (th + gap)
+        on = sysid in SETUP_TICKED
+        if sysid == "psp":
+            sv.add(rect(x - 6, y - 6, tile_w + 12, th + 12, "none", rx=20, stroke=C["accent"], sw=4))
+        sv.add(rect(x, y, tile_w, th, C["surface2"] if on else C["surface"], rx=14, stroke=C["line"], sw=1))
+        system_chip(sv, x + 20, y + 20, 52, sysid)
+        checkbox(sv, x + tile_w - 50, y + 31, on)
+        sub = f"Needs {EXTERNAL[sysid]}" if sysid in EXTERNAL else "Plays in Game37"
+        sv.add(text(x + 20, y + 106, name, 21, 700), text(x + 20, y + 132, sub, 16, 500, fill=C["muted"]))
+    w = action_pill(sv, M, 906, "Select all", pad="X")
+    sv.add(text(M + w + 24, 945, f"{len(SETUP_TICKED)} Systems selected", 20, 500, fill=C["muted"]))
+    setup_buttons(sv, [("Quit", "normal"), ("Continue", "primary")])
+    hintbar(sv, [(["A"], "Tick"), (["X"], "Select all"), (["+"], "Continue"), (["B"], "Quit")])
+    sv.save()
+
+
+def command_box(sv, x, y, cmd, focus="Copy"):
+    """The copyable command line with Copy and Check again, as on 09-console-page-emulator-missing."""
+    bw = 42 + tw(cmd, 18) / 0.54 * 0.6 * 1.1 + 24  # MONO is 0.6 em a character
+    sv.add(rect(x, y, bw, 48, "#000000", rx=10, opacity=0.4),
+           text(x + 20, y + 31, "$", 18, 600, fill=C["dim"], font=MONO),
+           text(x + 42, y + 31, cmd, 18, 500, font=MONO))
+    bx = x + bw + 20
+    cw = 130
+    if focus == "Copy":
+        sv.add(rect(bx - 5, y - 5, cw + 10, 58, "none", rx=15, stroke=C["accent"], sw=3))
+    sv.add(rect(bx, y, cw, 48, C["surface2"], rx=10),
+           rect(bx + 22, y + 13, 14, 17, "none", rx=3, stroke=C["text"], sw=2),
+           rect(bx + 27, y + 18, 14, 17, C["surface2"], rx=3, stroke=C["text"], sw=2),
+           text(bx + 56, y + 31, "Copy", 18, 600))
+    bx2 = bx + cw + 20
+    sv.add(rect(bx2, y, 168, 48, "none", rx=10, stroke=C["line"], sw=2),
+           f'<path d="M{bx2 + 34},{y + 16} a9,9 0 1,0 3,7" fill="none" stroke="{C["text"]}" stroke-width="2.4"'
+           f' stroke-linecap="round"/>',
+           f'<path d="M{bx2 + 30},{y + 11} l5,5 l-6,3" fill="none" stroke="{C["text"]}" stroke-width="2.4"'
+           f' stroke-linecap="round" stroke-linejoin="round"/>',
+           text(bx2 + 52, y + 31, "Check again", 18, 600))
+
+
+def screen_setup_emulators():
+    sv = Svg("27-setup-emulators", "First-run Setup: emulators")
+    setup_frame(sv, 2, "Install the emulators", "These Systems run in their own emulator, installed with Flatpak.")
+    rows = [("gc", "org.DolphinEmu.dolphin-emu", True), ("switch", "io.github.ryubing.Ryujinx", False),
+            ("ps2", "net.pcsx2.PCSX2", False)]
+    for i, (sysid, app_id, installed) in enumerate(rows):
+        x, y = M, 296 + i * 112
+        sv.add(rect(x, y, SETUP_W, 96, C["surface"], rx=14, stroke=C["line"], sw=1))
+        system_chip(sv, x + 24, y + 22, 52, sysid)
+        sv.add(text(x + 100, y + 44, SYS[sysid][1], 24, 700),
+               text(x + 100, y + 74, EXTERNAL[sysid], 18, 500, fill=C["muted"]),
+               text(x + 440, y + 56, app_id, 18, 500, fill=C["muted"], font=MONO))
+        r = x + SETUP_W - 28
+        if installed:
+            sv.add(text(r, y + 56, "Installed", 20, 600, fill=C["ahead"], anchor="end"),
+                   check_path(r - tw("Installed", 20, 600) * 1.1 - 32, y + 42, C["ahead"]))
+        else:
+            sv.add(text(r, y + 56, "Not installed", 20, 600, fill=WARN, anchor="end"),
+                   circle(r - tw("Not installed", 20, 600) * 1.1 - 18, y + 49, 6, WARN))
+    missing = [app_id for _, app_id, installed in rows if not installed]
+    sv.add(text(M, 676, "INSTALL THE MISSING ONES", 14, 700, fill=C["muted"], ls=1.5))
+    command_box(sv, M, 696, "flatpak install flathub " + " ".join(missing))
+    sv.add(text(M, 800, "You can continue now and install them later. Missing emulators show on the Carousel.",
+                18, 500, fill=C["muted"]))
+    setup_buttons(sv, [("Back", "normal"), ("Continue", "primary")])
+    hintbar(sv, [(["A"], "Copy"), (["Y"], "Check again"), (["+"], "Continue"), (["B"], "Back")])
+    sv.save()
+
+
+def screen_setup_folders():
+    sv = Svg("28-setup-folders", "First-run Setup: folders")
+    setup_frame(sv, 3, "Make your folders", "Game37 finds Games by the folder they're in.")
+    x, y = M, 296
+    sv.add(rect(x, y, SETUP_W, 96, C["surface"], rx=14, stroke=C["line"], sw=1),
+           text(x + 28, y + 36, "GAMES ROOT", 13, 700, fill=C["muted"], ls=1.5),
+           text(x + 28, y + 74, "~/Games", 26, 600, font=MONO))
+    cw = 160
+    sv.add(rect(x + SETUP_W - 24 - cw, y + 18, cw, 60, C["surface2"], rx=30, stroke=C["line"], sw=2),
+           text(x + SETUP_W - 24 - cw / 2, y + 56, "Change", 20, 700, anchor="middle"))
+    folders = [(s, f"~/Games/{s}/", SYS[s][1]) for s in SETUP_TICKED] + [("bios", "~/Games/bios/", "BIOS")]
+    sv.add(text(M, 444, "FOLDERS", 14, 700, fill=C["muted"], ls=1.5),
+           text(M + 120, 444, f"{len(folders)} of {len(folders)} made", 16, 500, fill=C["muted"]))
+    gy = 464
+    sv.add(rect(M, gy, SETUP_W, 3 * 52 + 40, C["surface"], rx=14, stroke=C["line"], sw=1))
+    for i, (_, path, label) in enumerate(folders):
+        c, r = divmod(i, 3)  # down the columns, so System Order reads top to bottom
+        fx, fy = M + 28 + c * 410, gy + 20 + r * 52
+        sv.add(check_path(fx, fy + 18, C["ahead"]),
+               text(fx + 34, fy + 34, path, 20, 500, font=MONO),
+               text(fx + 232, fy + 34, label, 17, 500, fill=C["muted"]))
+    by = 700
+    bw = 280
+    sv.add(rect(M, by, bw, 64, C["surface"], rx=32, stroke=C["line"], sw=2, opacity=0.6),
+           check_path(M + 32, by + 26, C["ahead"]),
+           text(M + 66, by + 40, "Folders created", 22, 700, fill=C["muted"]),
+           text(M + bw + 24, by + 40, "Folders that already exist are left as they are.", 18, 500, fill=C["dim"]))
+    setup_buttons(sv, [("Back", "normal"), ("Continue", "focused")])
+    hintbar(sv, [(["A"], "Choose"), (["+"], "Continue"), (["B"], "Back")])
+    sv.save()
+
+
+def screen_setup_cores():
+    sv = Svg("29-setup-cores", "First-run Setup: Cores")
+    setup_frame(sv, 4, "Download the Cores",
+                "Embedded Systems play inside Game37 with a libretro Core from the libretro buildbot.")
+    rows = [("nes", "Mesen", "installed"), ("snes", "bsnes", "downloaded"), ("gba", "mGBA", 0.45),
+            ("ps1", "Beetle PSX HW", "waiting"), ("psp", "PPSSPP  ·  plus PPSSPP's assets", "waiting")]
+    for i, (sysid, core, state) in enumerate(rows):
+        x, y = M, 296 + i * 96
+        sv.add(rect(x, y, SETUP_W, 84, C["surface"], rx=14, stroke=C["line"], sw=1))
+        system_chip(sv, x + 22, y + 20, 44, sysid)
+        sv.add(text(x + 90, y + 38, SYS[sysid][1], 22, 700), text(x + 90, y + 64, core, 17, 500, fill=C["muted"]))
+        bx, bw, r = x + 520, 440, x + SETUP_W - 28
+        if state != "installed":
+            sv.add(rect(bx, y + 37, bw, 10, C["surface2"], rx=5))
+        if state == "installed":
+            sv.add(text(r, y + 49, "Installed", 19, 600, fill=C["muted"], anchor="end"),
+                   check_path(r - tw("Installed", 19, 600) * 1.1 - 30, y + 35, C["muted"]))
+        elif state == "downloaded":
+            sv.add(rect(bx, y + 37, bw, 10, C["ahead"], rx=5),
+                   text(r, y + 49, "Downloaded", 19, 600, fill=C["ahead"], anchor="end"),
+                   check_path(r - tw("Downloaded", 19, 600) * 1.1 - 30, y + 35, C["ahead"]))
+        elif state == "waiting":
+            sv.add(text(r, y + 49, "Waiting", 19, 600, fill=C["dim"], anchor="end"))
+        else:
+            sv.add(rect(bx, y + 37, bw * state, 10, C["accent"], rx=5),
+                   text(r, y + 49, f"{round(state * 100)}%", 19, 700, anchor="end"))
+    ny = 796
+    sv.add(rect(M, ny, SETUP_W, 64, WARN, rx=14, opacity=0.1),
+           rect(M, ny, SETUP_W, 64, "none", rx=14, stroke=WARN, sw=2, opacity=0.55),
+           circle(M + 34, ny + 32, 15, WARN), text(M + 34, ny + 39, "!", 19, 800, fill=C["bg"], anchor="middle"),
+           text(M + 64, ny + 39, "PlayStation needs a BIOS file: put scph5500.bin, scph5501.bin or scph5502.bin "
+                                 "in ~/Games/bios/.", 19, 500, fill=WARN))
+    setup_buttons(sv, [("Back", "normal"), ("Continue", "disabled")])
+    hintbar(sv, [(["B"], "Back")])
+    sv.save()
+
+
+def screen_setup_key():
+    sv = Svg("30-setup-key", "First-run Setup: SteamGridDB key")
+    setup_frame(sv, 5, "Add a SteamGridDB key (optional)",
+                "With a free SteamGridDB API key, Game37 fetches covers and banners for your Games. "
+                "Without one, Games show their title and System.")
+    sv.add(text(M, 316, "WHERE TO GET ONE", 14, 700, fill=C["muted"], ls=1.5))
+    x = M
+    for i, part in enumerate(["steamgriddb.com", "Profile", "Preferences", "API"]):
+        if i:
+            sv.add(text(x + 18, 367, "→", 22, 600, fill=C["muted"], anchor="middle"))
+            x += 36
+        w = tw(part, 20, 600) * 1.1 + 40
+        sv.add(rect(x, 336, w, 48, C["surface2"], rx=24, stroke=C["line"], sw=1),
+               text(x + w / 2, 367, part, 20, 600, anchor="middle"))
+        x += w
+    sv.add(text(M, 452, "API KEY", 14, 700, fill=C["muted"], ls=1.5))
+    fx, fy, fw = M, 472, 900
+    masked = "•" * 28 + "3f9a"
+    sv.add(rect(fx, fy, fw, 72, C["surface2"], rx=14, stroke=C["accent"], sw=3),
+           text(fx + 28, fy + 46, masked, 26, 500, font=MONO),
+           rect(fx + 28 + len(masked) * 26 * 0.6 + 4, fy + 20, 3, 32, C["accent"], rx=1))
+    sv.add(text(M, 584, "Saved to ~/.config/game37/secrets.toml on this device only", 18, 500, fill=C["muted"]))
+    setup_buttons(sv, [("Back", "normal"), ("Skip", "normal"), ("Finish", "primary")])
+    hintbar(sv, [(["Ctrl V"], "Paste"), (["Enter"], "Finish"), (["Esc"], "Back")])
+    sv.save()
+
+
 if __name__ == "__main__":
     for fn in [screen_home, screen_home_empty, screen_carousel, screen_console_page, screen_details,
                screen_options, screen_pause, screen_ds, screen_console_missing_emulator,
                screen_details_missing_emulator, screen_speedrun_page, screen_splits_editor,
-               screen_speedrun_embedded, screen_pause_run, screen_timer_window, screen_details_speedrun]:
+               screen_speedrun_embedded, screen_pause_run, screen_timer_window, screen_details_speedrun,
+               screen_settings_library, screen_settings_bios, screen_settings_cores, screen_settings_api_key,
+               screen_controller_test, screen_search, screen_search_controller, screen_search_results, screen_search_empty,
+               screen_setup_systems, screen_setup_emulators, screen_setup_folders, screen_setup_cores,
+               screen_setup_key, screen_settings_controls, screen_settings_about]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))

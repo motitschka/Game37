@@ -4,11 +4,12 @@ use std::path::PathBuf;
 
 use crate::emulators::{self, Emulators};
 use crate::systems::{self, Kind};
-use crate::ui::input::{Action, Input, Pointer};
+use crate::ui::input::{Action, Input, Pointer, TextInput};
 
 pub const USAGE: &str = "usage: game37 [--config <path>] [--data-dir <path>] \
 [--screenshot <out.bmp> [--actions <a,b,...>] [--missing-emulators <system ids>] [--frames <n>] \
-[--artwork]]";
+[--artwork] [--screen controller-test]]\n\
+--screenshot needs --config and --data-dir too, so it never touches your real Config and data";
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Options {
@@ -35,28 +36,41 @@ pub struct Screenshot {
     /// key in `secrets.toml` next to the Config, waiting for it before each frame. Without it every
     /// Game shows placeholder art and nothing is read or fetched.
     pub artwork: bool,
+    /// `--screen`: a screen to open over the start screen before the steps, with the state it shows
+    /// faked.
+    pub screen: Option<ShotScreen>,
 }
 
+/// A screen `--screen` opens, for screens no step sequence can reach on its own.
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ShotScreen {
+    /// `controller-test`: the Controller test over Settings, with fake controllers connected.
+    ControllerTest,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Step {
     Action(Action),
     /// A left click at logical coordinates.
     Click(f32, f32),
     /// `wait:N`: N frames without input, e.g. to let a running Game get going.
     Wait(u32),
+    /// `text:CHARS`: typing CHARS on the keyboard into the active text field, all in one frame.
+    Text(String),
 }
 
 impl Step {
     /// How many frames the step takes.
-    pub fn frames(self) -> u32 {
-        if let Step::Wait(n) = self { n } else { 1 }
+    pub fn frames(&self) -> u32 {
+        if let Step::Wait(n) = *self { n } else { 1 }
     }
 
     /// The inputs the step stands for: a click is preceded by the pointer moving there.
-    pub fn inputs(self) -> Vec<Input> {
-        match self {
+    pub fn inputs(&self) -> Vec<Input> {
+        match *self {
             Step::Action(a) => vec![Input::Action(a)],
             Step::Wait(_) => Vec::new(),
+            Step::Text(ref text) => text.chars().map(|ch| Input::Text(TextInput::Char(ch))).collect(),
             Step::Click(x, y) => {
                 vec![
                     Input::Pointer(Pointer::Move { x, y }),
@@ -74,6 +88,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
     let mut missing_emulators = None;
     let mut frames = None;
     let mut artwork = false;
+    let mut screen = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or_else(|| format!("{arg} needs a value"));
@@ -85,6 +100,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
             "--missing-emulators" => missing_emulators = Some(value()?),
             "--frames" => frames = Some(value()?),
             "--artwork" => artwork = true,
+            "--screen" => screen = Some(value()?),
             _ => return Err(format!("unknown argument {arg:?}")),
         }
     }
@@ -94,12 +110,19 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
             ("--missing-emulators", missing_emulators.is_some()),
             ("--frames", frames.is_some()),
             ("--artwork", artwork),
+            ("--screen", screen.is_some()),
         ];
         if let Some((flag, _)) = given.iter().find(|(_, given)| *given) {
             return Err(format!("{flag} only works with --screenshot"));
         }
         return Ok(options);
     };
+    if options.config.is_none() || options.data_dir.is_none() {
+        return Err(
+            "--screenshot needs --config and --data-dir, so it never touches your real Config and data"
+                .to_owned(),
+        );
+    }
     options.screenshot = Some(Screenshot {
         out,
         steps: parse_steps(actions.as_deref().unwrap_or(""))?,
@@ -113,6 +136,11 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
                 .ok_or_else(|| format!("bad --frames {n:?}: expected a whole number from 1"))?,
         },
         artwork,
+        screen: match screen.as_deref() {
+            None => None,
+            Some("controller-test") => Some(ShotScreen::ControllerTest),
+            Some(other) => return Err(format!("bad --screen {other:?}: expected controller-test")),
+        },
     });
     Ok(options)
 }
@@ -168,10 +196,16 @@ fn parse_step(step: &str) -> Result<Step, String> {
             format!("bad click {step:?}: expected click:X:Y in logical 1920x1080 coordinates")
         });
     }
+    if let Some(text) = step.strip_prefix("text:") {
+        if text.is_empty() {
+            return Err(format!("bad text {step:?}: expected text:CHARS to type"));
+        }
+        return Ok(Step::Text(text.to_owned()));
+    }
     Action::from_name(step).map(Step::Action).ok_or_else(|| {
         let names: Vec<&str> = Action::ALL.iter().map(|a| a.name()).collect();
         format!(
-            "unknown action {step:?}: expected one of {}, or click:X:Y",
+            "unknown action {step:?}: expected one of {}, click:X:Y or text:CHARS",
             names.join(", ")
         )
     })
@@ -185,10 +219,33 @@ mod tests {
         s.split_whitespace().map(str::to_owned).collect()
     }
 
+    /// `args`, with `--config` and `--data-dir` always supplied, for tests whose `--screenshot`
+    /// isn't itself about that requirement.
+    fn shot_args(s: &str) -> Vec<String> {
+        shot_args_vec(args(s))
+    }
+
+    fn shot_args_vec(extra: Vec<String>) -> Vec<String> {
+        let mut out = args("--config c.toml --data-dir d");
+        out.extend(extra);
+        out
+    }
+
+    #[test]
+    fn screenshot_needs_config_and_data_dir() {
+        let err = parse(args("--screenshot out.bmp")).unwrap_err();
+        assert!(err.contains("--config") && err.contains("--data-dir"), "{err}");
+        let err = parse(args("--screenshot out.bmp --config c.toml")).unwrap_err();
+        assert!(err.contains("--data-dir"), "{err}");
+        let err = parse(args("--screenshot out.bmp --data-dir d")).unwrap_err();
+        assert!(err.contains("--config"), "{err}");
+        assert!(parse(shot_args("--screenshot out.bmp")).is_ok());
+    }
+
     #[test]
     fn screenshot_with_actions() {
-        let options = parse(args(
-            "--screenshot out.bmp --config c.toml --actions nexttab,click:900:60,wait:30,back",
+        let options = parse(shot_args(
+            "--screenshot out.bmp --actions nexttab,click:900:60,wait:30,back",
         ))
         .unwrap();
         assert_eq!(options.config, Some(PathBuf::from("c.toml")));
@@ -208,25 +265,25 @@ mod tests {
     #[test]
     fn frames_default_to_one_and_take_a_count() {
         assert_eq!(
-            parse(args("--screenshot o.bmp"))
+            parse(shot_args("--screenshot o.bmp"))
                 .unwrap()
                 .screenshot
                 .unwrap()
                 .frames,
             1
         );
-        let shot = parse(args("--screenshot o.bmp --actions confirm --frames 180"))
+        let shot = parse(shot_args("--screenshot o.bmp --actions confirm --frames 180"))
             .unwrap()
             .screenshot
             .unwrap();
         assert_eq!((shot.frames, shot.steps.len()), (180, 1));
         for bad in ["0", "-1", "ten", ""] {
-            let err = parse(vec![
+            let err = parse(shot_args_vec(vec![
                 "--screenshot".into(),
                 "o.bmp".into(),
                 "--frames".into(),
                 bad.into(),
-            ])
+            ]))
             .unwrap_err();
             assert!(err.contains("--frames"), "{err}");
         }
@@ -237,7 +294,7 @@ mod tests {
 
     #[test]
     fn artwork_is_off_unless_asked_for_and_only_works_with_screenshot() {
-        let shot = |a: &str| parse(args(a)).unwrap().screenshot.unwrap();
+        let shot = |a: &str| parse(shot_args(a)).unwrap().screenshot.unwrap();
         assert!(!shot("--screenshot o.bmp").artwork);
         assert!(shot("--screenshot o.bmp --artwork --frames 2").artwork);
         assert!(shot("--artwork --screenshot o.bmp").artwork);
@@ -247,15 +304,50 @@ mod tests {
     }
 
     #[test]
+    fn screen_opens_the_controller_test_and_only_works_with_screenshot() {
+        let shot = |a: &str| parse(shot_args(a)).unwrap().screenshot.unwrap();
+        assert_eq!(shot("--screenshot o.bmp").screen, None);
+        assert_eq!(
+            shot("--screen controller-test --screenshot o.bmp").screen,
+            Some(ShotScreen::ControllerTest)
+        );
+        let err = parse(args("--screen controller-test")).unwrap_err();
+        assert!(err.contains("--screen") && err.contains("--screenshot"), "{err}");
+        let err = parse(shot_args("--screenshot o.bmp --screen settings")).unwrap_err();
+        assert!(err.contains("controller-test"), "{err}");
+        assert!(USAGE.contains("[--screen controller-test]"));
+    }
+
+    #[test]
     fn no_arguments_run_the_app() {
         assert_eq!(parse(args("")).unwrap(), Options::default());
     }
 
     #[test]
     fn unknown_action_is_an_error() {
-        let err = parse(args("--screenshot o.bmp --actions jump")).unwrap_err();
+        let err = parse(shot_args("--screenshot o.bmp --actions jump")).unwrap_err();
         assert!(err.contains("jump"), "{err}");
-        assert!(parse(args("--screenshot o.bmp --actions click:1")).is_err());
+        assert!(parse(shot_args("--screenshot o.bmp --actions click:1")).is_err());
+        assert!(parse(shot_args("--screenshot o.bmp --actions text:")).is_err());
+    }
+
+    #[test]
+    fn a_text_step_types_each_character_in_one_frame() {
+        let shot = parse(shot_args("--screenshot o.bmp --actions search,text:Mé1,down"))
+            .unwrap()
+            .screenshot
+            .unwrap();
+        assert_eq!(
+            shot.steps,
+            [
+                Step::Action(Action::Search),
+                Step::Text("Mé1".into()),
+                Step::Action(Action::Down)
+            ]
+        );
+        let typed = |ch| Input::Text(TextInput::Char(ch));
+        assert_eq!(shot.steps[1].inputs(), [typed('M'), typed('é'), typed('1')]);
+        assert_eq!(shot.steps[1].frames(), 1);
     }
 
     #[test]
@@ -267,7 +359,7 @@ mod tests {
 
     #[test]
     fn missing_emulators_marks_only_the_named_systems() {
-        let options = parse(args("--screenshot o.bmp --missing-emulators wiiu,ps3")).unwrap();
+        let options = parse(shot_args("--screenshot o.bmp --missing-emulators wiiu,ps3")).unwrap();
         let emulators = options.screenshot.unwrap().missing_emulators;
         assert_eq!(
             emulators.missing(systems::by_id("wiiu").unwrap()),
@@ -286,7 +378,7 @@ mod tests {
 
     #[test]
     fn no_missing_emulators_flag_leaves_everything_installed() {
-        let options = parse(args("--screenshot o.bmp")).unwrap();
+        let options = parse(shot_args("--screenshot o.bmp")).unwrap();
         let emulators = options.screenshot.unwrap().missing_emulators;
         assert_eq!(emulators.missing(systems::by_id("wiiu").unwrap()), None);
     }
@@ -299,13 +391,13 @@ mod tests {
 
     #[test]
     fn an_unknown_system_id_is_an_error() {
-        let err = parse(args("--screenshot o.bmp --missing-emulators dreamcast")).unwrap_err();
+        let err = parse(shot_args("--screenshot o.bmp --missing-emulators dreamcast")).unwrap_err();
         assert!(err.contains("dreamcast"), "{err}");
     }
 
     #[test]
     fn an_embedded_system_id_is_an_error() {
-        let err = parse(args("--screenshot o.bmp --missing-emulators snes")).unwrap_err();
+        let err = parse(shot_args("--screenshot o.bmp --missing-emulators snes")).unwrap_err();
         assert!(err.contains("snes"), "{err}");
     }
 }

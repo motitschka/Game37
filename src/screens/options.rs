@@ -1427,7 +1427,12 @@ mod tests {
         controls.text = nav.top().text_input();
         let mut inputs = Vec::new();
         for key in [Keycode::Q, Keycode::E, Keycode::F, Keycode::S, Keycode::Space] {
-            controls.handle(0, ControlEvent::KeyDown { key, repeat: false }, &mut inputs);
+            let down = ControlEvent::KeyDown {
+                key,
+                repeat: false,
+                ctrl: false,
+            };
+            controls.handle(0, down, &mut inputs);
             controls.handle(1, ControlEvent::KeyUp { key }, &mut inputs);
         }
         controls.typed("qefs ", &mut inputs);
@@ -1436,6 +1441,7 @@ mod tests {
             ControlEvent::KeyDown {
                 key: Keycode::Return,
                 repeat: false,
+                ctrl: false,
             },
             &mut inputs,
         );

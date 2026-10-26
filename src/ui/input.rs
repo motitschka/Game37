@@ -16,12 +16,18 @@ pub enum Action {
     Sort,
     PrevTab,
     NextTab,
-    /// Start on a controller; Enter while a text field is active. Finishes text entry.
+    /// Start on a controller while a text field is active; Enter in the field. Finishes text entry.
     Start,
+    /// Opens Search from anywhere (US-21): Ctrl+F or the left stick click.
+    Search,
+    /// Opens Settings: Start on a controller outside a text field, or Ctrl+comma.
+    Settings,
+    /// Pastes the system clipboard into the active text field: Ctrl+V while typing.
+    Paste,
 }
 
 impl Action {
-    pub const ALL: [Action; 11] = [
+    pub const ALL: [Action; 14] = [
         Action::Up,
         Action::Down,
         Action::Left,
@@ -33,6 +39,9 @@ impl Action {
         Action::PrevTab,
         Action::NextTab,
         Action::Start,
+        Action::Search,
+        Action::Settings,
+        Action::Paste,
     ];
 
     pub fn is_direction(self) -> bool {
@@ -53,6 +62,9 @@ impl Action {
             Action::PrevTab => "prevtab",
             Action::NextTab => "nexttab",
             Action::Start => "start",
+            Action::Search => "search",
+            Action::Settings => "settings",
+            Action::Paste => "paste",
         }
     }
 
@@ -107,24 +119,79 @@ pub enum InputKind {
     Keyboard,
 }
 
-/// Which face button confirms. Only Nintendo style exists so far; a Settings switch to
-/// Xbox/PlayStation style comes later (FR-UI-2).
+/// Which face button confirms in menus (FR-UI-2, US-32). Only Confirm and Back differ between
+/// styles: Options and Sort stay on the left and top face buttons. Embedded Games never read it, they
+/// get the positional pad whatever the style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ButtonStyle {
     /// Positional: the right face button confirms, the bottom one goes back.
     #[default]
     Nintendo,
+    /// The bottom face button confirms, the right one goes back; glyphs A/B/X/Y in Xbox positions.
+    Xbox,
+    /// Positioned like Xbox, with glyphs ✕ ○ □ △.
+    PlayStation,
+}
+
+impl ButtonStyle {
+    pub const ALL: [ButtonStyle; 3] = [ButtonStyle::Nintendo, ButtonStyle::Xbox, ButtonStyle::PlayStation];
+
+    /// The name the library's `settings` table stores it under.
+    pub fn id(self) -> &'static str {
+        match self {
+            ButtonStyle::Nintendo => "nintendo",
+            ButtonStyle::Xbox => "xbox",
+            ButtonStyle::PlayStation => "playstation",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<ButtonStyle> {
+        ButtonStyle::ALL.into_iter().find(|b| b.id() == id)
+    }
+
+    /// The label its Settings row shows.
+    pub fn label(self) -> &'static str {
+        match self {
+            ButtonStyle::Nintendo => "Nintendo",
+            ButtonStyle::Xbox => "Xbox",
+            ButtonStyle::PlayStation => "PlayStation",
+        }
+    }
+
+    /// Its Settings row's sub-line: which button confirms and which goes back.
+    pub fn description(self) -> &'static str {
+        match self {
+            ButtonStyle::Nintendo => "Right button confirms, bottom button goes back",
+            ButtonStyle::Xbox | ButtonStyle::PlayStation => "Bottom button confirms, right button goes back",
+        }
+    }
+
+    /// The next style in [`ButtonStyle::ALL`], wrapping around.
+    pub fn next(self) -> ButtonStyle {
+        let i = ButtonStyle::ALL.iter().position(|&b| b == self).unwrap_or(0);
+        ButtonStyle::ALL[(i + 1) % ButtonStyle::ALL.len()]
+    }
+
+    /// The previous style in [`ButtonStyle::ALL`], wrapping around.
+    pub fn prev(self) -> ButtonStyle {
+        let n = ButtonStyle::ALL.len();
+        let i = ButtonStyle::ALL.iter().position(|&b| b == self).unwrap_or(0);
+        ButtonStyle::ALL[(i + n - 1) % n]
+    }
 }
 
 pub fn button_action(style: ButtonStyle, button: Button) -> Option<Action> {
     let action = match (style, button) {
         (ButtonStyle::Nintendo, Button::East) => Action::Confirm,
         (ButtonStyle::Nintendo, Button::South) => Action::Back,
-        (ButtonStyle::Nintendo, Button::West) => Action::Options,
-        (ButtonStyle::Nintendo, Button::North) => Action::Sort,
+        (ButtonStyle::Xbox | ButtonStyle::PlayStation, Button::South) => Action::Confirm,
+        (ButtonStyle::Xbox | ButtonStyle::PlayStation, Button::East) => Action::Back,
+        (_, Button::West) => Action::Options,
+        (_, Button::North) => Action::Sort,
         (_, Button::LeftShoulder) => Action::PrevTab,
         (_, Button::RightShoulder) => Action::NextTab,
         (_, Button::Start) => Action::Start,
+        (_, Button::LeftStick) => Action::Search,
         (_, Button::DPadUp) => Action::Up,
         (_, Button::DPadDown) => Action::Down,
         (_, Button::DPadLeft) => Action::Left,
@@ -149,6 +216,19 @@ pub fn key_action(key: Keycode) -> Option<Action> {
         _ => return None,
     };
     Some(action)
+}
+
+/// What a key pressed with Ctrl does, text field or not: Ctrl+F searches and Ctrl+comma opens
+/// Settings (GNOME's Preferences shortcut). Ctrl+V pastes, but only while `text` is active;
+/// outside a text field it acts as without Ctrl, which is nothing. Other Ctrl keys act as
+/// without it too.
+pub fn ctrl_key_action(key: Keycode, text: bool) -> Option<Action> {
+    match key {
+        Keycode::F => Some(Action::Search),
+        Keycode::Comma => Some(Action::Settings),
+        Keycode::V if text => Some(Action::Paste),
+        _ => None,
+    }
 }
 
 /// What a key does while a text field is active: the keys that type text (letters, digits, space,
@@ -197,9 +277,20 @@ pub fn glyph_label(action: Action, kind: InputKind, style: ButtonStyle) -> &'sta
         (InputKind::Controller, ButtonStyle::Nintendo, Action::Back) => "B",
         (InputKind::Controller, ButtonStyle::Nintendo, Action::Options) => "Y",
         (InputKind::Controller, ButtonStyle::Nintendo, Action::Sort) => "X",
+        (InputKind::Controller, ButtonStyle::Nintendo, Action::Start | Action::Settings) => "+",
+        (InputKind::Controller, ButtonStyle::Xbox, Action::Confirm) => "A",
+        (InputKind::Controller, ButtonStyle::Xbox, Action::Back) => "B",
+        (InputKind::Controller, ButtonStyle::Xbox, Action::Options) => "X",
+        (InputKind::Controller, ButtonStyle::Xbox, Action::Sort) => "Y",
+        (InputKind::Controller, ButtonStyle::Xbox, Action::Start | Action::Settings) => "≡",
+        (InputKind::Controller, ButtonStyle::PlayStation, Action::Confirm) => "✕",
+        (InputKind::Controller, ButtonStyle::PlayStation, Action::Back) => "○",
+        (InputKind::Controller, ButtonStyle::PlayStation, Action::Options) => "□",
+        (InputKind::Controller, ButtonStyle::PlayStation, Action::Sort) => "△",
+        (InputKind::Controller, ButtonStyle::PlayStation, Action::Start | Action::Settings) => "Options",
         (InputKind::Controller, _, Action::PrevTab) => "L1",
         (InputKind::Controller, _, Action::NextTab) => "R1",
-        (InputKind::Controller, ButtonStyle::Nintendo, Action::Start) => "+",
+        (InputKind::Controller, _, Action::Search) => "L3",
         (InputKind::Keyboard, _, Action::Confirm) => "Enter",
         (InputKind::Keyboard, _, Action::Back) => "Esc",
         (InputKind::Keyboard, _, Action::Options) => "F",
@@ -207,6 +298,9 @@ pub fn glyph_label(action: Action, kind: InputKind, style: ButtonStyle) -> &'sta
         (InputKind::Keyboard, _, Action::PrevTab) => "Q",
         (InputKind::Keyboard, _, Action::NextTab) => "E",
         (InputKind::Keyboard, _, Action::Start) => "Enter",
+        (InputKind::Keyboard, _, Action::Search) => "Ctrl F",
+        (InputKind::Keyboard, _, Action::Settings) => "Ctrl ,",
+        (_, _, Action::Paste) => "Ctrl V",
     }
 }
 
@@ -349,6 +443,107 @@ mod tests {
         assert_eq!(button_action(s, Button::Guide), None);
     }
 
+    /// Every style's face buttons as (South, East, West, North): only Confirm and Back swap.
+    #[test]
+    fn face_buttons_per_style() {
+        use Action::{Back, Confirm, Options, Sort};
+        let face = [Button::South, Button::East, Button::West, Button::North];
+        let cases = [
+            (ButtonStyle::Nintendo, [Back, Confirm, Options, Sort]),
+            (ButtonStyle::Xbox, [Confirm, Back, Options, Sort]),
+            (ButtonStyle::PlayStation, [Confirm, Back, Options, Sort]),
+        ];
+        for (style, actions) in cases {
+            assert_eq!(
+                face.map(|b| button_action(style, b)),
+                actions.map(Some),
+                "{style:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn other_buttons_act_the_same_in_every_style() {
+        for style in ButtonStyle::ALL {
+            assert_eq!(button_action(style, Button::LeftShoulder), Some(Action::PrevTab));
+            assert_eq!(button_action(style, Button::RightShoulder), Some(Action::NextTab));
+            assert_eq!(button_action(style, Button::Start), Some(Action::Start));
+            assert_eq!(button_action(style, Button::LeftStick), Some(Action::Search));
+            assert_eq!(button_action(style, Button::DPadUp), Some(Action::Up));
+            assert_eq!(button_action(style, Button::Guide), None);
+        }
+    }
+
+    #[test]
+    fn controller_glyphs_per_style() {
+        let actions = [
+            Action::Confirm,
+            Action::Back,
+            Action::Options,
+            Action::Sort,
+            Action::Start,
+            Action::Settings,
+            Action::PrevTab,
+            Action::Search,
+        ];
+        let cases = [
+            (ButtonStyle::Nintendo, ["A", "B", "Y", "X", "+", "+", "L1", "L3"]),
+            (ButtonStyle::Xbox, ["A", "B", "X", "Y", "≡", "≡", "L1", "L3"]),
+            (
+                ButtonStyle::PlayStation,
+                ["✕", "○", "□", "△", "Options", "Options", "L1", "L3"],
+            ),
+        ];
+        for (style, labels) in cases {
+            assert_eq!(
+                actions.map(|a| glyph_label(a, InputKind::Controller, style)),
+                labels,
+                "{style:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn keyboard_glyphs_ignore_the_style() {
+        for style in ButtonStyle::ALL {
+            let keys = |a| glyph_label(a, InputKind::Keyboard, style);
+            assert_eq!(
+                [Action::Confirm, Action::Back, Action::Options, Action::Sort].map(keys),
+                ["Enter", "Esc", "F", "S"]
+            );
+        }
+    }
+
+    #[test]
+    fn button_styles_cycle_both_ways_and_wrap() {
+        use ButtonStyle::{Nintendo, PlayStation, Xbox};
+        assert_eq!(
+            [Nintendo, Xbox, PlayStation].map(ButtonStyle::next),
+            [Xbox, PlayStation, Nintendo]
+        );
+        assert_eq!(
+            [Nintendo, Xbox, PlayStation].map(ButtonStyle::prev),
+            [PlayStation, Nintendo, Xbox]
+        );
+        assert_eq!(ButtonStyle::default(), Nintendo);
+        assert_eq!(
+            ButtonStyle::ALL.map(ButtonStyle::label),
+            ["Nintendo", "Xbox", "PlayStation"]
+        );
+        assert_eq!(
+            ButtonStyle::ALL.map(ButtonStyle::description),
+            [
+                "Right button confirms, bottom button goes back",
+                "Bottom button confirms, right button goes back",
+                "Bottom button confirms, right button goes back",
+            ]
+        );
+        for style in ButtonStyle::ALL {
+            assert_eq!(ButtonStyle::from_id(style.id()), Some(style));
+        }
+        assert_eq!(ButtonStyle::from_id("sega"), None);
+    }
+
     #[test]
     fn keyboard_mapping() {
         let cases = [
@@ -368,6 +563,48 @@ mod tests {
             assert_eq!(key_action(key), Some(action), "{key:?}");
         }
         assert_eq!(key_action(Keycode::F11), None);
+    }
+
+    #[test]
+    fn ctrl_f_searches_and_ctrl_comma_opens_settings() {
+        assert_eq!(ctrl_key_action(Keycode::F, false), Some(Action::Search));
+        assert_eq!(
+            key_action(Keycode::F),
+            Some(Action::Options),
+            "plain F stays Options"
+        );
+        assert_eq!(ctrl_key_action(Keycode::Comma, false), Some(Action::Settings));
+        assert_eq!(key_action(Keycode::Comma), None);
+        assert_eq!(
+            ctrl_key_action(Keycode::Q, false),
+            None,
+            "other Ctrl keys act as without it"
+        );
+    }
+
+    #[test]
+    fn ctrl_v_pastes_only_in_text_mode() {
+        assert_eq!(ctrl_key_action(Keycode::V, true), Some(Action::Paste));
+        assert_eq!(
+            ctrl_key_action(Keycode::V, false),
+            None,
+            "outside text mode Ctrl+V does nothing"
+        );
+    }
+
+    #[test]
+    fn the_left_stick_click_searches() {
+        let s = ButtonStyle::Nintendo;
+        assert_eq!(button_action(s, Button::LeftStick), Some(Action::Search));
+    }
+
+    #[test]
+    fn search_and_settings_glyphs() {
+        let s = ButtonStyle::Nintendo;
+        let pad = |a| glyph_label(a, InputKind::Controller, s);
+        let keys = |a| glyph_label(a, InputKind::Keyboard, s);
+        assert_eq!([Action::Search, Action::Settings].map(pad), ["L3", "+"]);
+        assert_eq!([Action::Search, Action::Settings].map(keys), ["Ctrl F", "Ctrl ,"]);
     }
 
     #[test]

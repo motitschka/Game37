@@ -17,6 +17,7 @@
 //! bulk loading. Only SteamGridDB hosts are contacted (NFR-5), and the API key only goes to the API.
 
 use std::cell::{Cell, OnceCell, RefCell};
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{Cursor, Write};
@@ -200,6 +201,8 @@ pub struct Artwork {
     /// Set once SteamGridDB's API refuses the key (401, 403) or asks to slow down (429), or
     /// [`MAX_CONNECT_FAILURES`] requests in a row can't connect: no further requests this run.
     stopped: Arc<AtomicBool>,
+    /// Set once SteamGridDB's API refuses the key (401, 403), for Settings to say so.
+    rejected: Arc<AtomicBool>,
     budget: usize,
     /// The least time between the starts of two requests.
     gap: Duration,
@@ -238,8 +241,10 @@ struct State {
     bytes: usize,
 }
 
-/// When a loading slot or candidate list was last asked for: in which poll, to drop what is no
-/// longer asked for, and at which clock tick, to run the most recently asked for first.
+/// When a loading slot or candidate list was asked for: in which poll, to drop what is no longer
+/// asked for or, for `first`, to run what just scrolled into view before what has been waiting;
+/// and at which clock tick, to run the most recently asked for first, or, for `first`, the
+/// earliest-drawn of a poll first.
 #[derive(Debug, Clone, Copy, Default)]
 struct Asked {
     poll: u64,
@@ -249,8 +254,10 @@ struct Asked {
 /// A Game's candidate list of one kind, as far as it has got.
 struct Listing {
     candidates: Candidates,
-    /// Only matters while loading.
+    /// Only matters while loading. Updated on every ask.
     asked: Asked,
+    /// When first queued, for [`State::next_net`]'s order. Never updated after that.
+    first: Asked,
 }
 
 impl State {
@@ -275,7 +282,15 @@ impl State {
     /// When `key`'s slot was last asked for, if it is still waiting for `job`.
     fn slot_asked(&self, key: &Key, job: u64) -> Option<Asked> {
         match self.slots.get(key) {
-            Some(Slot::Loading { job: j, asked }) if *j == job => Some(*asked),
+            Some(Slot::Loading { job: j, asked, .. }) if *j == job => Some(*asked),
+            _ => None,
+        }
+    }
+
+    /// When `key`'s slot was first asked for, if it is still waiting for `job`.
+    fn slot_first(&self, key: &Key, job: u64) -> Option<Asked> {
+        match self.slots.get(key) {
+            Some(Slot::Loading { job: j, first, .. }) if *j == job => Some(*first),
             _ => None,
         }
     }
@@ -290,7 +305,25 @@ impl State {
                 Some(Listing {
                     candidates: Candidates::Loading,
                     asked,
+                    ..
                 }) => Some(*asked),
+                _ => None,
+            },
+        }
+    }
+
+    /// When what `job` is for was first asked for, if it is still waiting for it.
+    fn net_first(&self, job: &NetJob) -> Option<Asked> {
+        match job {
+            NetJob::Lookup { key, job, .. } | NetJob::Download { key, job, .. } => self.slot_first(key, *job),
+            NetJob::Candidates {
+                game_id, kind, title, ..
+            } => match self.candidates.get(&(*game_id, *kind, title.clone())) {
+                Some(Listing {
+                    candidates: Candidates::Loading,
+                    first,
+                    ..
+                }) => Some(*first),
                 _ => None,
             },
         }
@@ -355,7 +388,9 @@ impl State {
     }
 
     /// The queued network job to run next: a candidate list first, then a preview, then a Game's
-    /// Artwork; within each, the most recently asked for.
+    /// Artwork; within each, the one first asked for in the most recent poll (what just scrolled
+    /// into view beats what has been waiting), and among those from the same poll, the one first
+    /// asked for earliest in it (draw order, so top-left first).
     fn next_net(&mut self) -> Option<NetJob> {
         let rank = |job: &NetJob| match job {
             NetJob::Candidates { .. } => 2,
@@ -367,16 +402,20 @@ impl State {
         };
         let next = (0..self.net.len()).max_by_key(|&i| {
             let job = &self.net[i];
-            (rank(job), self.net_asked(job).map(|a| a.tick))
+            let first = self.net_first(job).map(|a| (a.poll, Reverse(a.tick)));
+            (rank(job), first)
         })?;
         Some(self.net.swap_remove(next))
     }
 
-    /// The queued cached file to read next: the most recently asked for.
+    /// The queued cached file to read next: the one first asked for in the most recent poll (what
+    /// just scrolled into view beats what has been waiting), and among those from the same poll,
+    /// the one first asked for earliest in it (draw order, so top-left first).
     fn next_disk(&mut self) -> Option<DiskJob> {
         let next = (0..self.disk.len()).max_by_key(|&i| {
             let job = &self.disk[i];
-            self.slot_asked(&job.key, job.job).map(|a| a.tick)
+            self.slot_first(&job.key, job.job)
+                .map(|a| (a.poll, Reverse(a.tick)))
         })?;
         Some(self.disk.swap_remove(next))
     }
@@ -426,8 +465,18 @@ enum Key {
 }
 
 enum Slot {
-    Loading { job: u64, asked: Asked },
-    Ready { picture: Arc<Picture>, used: u64 },
+    Loading {
+        job: u64,
+        /// Updated on every ask.
+        asked: Asked,
+        /// When first queued, for [`State::next_net`] and [`State::next_disk`]'s order. Never
+        /// updated after that.
+        first: Asked,
+    },
+    Ready {
+        picture: Arc<Picture>,
+        used: u64,
+    },
     Placeholder,
 }
 
@@ -555,6 +604,7 @@ impl Artwork {
             key,
             fetch,
             stopped: Arc::new(AtomicBool::new(false)),
+            rejected: Arc::new(AtomicBool::new(false)),
             budget: MEMORY_BUDGET,
             gap: REQUEST_GAP,
             workers: OnceCell::new(),
@@ -571,6 +621,16 @@ impl Artwork {
         }
     }
 
+    /// The SteamGridDB API key Artwork fetches with, if any.
+    pub fn key(&self) -> Option<&ApiKey> {
+        self.key.as_ref()
+    }
+
+    /// Whether SteamGridDB's API refused the key (401, 403) this run, which stops every request.
+    pub fn key_rejected(&self) -> bool {
+        self.rejected.load(Ordering::Relaxed)
+    }
+
     fn online(&self) -> bool {
         self.key.is_some() && !self.stopped.load(Ordering::Relaxed)
     }
@@ -582,6 +642,7 @@ impl Artwork {
                 self.key.clone(),
                 Arc::clone(&self.fetch),
                 Arc::clone(&self.stopped),
+                Arc::clone(&self.rejected),
                 self.gap,
             )
         })
@@ -621,7 +682,11 @@ impl Artwork {
                     path: cache_path(dir, kind, *id, url),
                     url: url.clone(),
                 });
-                Slot::Loading { job, asked }
+                Slot::Loading {
+                    job,
+                    asked,
+                    first: asked,
+                }
             }
             // Searched this Display Title before: nothing of this kind, or no match.
             (Some(Pick::NoArtwork), _) | (None, Some(None)) => Slot::Placeholder,
@@ -632,7 +697,11 @@ impl Artwork {
                     job,
                     game: search.flatten(),
                 });
-                Slot::Loading { job, asked }
+                Slot::Loading {
+                    job,
+                    asked,
+                    first: asked,
+                }
             }
             _ => Slot::Placeholder,
         };
@@ -673,6 +742,7 @@ impl Artwork {
         let listing = Listing {
             candidates: candidates.clone(),
             asked,
+            first: asked,
         };
         state.candidates.insert(key, listing);
         candidates
@@ -705,7 +775,11 @@ impl Artwork {
                 url: candidate.preview.clone(),
                 path: None,
             });
-            Slot::Loading { job, asked }
+            Slot::Loading {
+                job,
+                asked,
+                first: asked,
+            }
         } else {
             Slot::Placeholder
         };
@@ -873,6 +947,7 @@ impl Artwork {
                 let listing = Listing {
                     candidates,
                     asked: Asked::default(),
+                    first: Asked::default(),
                 };
                 state.candidates.insert((game_id, kind, title), listing);
             }
@@ -1008,6 +1083,7 @@ impl Workers {
         key: Option<ApiKey>,
         fetch: Fetch,
         stopped: Arc<AtomicBool>,
+        rejected: Arc<AtomicBool>,
         gap: Duration,
     ) -> Workers {
         let (disk_tx, disk_done) = mpsc::channel();
@@ -1033,6 +1109,7 @@ impl Workers {
                 key,
                 fetch,
                 stopped,
+                rejected,
                 searched: HashMap::new(),
                 gap,
                 last: Cell::new(None),
@@ -1224,6 +1301,7 @@ struct Net {
     key: Option<ApiKey>,
     fetch: Fetch,
     stopped: Arc<AtomicBool>,
+    rejected: Arc<AtomicBool>,
     /// Display Title searches done this run, so a Game's cover and hero search once.
     searched: HashMap<String, Option<u64>>,
     /// The least time between the starts of two requests.
@@ -1283,8 +1361,10 @@ impl Net {
         let Ok(list) = self.list(kind, game) else {
             return Outcome::Failed;
         };
-        // A file that is no good, or that its host won't serve, gives way to the next. If none of
-        // them would ever do, that is recorded as none, so a restart doesn't fetch them again.
+        // A file that is no good, or whose host has nothing at it (404, 410), gives way to the
+        // next, like an unusable file. If none of them would ever do, that is recorded as none,
+        // so a restart doesn't fetch them again. A host refusal for any other reason also gives
+        // way to the next, but makes the whole result temporary, so it is searched again instead.
         let mut refused = false;
         for top in list.iter().take(FILES_TRIED) {
             let path = cache_path(&self.dir, kind, top.id, &top.url);
@@ -1301,6 +1381,7 @@ impl Net {
                     };
                 }
                 Err(FileError::Fetch(FetchError::Connect)) => return Outcome::Searched { game },
+                Err(FileError::Fetch(FetchError::Status(404 | 410))) => {}
                 Err(FileError::Fetch(FetchError::Status(_))) => refused = true,
                 Err(FileError::Fetch(FetchError::TooLarge) | FileError::Unusable) => {}
             }
@@ -1407,6 +1488,9 @@ impl Net {
         };
         self.connect_failures.set(failures);
         let refused = matches!(result, Err(FetchError::Status(401 | 403 | 429))) && api_key.is_some();
+        if matches!(result, Err(FetchError::Status(401 | 403))) && api_key.is_some() {
+            self.rejected.store(true, Ordering::Relaxed);
+        }
         if refused || failures >= MAX_CONNECT_FAILURES {
             self.stopped.store(true, Ordering::Relaxed);
         }
@@ -1866,6 +1950,20 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn artwork_tells_a_rejected_key_from_one_asked_to_slow_down() {
+        for (status, rejected) in [(401, true), (403, true), (429, false)] {
+            let dir = tempfile::tempdir().unwrap();
+            let fake = Fake::new();
+            fake.route(API, Err(FetchError::Status(status)));
+            let (library, games) = library(dir.path());
+            let artwork = artwork(dir.path(), &fake, true);
+            assert!(!artwork.key_rejected());
+            wait(&artwork, &library, &games[0], Kind::Cover);
+            assert_eq!(artwork.key_rejected(), rejected, "{status}");
+        }
+    }
+
+    #[test]
     fn artwork_file_host_refusing_a_file_fails_only_that_file() {
         let dir = tempfile::tempdir().unwrap();
         let fake = steamgriddb();
@@ -1935,6 +2033,50 @@ pub(crate) mod tests {
         let artwork = self::artwork(dir.path(), &fake, true);
         assert!(is_placeholder(&artwork.cover(&library, &games[0])));
         assert_eq!(fake.calls(), 0);
+    }
+
+    #[test]
+    fn artwork_whose_top_files_are_all_404_or_410_is_remembered_as_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Fake::new();
+        let files: Vec<(u64, String)> = (1..=4).map(|id| (id, format!("{CDN}/grid/{id}.png"))).collect();
+        let files: Vec<(u64, &str)> = files.iter().map(|(id, url)| (*id, url.as_str())).collect();
+        fake.api("/search/autocomplete/Alpha", "[{\"id\":42}]")
+            .api("/grids/game/42?", &listing(&files))
+            .route(&format!("{CDN}/grid/1.png"), Err(FetchError::Status(404)))
+            .route(&format!("{CDN}/grid/2.png"), Err(FetchError::Status(410)))
+            .route(&format!("{CDN}/grid/3.png"), Err(FetchError::Status(404)));
+        let (library, games) = library(dir.path());
+        let artwork = artwork(dir.path(), &fake, true);
+        assert!(is_placeholder(&wait(&artwork, &library, &games[0], Kind::Cover)));
+        let tried: Vec<String> = fake.urls().into_iter().filter(|u| u.starts_with(CDN)).collect();
+        assert_eq!(tried, [1, 2, 3].map(|id| format!("{CDN}/grid/{id}.png")));
+        let record = read_record(&library, games[0].id).unwrap();
+        assert_eq!((record.game, record.cover), (Some(42), Some(Pick::NoArtwork)));
+        drop((artwork, library));
+
+        let fake = Fake::new();
+        let (library, games) = self::library(dir.path());
+        let artwork = self::artwork(dir.path(), &fake, true);
+        assert!(is_placeholder(&artwork.cover(&library, &games[0])));
+        assert_eq!(fake.calls(), 0);
+    }
+
+    #[test]
+    fn artwork_whose_top_files_are_refused_for_some_other_reason_is_searched_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Fake::new();
+        let files: Vec<(u64, String)> = (1..=4).map(|id| (id, format!("{CDN}/grid/{id}.png"))).collect();
+        let files: Vec<(u64, &str)> = files.iter().map(|(id, url)| (*id, url.as_str())).collect();
+        fake.api("/search/autocomplete/Alpha", "[{\"id\":42}]")
+            .api("/grids/game/42?", &listing(&files))
+            .route(&format!("{CDN}/grid/"), Err(FetchError::Status(503)));
+        let (library, games) = library(dir.path());
+        let artwork = artwork(dir.path(), &fake, true);
+        assert!(is_placeholder(&wait(&artwork, &library, &games[0], Kind::Cover)));
+        let record = read_record(&library, games[0].id).unwrap();
+        assert_eq!(record.game, Some(42));
+        assert_ne!(record.cover, Some(Pick::NoArtwork));
     }
 
     #[test]
@@ -2257,8 +2399,12 @@ pub(crate) mod tests {
             assert!(matches!(artwork.cover(&library, game), Art::Loading));
         }
         // The player stops at the last ten, so only they are asked for from now on. The gate stays
-        // shut for longer than a queued job waits, so nothing scrolled past can run first.
+        // shut for longer than a queued job waits, so nothing scrolled past can run first, except
+        // the one cover whose job is already handed to the (still blocked) worker the moment
+        // polling starts: of the games still queued at that point, it is the one first asked for
+        // earliest (top-left of the sweep above), so it is the one with the oldest surviving ask.
         let shown = &games[games.len() - 10..];
+        let leaked = &games[games.len() - MAX_QUEUED_NET];
         let ask = || {
             for game in shown {
                 artwork.cover(&library, game);
@@ -2284,16 +2430,98 @@ pub(crate) mod tests {
             .filter(|u| u.contains("/search/"))
             .collect();
         searched.sort();
-        let wanted: Vec<String> = shown
+        let mut wanted: Vec<String> = shown
             .iter()
+            .chain([leaked])
             .map(|g| format!("{API}/search/autocomplete/{}", encode(&g.title)))
             .collect();
+        wanted.sort();
         assert_eq!(searched, wanted);
         assert_eq!(
             fake.calls(),
-            3 * shown.len(),
-            "a search, a listing and a file each"
+            3 * (shown.len() + 1),
+            "a search, a listing and a file each, plus the one that leaked"
         );
+    }
+
+    #[test]
+    fn artwork_asked_first_in_a_poll_runs_first() {
+        // A Console Page draws top-left first: A, then B, then C, all in the same poll (frame).
+        let dir = tempfile::tempdir().unwrap();
+        let fake = any_title();
+        let (library, games) = many(dir.path(), 3);
+        let (a, b, c) = (&games[0], &games[1], &games[2]);
+        let artwork = artwork(dir.path(), &fake, true);
+        fake.set_gate(false);
+        artwork.cover(&library, a);
+        artwork.cover(&library, b);
+        artwork.cover(&library, c);
+        let ask = || {
+            artwork.cover(&library, a);
+            artwork.cover(&library, b);
+            artwork.cover(&library, c);
+        };
+        fake.set_gate(true);
+        settle(
+            &artwork,
+            &library,
+            || {
+                ask();
+                artwork.busy()
+            },
+            |busy| *busy,
+        );
+
+        let urls = fake.urls();
+        let pos = |g: &GameRow| urls.iter().position(|u| u.contains(&encode(&g.title))).unwrap();
+        assert!(pos(a) < pos(b), "{urls:?}");
+        assert!(pos(b) < pos(c), "{urls:?}");
+    }
+
+    #[test]
+    fn artwork_first_asked_in_a_later_poll_goes_ahead_of_an_older_still_being_asked() {
+        // Alpha occupies the only worker, blocked at the gate, so the queue order below is never
+        // disturbed by a job actually starting. Earlier is asked every poll from the start;
+        // Late only scrolls into view several polls afterwards, but is asked every poll too.
+        // Neither is stale, yet Late, asked first more recently, must run before Earlier.
+        let dir = tempfile::tempdir().unwrap();
+        let fake = any_title();
+        let (library, games) = many(dir.path(), 3);
+        let (alpha, earlier, late) = (&games[0], &games[1], &games[2]);
+        let artwork = artwork(dir.path(), &fake, true);
+        fake.set_gate(false);
+        artwork.cover(&library, alpha);
+        artwork.poll(&library);
+        artwork.cover(&library, earlier);
+        for _ in 0..5 {
+            artwork.poll(&library);
+            artwork.cover(&library, alpha);
+            artwork.cover(&library, earlier);
+        }
+        artwork.cover(&library, late);
+        // Earlier is asked for last every frame, so the old most-recently-asked order would run
+        // it before Late regardless; only the new order, which goes by first ask, favours Late.
+        let ask = || {
+            artwork.cover(&library, alpha);
+            artwork.cover(&library, late);
+            artwork.cover(&library, earlier);
+        };
+        artwork.poll(&library);
+        ask();
+        fake.set_gate(true);
+        settle(
+            &artwork,
+            &library,
+            || {
+                ask();
+                artwork.busy()
+            },
+            |busy| *busy,
+        );
+
+        let urls = fake.urls();
+        let pos = |g: &GameRow| urls.iter().position(|u| u.contains(&encode(&g.title))).unwrap();
+        assert!(pos(late) < pos(earlier), "{urls:?}");
     }
 
     #[test]

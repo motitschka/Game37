@@ -12,8 +12,8 @@ use sdl3::joystick::JoystickId;
 use sdl3::keyboard::Keycode;
 
 use super::input::{
-    Action, ButtonStyle, Input, InputKind, Repeat, TextInput, button_action, key_action, stick_direction,
-    text_key,
+    Action, ButtonStyle, Input, InputKind, Repeat, TextInput, button_action, ctrl_key_action, key_action,
+    stick_direction, text_key,
 };
 
 /// Below this fraction of full deflection, an engaged stick direction releases. It engages at
@@ -31,10 +31,11 @@ pub enum StickAxis {
 /// The key and gamepad events the UI reacts to.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ControlEvent {
-    /// `repeat` marks the operating system's own key repeat.
+    /// `repeat` marks the operating system's own key repeat; `ctrl`, a Ctrl key held with it.
     KeyDown {
         key: Keycode,
         repeat: bool,
+        ctrl: bool,
     },
     KeyUp {
         key: Keycode,
@@ -101,6 +102,14 @@ impl Stick {
         self.dir = stick_direction(self.x, self.y);
         self.dir
     }
+
+    /// Records an axis value without taking a direction, while raw controller input is on.
+    fn track(&mut self, axis: StickAxis, value: i16) {
+        match axis {
+            StickAxis::X => self.x = value,
+            StickAxis::Y => self.y = value,
+        }
+    }
 }
 
 /// Whether the stick at (`fx`, `fy`) still holds `dir`.
@@ -121,10 +130,18 @@ pub struct Controls {
     pub style: ButtonStyle,
     /// Whether a text field is active: keys then type rather than act (see [`text_key`]).
     pub text: bool,
+    /// Whether the top screen wants raw controller input (see [`super::nav::Screen::raw_controller`]):
+    /// while on, pad buttons and stick motion are tracked but never become menu actions.
+    pub raw: bool,
+    /// Whether the last key went down with Ctrl held: text typed after it is dropped, so Ctrl+F
+    /// or Ctrl+comma never types an "f" or a ",", whatever the system's input method sends.
+    ctrl: bool,
     /// Held directions, oldest press first; the last one drives the repeat.
     held: Vec<(Source, Action)>,
     sticks: HashMap<JoystickId, Stick>,
     repeat: Repeat,
+    /// `raw` as last synced by [`Self::sync_raw`], to notice when it turns on.
+    synced_raw: bool,
 }
 
 impl Controls {
@@ -133,32 +150,82 @@ impl Controls {
             kind,
             style: ButtonStyle::default(),
             text: false,
+            raw: false,
+            ctrl: false,
             held: Vec::new(),
             sticks: HashMap::new(),
             repeat: Repeat::default(),
+            synced_raw: false,
+        }
+    }
+
+    /// Drops pad-sourced held directions when `raw` turns on, so a direction held as the screen
+    /// opens never repeats; stick directions are cleared the same way, through [`Self::follow`].
+    fn sync_raw(&mut self, at: u64) {
+        if self.raw == self.synced_raw {
+            return;
+        }
+        self.synced_raw = self.raw;
+        if self.raw {
+            let driver = self.held.last().copied();
+            self.held.retain(|(source, _)| source.pad().is_none());
+            self.follow(driver, at);
+            for stick in self.sticks.values_mut() {
+                stick.dir = None;
+            }
         }
     }
 
     /// Handles an event that happened at `at` milliseconds, pushing the inputs it makes to `out`.
     pub fn handle(&mut self, at: u64, event: ControlEvent, out: &mut Vec<Input>) {
+        self.sync_raw(at);
+        if let ControlEvent::KeyDown {
+            key,
+            repeat: false,
+            ctrl: true,
+        } = event
+            && let Some(action) = ctrl_key_action(key, self.text)
+        {
+            self.kind = InputKind::Keyboard;
+            self.ctrl = true;
+            self.press(Source::Keyboard, action, at, out);
+            return;
+        }
         match event {
             // Held Backspace erases at the operating system's key repeat.
-            ControlEvent::KeyDown { key, repeat: true } if self.text => {
-                if let Some(erase @ Input::Text(_)) = text_key(key) {
+            ControlEvent::KeyDown {
+                key,
+                repeat: true,
+                ctrl,
+            } if self.text => {
+                self.ctrl = ctrl;
+                if !ctrl && let Some(erase @ Input::Text(_)) = text_key(key) {
                     out.push(erase);
                 }
             }
-            ControlEvent::KeyDown { repeat: true, .. } => {}
-            ControlEvent::KeyDown { key, repeat: false } if self.text => {
+            ControlEvent::KeyDown {
+                repeat: true, ctrl, ..
+            } => self.ctrl = ctrl,
+            ControlEvent::KeyDown {
+                key,
+                repeat: false,
+                ctrl,
+            } if self.text => {
                 self.kind = InputKind::Keyboard;
+                self.ctrl = ctrl;
                 match text_key(key) {
                     Some(Input::Action(action)) => self.press(Source::Keyboard, action, at, out),
                     Some(input) => out.push(input),
                     None => {}
                 }
             }
-            ControlEvent::KeyDown { key, repeat: false } => {
+            ControlEvent::KeyDown {
+                key,
+                repeat: false,
+                ctrl,
+            } => {
                 self.kind = InputKind::Keyboard;
+                self.ctrl = ctrl;
                 if let Some(action) = key_action(key) {
                     self.press(Source::Keyboard, action, at, out);
                 }
@@ -170,17 +237,27 @@ impl Controls {
             }
             ControlEvent::PadButtonDown { pad, button } => {
                 self.kind = InputKind::Controller;
-                if let Some(action) = button_action(self.style, button) {
+                if self.raw {
+                    return;
+                }
+                if let Some(action) = self.button_action(button) {
                     self.press(Source::DPad(pad), action, at, out);
                 }
             }
             ControlEvent::PadButtonUp { pad, button } => {
-                if let Some(action) = button_action(self.style, button) {
+                if self.raw {
+                    return;
+                }
+                if let Some(action) = self.button_action(button) {
                     self.release(Source::DPad(pad), action, at);
                 }
             }
             ControlEvent::StickMotion { pad, axis, value } => {
                 let stick = self.sticks.entry(pad).or_default();
+                if self.raw {
+                    stick.track(axis, value);
+                    return;
+                }
                 let old = stick.dir;
                 let new = stick.moved(axis, value);
                 if new != old {
@@ -210,9 +287,9 @@ impl Controls {
     }
 
     /// Text the keyboard typed (SDL's text input event), as one input per character; nothing unless
-    /// a text field is active.
+    /// a text field is active, or right after a key went down with Ctrl.
     pub fn typed(&mut self, text: &str, out: &mut Vec<Input>) {
-        if self.text {
+        if self.text && !self.ctrl {
             self.kind = InputKind::Keyboard;
             out.extend(text.chars().map(|c| Input::Text(TextInput::Char(c))));
         }
@@ -220,7 +297,16 @@ impl Controls {
 
     /// The repeat of the held direction due at `now`, if any.
     pub fn poll(&mut self, now: u64) -> Option<Input> {
+        self.sync_raw(now);
         self.repeat.poll(now).map(Input::Action)
+    }
+
+    /// What a gamepad button does: Start opens Settings, except in a text field, which it finishes.
+    fn button_action(&self, button: Button) -> Option<Action> {
+        match button_action(self.style, button)? {
+            Action::Start if !self.text => Some(Action::Settings),
+            action => Some(action),
+        }
     }
 
     fn press(&mut self, source: Source, action: Action, at: u64, out: &mut Vec<Input>) {
@@ -267,7 +353,11 @@ mod tests {
     }
 
     fn key_down(key: Keycode) -> ControlEvent {
-        ControlEvent::KeyDown { key, repeat: false }
+        ControlEvent::KeyDown {
+            key,
+            repeat: false,
+            ctrl: false,
+        }
     }
 
     fn key_up(key: Keycode) -> ControlEvent {
@@ -379,6 +469,7 @@ mod tests {
         let repeat = ControlEvent::KeyDown {
             key: Keycode::Backspace,
             repeat: true,
+            ctrl: false,
         };
         controls.handle(3, repeat, &mut out);
         controls.handle(4, key_down(Keycode::Return), &mut out);
@@ -397,6 +488,106 @@ mod tests {
             out,
             [Input::Action(Action::PrevTab)],
             "outside a text field keys act again"
+        );
+    }
+
+    fn ctrl_down(key: Keycode) -> ControlEvent {
+        ControlEvent::KeyDown {
+            key,
+            repeat: false,
+            ctrl: true,
+        }
+    }
+
+    fn start(controls: &mut Controls) -> Vec<Input> {
+        let mut out = Vec::new();
+        let (pad, button) = (PAD, Button::Start);
+        controls.handle(0, ControlEvent::PadButtonDown { pad, button }, &mut out);
+        controls.handle(1, ControlEvent::PadButtonUp { pad, button }, &mut out);
+        out
+    }
+
+    #[test]
+    fn ctrl_f_searches_ctrl_comma_opens_settings_and_plain_f_is_options() {
+        let mut controls = Controls::new(InputKind::Controller);
+        let mut out = Vec::new();
+        controls.handle(0, ctrl_down(Keycode::F), &mut out);
+        assert_eq!(controls.kind, InputKind::Keyboard);
+        controls.handle(1, key_down(Keycode::F), &mut out);
+        controls.handle(2, ctrl_down(Keycode::Comma), &mut out);
+        controls.handle(3, ctrl_down(Keycode::Q), &mut out);
+        assert_eq!(
+            out,
+            [Action::Search, Action::Options, Action::Settings, Action::PrevTab].map(Input::Action)
+        );
+    }
+
+    #[test]
+    fn the_style_is_read_per_press() {
+        let mut controls = Controls::new(InputKind::Controller);
+        let mut out = Vec::new();
+        let press = |controls: &mut Controls, button, out: &mut Vec<Input>| {
+            controls.handle(0, ControlEvent::PadButtonDown { pad: PAD, button }, out);
+            controls.handle(1, ControlEvent::PadButtonUp { pad: PAD, button }, out);
+        };
+        press(&mut controls, Button::East, &mut out);
+        controls.style = ButtonStyle::PlayStation;
+        press(&mut controls, Button::East, &mut out);
+        press(&mut controls, Button::South, &mut out);
+        assert_eq!(
+            out,
+            [Action::Confirm, Action::Back, Action::Confirm].map(Input::Action)
+        );
+    }
+
+    #[test]
+    fn start_opens_settings_outside_a_text_field_and_finishes_one_inside() {
+        let mut controls = Controls::new(InputKind::Keyboard);
+        assert_eq!(start(&mut controls), [Input::Action(Action::Settings)]);
+        assert_eq!(controls.kind, InputKind::Controller);
+        controls.text = true;
+        assert_eq!(start(&mut controls), [Input::Action(Action::Start)]);
+    }
+
+    #[test]
+    fn in_a_text_field_ctrl_f_and_ctrl_comma_type_nothing() {
+        let mut controls = Controls::new(InputKind::Keyboard);
+        controls.text = true;
+        let mut out = Vec::new();
+        controls.handle(0, ctrl_down(Keycode::F), &mut out);
+        controls.typed("f", &mut out);
+        controls.handle(1, key_up(Keycode::F), &mut out);
+        controls.handle(2, ctrl_down(Keycode::Comma), &mut out);
+        controls.typed(",", &mut out);
+        assert_eq!(
+            out,
+            [Input::Action(Action::Search), Input::Action(Action::Settings)],
+            "no f or , typed"
+        );
+        out.clear();
+        controls.handle(3, key_down(Keycode::F), &mut out);
+        controls.typed("f", &mut out);
+        assert_eq!(
+            out,
+            [Input::Text(TextInput::Char('f'))],
+            "without Ctrl, F types again"
+        );
+    }
+
+    #[test]
+    fn ctrl_v_pastes_in_a_text_field_and_types_nothing_outside_one() {
+        let mut controls = Controls::new(InputKind::Keyboard);
+        let mut out = Vec::new();
+        controls.handle(0, ctrl_down(Keycode::V), &mut out);
+        controls.typed("v", &mut out);
+        assert_eq!(out, [], "outside a text field Ctrl+V does nothing");
+        controls.text = true;
+        controls.handle(1, ctrl_down(Keycode::V), &mut out);
+        controls.typed("v", &mut out);
+        assert_eq!(
+            out,
+            [Input::Action(Action::Paste)],
+            "Ctrl+V pastes and types no v"
         );
     }
 
@@ -507,6 +698,7 @@ mod tests {
                 ControlEvent::KeyDown {
                     key: Keycode::Right,
                     repeat: true,
+                    ctrl: false,
                 },
             ),
             (
@@ -514,6 +706,7 @@ mod tests {
                 ControlEvent::KeyDown {
                     key: Keycode::Right,
                     repeat: true,
+                    ctrl: false,
                 },
             ),
         ];
@@ -533,5 +726,73 @@ mod tests {
             out,
             [Input::Action(Action::Right), Input::Action(Action::Confirm)]
         );
+    }
+
+    #[test]
+    fn raw_controller_swallows_pad_input_while_keyboard_still_acts() {
+        let mut controls = Controls::new(InputKind::Keyboard);
+        controls.raw = true;
+        let mut out = Vec::new();
+        let (pad, button) = (PAD, Button::South);
+        controls.handle(0, ControlEvent::PadButtonDown { pad, button }, &mut out);
+        controls.handle(10, ControlEvent::PadButtonUp { pad, button }, &mut out);
+        controls.handle(20, stick(StickAxis::X, 0.9), &mut out);
+        assert_eq!(out, [], "no pad input while raw");
+
+        controls.handle(30, key_down(Keycode::Escape), &mut out);
+        assert_eq!(out, [Input::Action(Action::Back)], "Esc still acts");
+        out.clear();
+        controls.handle(40, key_down(Keycode::Right), &mut out);
+        assert_eq!(out, [Input::Action(Action::Right)], "arrows still act");
+    }
+
+    #[test]
+    fn a_direction_held_when_raw_turns_on_does_not_repeat() {
+        let mut controls = Controls::new(InputKind::Controller);
+        let mut out = Vec::new();
+        controls.handle(
+            0,
+            ControlEvent::PadButtonDown {
+                pad: PAD,
+                button: Button::DPadRight,
+            },
+            &mut out,
+        );
+        assert_eq!(out, [Input::Action(Action::Right)]);
+        controls.raw = true;
+        out.clear();
+        for now in 1..400 {
+            out.extend(controls.poll(now));
+        }
+        assert_eq!(out, [], "the held direction never repeats once raw is on");
+    }
+
+    #[test]
+    fn b_pressed_raw_and_released_after_raw_goes_off_fires_nothing_below() {
+        let mut controls = Controls::new(InputKind::Controller);
+        controls.raw = true;
+        let mut out = Vec::new();
+        let (pad, button) = (PAD, Button::South);
+        controls.handle(0, ControlEvent::PadButtonDown { pad, button }, &mut out);
+        controls.raw = false;
+        controls.handle(10, ControlEvent::PadButtonUp { pad, button }, &mut out);
+        assert_eq!(out, [], "no Back leaks to the screen below");
+    }
+
+    #[test]
+    fn a_raw_pad_press_still_sets_the_input_kind_to_controller() {
+        let mut controls = Controls::new(InputKind::Keyboard);
+        controls.raw = true;
+        let mut out = Vec::new();
+        controls.handle(
+            0,
+            ControlEvent::PadButtonDown {
+                pad: PAD,
+                button: Button::South,
+            },
+            &mut out,
+        );
+        assert_eq!(controls.kind, InputKind::Controller);
+        assert_eq!(out, []);
     }
 }

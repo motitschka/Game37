@@ -9,9 +9,13 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, Params, Row, params};
+use unicode_normalization::UnicodeNormalization;
+use unicode_normalization::char::is_combining_mark;
 
 use super::FoundGame;
 use crate::systems;
+use crate::ui::gfx::WindowMode;
+use crate::ui::input::ButtonStyle;
 
 /// How many Games a Shelf shows on Home (FR-HOME-3).
 pub const SHELF_SIZE: usize = 20;
@@ -232,6 +236,36 @@ fn sorted(
     }
 }
 
+/// Folds `text` for accent- and case-insensitive matching (FR-SRCH-1): NFD, drop combining marks,
+/// lowercase, then fold the letters NFD alone doesn't decompose.
+fn fold(text: &str) -> String {
+    text.nfd()
+        .filter(|c| !is_combining_mark(*c))
+        .collect::<String>()
+        .to_lowercase()
+        .replace('ß', "ss")
+        .replace('æ', "ae")
+        .replace('ø', "o")
+        .replace('œ', "oe")
+}
+
+/// Which of `search`'s three groups a folded title falls in for a folded query, or `None` if it
+/// doesn't match at all.
+fn match_group(folded_title: &str, folded_query: &str) -> Option<usize> {
+    if folded_title.starts_with(folded_query) {
+        Some(0)
+    } else if folded_title
+        .split(|c: char| c.is_whitespace() || c.is_ascii_punctuation())
+        .any(|word| word.starts_with(folded_query))
+    {
+        Some(1)
+    } else if folded_title.contains(folded_query) {
+        Some(2)
+    } else {
+        None
+    }
+}
+
 pub struct Library {
     conn: Connection,
 }
@@ -344,6 +378,67 @@ impl Library {
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as usize)))?
             .collect::<rusqlite::Result<_>>()?;
         Ok(counts)
+    }
+
+    /// Present Hidden Games, ordered by Display Title (case-insensitive), then System Order. An
+    /// absent Hidden Game isn't listed: it only comes back once it reappears on disk, still Hidden.
+    pub fn hidden_games(&self) -> Result<Vec<GameRow>, DbError> {
+        let sql = "SELECT id, system, rel_path, COALESCE(renamed_title, title), date_added, last_played,
+                    playtime_secs, favorited_at
+             FROM games WHERE present = 1 AND hidden = 1";
+        let mut stmt = self.conn.prepare(sql)?;
+        let mut games = stmt
+            .query_map([], Fetched::from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        games.sort_by_cached_key(|g| {
+            (
+                g.row.title.to_lowercase(),
+                systems::index_of(&g.row.system).unwrap_or(usize::MAX),
+                g.row.id,
+            )
+        });
+        Ok(games.into_iter().map(|g| g.row).collect())
+    }
+
+    /// Clears Playtime and last played for every Game, present or absent, so Continue playing and
+    /// Most played empty out. Keeps Favorites, renames, Hidden flags and Artwork.
+    pub fn reset_stats(&self) -> Result<(), DbError> {
+        self.conn
+            .execute("UPDATE games SET playtime_secs = 0, last_played = NULL", [])?;
+        Ok(())
+    }
+
+    /// How many Games are visible, for "Type to search N Games".
+    pub fn visible_count(&self) -> Result<usize, DbError> {
+        let sql = format!("SELECT COUNT(*) FROM games WHERE {VISIBLE}");
+        let n: i64 = self.conn.query_row(&sql, [], |r| r.get(0))?;
+        Ok(n as usize)
+    }
+
+    /// Visible Games whose Display Title contains `query` (FR-SRCH-1), case- and
+    /// accent-insensitive. An empty (trimmed) query matches nothing. Within each of three groups,
+    /// matches are alphabetical (folded):
+    /// 1. titles starting with the query;
+    /// 2. titles with a word (split on whitespace and punctuation) starting with it;
+    /// 3. any other title containing it.
+    pub fn search(&self, query: &str) -> Result<Vec<GameRow>, DbError> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let folded_query = fold(query);
+
+        let mut matches: Vec<(usize, String, Fetched)> = self
+            .fetch("1", [])?
+            .into_iter()
+            .filter_map(|g| {
+                let folded_title = fold(&g.row.title);
+                let group = match_group(&folded_title, &folded_query)?;
+                Some((group, folded_title, g))
+            })
+            .collect();
+        matches.sort_by(|(ga, ta, a), (gb, tb, b)| ga.cmp(gb).then(ta.cmp(tb)).then(a.row.id.cmp(&b.row.id)));
+        Ok(matches.into_iter().map(|(_, _, g)| g.row).collect())
     }
 
     fn fetch(&self, filter: &str, params: impl Params) -> Result<Vec<Fetched>, DbError> {
@@ -489,6 +584,43 @@ impl Library {
 
     pub fn set_last_system(&self, system: &str) -> Result<(), DbError> {
         self.set_setting("last_system", system)
+    }
+
+    /// The menus' button style (FR-UI-2); Nintendo until changed, or if the stored one is unknown.
+    pub fn button_style(&self) -> Result<ButtonStyle, DbError> {
+        Ok(self
+            .setting("button_style")?
+            .as_deref()
+            .and_then(ButtonStyle::from_id)
+            .unwrap_or_default())
+    }
+
+    pub fn set_button_style(&self, style: ButtonStyle) -> Result<(), DbError> {
+        self.set_setting("button_style", style.id())
+    }
+
+    /// Whether the window opens fullscreen (FR-UI-3); Remember last until changed, or if the stored
+    /// one is unknown.
+    pub fn window_mode(&self) -> Result<WindowMode, DbError> {
+        Ok(self
+            .setting("window_mode")?
+            .as_deref()
+            .and_then(WindowMode::from_id)
+            .unwrap_or_default())
+    }
+
+    pub fn set_window_mode(&self, mode: WindowMode) -> Result<(), DbError> {
+        self.set_setting("window_mode", mode.id())
+    }
+
+    /// Whether the window was fullscreen when Game37 last quit or F11 last toggled it, for Remember
+    /// last; windowed if never stored.
+    pub fn last_fullscreen(&self) -> Result<bool, DbError> {
+        Ok(self.setting("last_fullscreen")?.as_deref() == Some("1"))
+    }
+
+    pub fn set_last_fullscreen(&self, fullscreen: bool) -> Result<(), DbError> {
+        self.set_setting("last_fullscreen", if fullscreen { "1" } else { "0" })
     }
 
     fn setting(&self, key: &str) -> Result<Option<String>, DbError> {
@@ -972,6 +1104,49 @@ mod tests {
     }
 
     #[test]
+    fn button_style_defaults_to_nintendo_and_round_trips() {
+        let lib = Library::open_in_memory().unwrap();
+        assert_eq!(lib.button_style().unwrap(), ButtonStyle::Nintendo);
+        for style in ButtonStyle::ALL {
+            lib.set_button_style(style).unwrap();
+            assert_eq!(lib.button_style().unwrap(), style);
+        }
+        assert_eq!(
+            lib.setting("button_style").unwrap().as_deref(),
+            Some("playstation")
+        );
+    }
+
+    #[test]
+    fn unknown_button_style_reads_as_nintendo() {
+        let lib = Library::open_in_memory().unwrap();
+        lib.set_setting("button_style", "sega").unwrap();
+        assert_eq!(lib.button_style().unwrap(), ButtonStyle::Nintendo);
+    }
+
+    #[test]
+    fn window_mode_defaults_to_remember_last_and_round_trips() {
+        let lib = Library::open_in_memory().unwrap();
+        assert_eq!(lib.window_mode().unwrap(), WindowMode::RememberLast);
+        for mode in WindowMode::ALL {
+            lib.set_window_mode(mode).unwrap();
+            assert_eq!(lib.window_mode().unwrap(), mode);
+        }
+        lib.set_setting("window_mode", "kiosk").unwrap();
+        assert_eq!(lib.window_mode().unwrap(), WindowMode::RememberLast);
+    }
+
+    #[test]
+    fn last_fullscreen_defaults_to_windowed_and_round_trips() {
+        let lib = Library::open_in_memory().unwrap();
+        assert!(!lib.last_fullscreen().unwrap());
+        lib.set_last_fullscreen(true).unwrap();
+        assert!(lib.last_fullscreen().unwrap());
+        lib.set_last_fullscreen(false).unwrap();
+        assert!(!lib.last_fullscreen().unwrap());
+    }
+
+    #[test]
     fn reopening_a_file_keeps_games_and_records() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("library.db");
@@ -1028,5 +1203,156 @@ mod tests {
             Library::open(&path),
             Err(DbError::UnknownSchemaVersion(99))
         ));
+    }
+
+    #[test]
+    fn fold_is_case_and_accent_insensitive_and_folds_special_letters() {
+        assert_eq!(fold("Pokémon"), fold("POKEMON"));
+        assert_eq!(fold("É"), "e");
+        assert_eq!(fold("Straße"), "strasse");
+        assert_eq!(fold("Æon Flux"), "aeon flux");
+        assert_eq!(fold("Søren"), "soren");
+        assert_eq!(fold("Œuf"), "oeuf");
+    }
+
+    #[test]
+    fn hidden_games_are_listed_sorted_and_leave_once_unhidden() {
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_system("snes", &games("snes", &["Beta", "alpha"]), 100)
+            .unwrap();
+        lib.sync_system("nes", &games("nes", &["Alpha"]), 100).unwrap();
+        let beta = id_of(&lib, "snes", "Beta");
+        let snes_alpha = id_of(&lib, "snes", "alpha");
+        let nes_alpha = id_of(&lib, "nes", "Alpha");
+        lib.set_hidden(beta, true).unwrap();
+        lib.set_hidden(snes_alpha, true).unwrap();
+        lib.set_hidden(nes_alpha, true).unwrap();
+
+        // Case-insensitive alphabetical, then System Order (nes before snes) for ties.
+        let rows = lib.hidden_games().unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|r| (r.title.as_str(), r.system.as_str()))
+                .collect::<Vec<_>>(),
+            [("Alpha", "nes"), ("alpha", "snes"), ("Beta", "snes")]
+        );
+
+        lib.set_hidden(beta, false).unwrap();
+        let rows = lib.hidden_games().unwrap();
+        assert_eq!(titles(&rows), ["Alpha", "alpha"]);
+    }
+
+    #[test]
+    fn absent_hidden_games_are_not_listed() {
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_system("snes", &games("snes", &["Alpha"]), 100).unwrap();
+        lib.set_hidden(id_of(&lib, "snes", "Alpha"), true).unwrap();
+        lib.sync_system("snes", &[], 200).unwrap();
+        assert!(lib.hidden_games().unwrap().is_empty());
+    }
+
+    #[test]
+    fn reset_stats_empties_the_two_shelves_and_keeps_favorites() {
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_system("snes", &games("snes", &["Alpha", "Beta"]), 100)
+            .unwrap();
+        let alpha = id_of(&lib, "snes", "Alpha");
+        lib.record_play(alpha, 150, 60).unwrap();
+        lib.set_favorite(alpha, true, 160).unwrap();
+
+        lib.reset_stats().unwrap();
+
+        assert!(lib.shelf(Shelf::ContinuePlaying, None).unwrap().is_empty());
+        assert!(lib.shelf(Shelf::MostPlayed, None).unwrap().is_empty());
+        let favorites = lib.shelf(Shelf::Favorites, None).unwrap();
+        assert_eq!(titles(&favorites), ["Alpha"]);
+        let alpha_row = lib.game(alpha).unwrap().unwrap();
+        assert_eq!(alpha_row.playtime_secs, 0);
+        assert_eq!(alpha_row.last_played, None);
+    }
+
+    #[test]
+    fn search_groups_matches_and_sorts_alphabetically_within_each_group() {
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_system(
+            "snes",
+            &games(
+                "snes",
+                &[
+                    "Zelda II",
+                    "Zelda Classic",
+                    "Bravo Zelda",
+                    "Amazelle",
+                    "Gazelle Run",
+                ],
+            ),
+            100,
+        )
+        .unwrap();
+
+        let rows = lib.search("zel").unwrap();
+        // Group 1 (title starts with "zel"), alphabetical; group 2 (a word starts with "zel");
+        // group 3 ("zel" only mid-word, in "Amazelle" and "Gazelle"). "Amazelle" sorts before
+        // "Bravo Zelda" alphabetically, so this pins group 3 staying after group 2 rather than
+        // merging into one alphabetical pass.
+        assert_eq!(
+            titles(&rows),
+            [
+                "Zelda Classic",
+                "Zelda II",
+                "Bravo Zelda",
+                "Amazelle",
+                "Gazelle Run"
+            ]
+        );
+    }
+
+    #[test]
+    fn search_is_accent_and_case_insensitive() {
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_system("snes", &games("snes", &["Pokémon"]), 100)
+            .unwrap();
+        assert_eq!(titles(&lib.search("pokemon").unwrap()), ["Pokémon"]);
+        assert_eq!(titles(&lib.search("POKÉ").unwrap()), ["Pokémon"]);
+    }
+
+    #[test]
+    fn search_never_matches_hidden_or_absent_games() {
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_system("snes", &games("snes", &["Alpha", "Beta"]), 100)
+            .unwrap();
+        lib.set_hidden(id_of(&lib, "snes", "Alpha"), true).unwrap();
+        lib.sync_system("snes", &games("snes", &["Alpha"]), 200).unwrap();
+
+        assert!(lib.search("alpha").unwrap().is_empty());
+        assert!(lib.search("beta").unwrap().is_empty());
+    }
+
+    #[test]
+    fn search_matches_a_rename_not_the_old_title() {
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_system("snes", &games("snes", &["Alpha"]), 100).unwrap();
+        lib.rename(id_of(&lib, "snes", "Alpha"), Some("Mine".to_owned()))
+            .unwrap();
+
+        assert!(lib.search("alpha").unwrap().is_empty());
+        assert_eq!(titles(&lib.search("mine").unwrap()), ["Mine"]);
+    }
+
+    #[test]
+    fn empty_search_query_matches_nothing() {
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_system("snes", &games("snes", &["Alpha"]), 100).unwrap();
+        assert!(lib.search("").unwrap().is_empty());
+        assert!(lib.search("   ").unwrap().is_empty());
+    }
+
+    #[test]
+    fn visible_count_counts_visible_games_only() {
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_system("snes", &games("snes", &["Alpha", "Beta"]), 100)
+            .unwrap();
+        lib.set_hidden(id_of(&lib, "snes", "Alpha"), true).unwrap();
+        assert_eq!(lib.visible_count().unwrap(), 1);
     }
 }

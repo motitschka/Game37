@@ -74,7 +74,7 @@ pub fn confirm_play(play: Play, ctx: &mut Ctx) -> Transition {
 
 /// FR-EMB-12's message for PS1's missing BIOS: the only Core with a `required_bios` list today,
 /// so this wording is PS1-specific rather than generated from the list generically.
-fn missing_bios_message(games_root: &Path) -> String {
+pub(crate) fn missing_bios_message(games_root: &Path) -> String {
     format!(
         "PlayStation games need a BIOS file. Put scph5501.bin (North America), scph5502.bin \
          (Europe) or scph5500.bin (Japan) in {}.",
@@ -713,6 +713,7 @@ mod tests {
             tabs: vec![(crate::ui::Rect::new(0.0, 0.0, 100.0, 100.0), 1)],
             back: Some(crate::ui::Rect::new(0.0, 0.0, 100.0, 100.0)),
             hints: Vec::new(),
+            ..Hits::default()
         };
         let inputs = [
             Input::Action(Action::NextTab),
