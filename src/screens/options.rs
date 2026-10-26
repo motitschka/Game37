@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
+use crate::cores;
 use crate::ctx::{self, Ctx, Play, Start};
 use crate::launch;
 use crate::library::db::GameRow;
@@ -153,6 +154,9 @@ pub struct OptionsMenu {
     states: StatePaths,
     /// The Game's In-game Save.
     srm: PathBuf,
+    /// The Core's name when it keeps the Game's In-game Saves itself
+    /// ([`cores::CoreInfo::keeps_own_saves`]), so there is no In-game Save to delete.
+    own_saves: Option<&'static str>,
     /// What a confirmed delete did, left by the confirmation for the next tick to show.
     deleted: Rc<RefCell<Option<Result<(), String>>>>,
     /// The slots' times and screenshots, slot 1 first, `None` when empty: read on a thread when
@@ -206,6 +210,10 @@ impl OptionsMenu {
         let rel_path = Path::new(&game.rel_path);
         let states = StatePaths::new(games_root, &game.system, rel_path);
         let srm = saves::srm_path(games_root, &game.system, rel_path);
+        let own_saves = system
+            .and_then(cores::for_system)
+            .filter(|core| core.keeps_own_saves())
+            .map(|core| core.name);
         let (filled, resume_when, srm_when) = if embedded {
             read_save_data(&states, &srm)
         } else {
@@ -223,6 +231,7 @@ impl OptionsMenu {
             srm_when,
             states,
             srm,
+            own_saves,
             deleted: Rc::default(),
             slots: Vec::new(),
             reading: None,
@@ -255,7 +264,7 @@ impl OptionsMenu {
         match what {
             SaveData::ResumeState => self.resume_when.is_some(),
             SaveData::SaveStates => self.filled() > 0,
-            SaveData::InGameSave => self.srm_when.is_some(),
+            SaveData::InGameSave => self.own_saves.is_none() && self.srm_when.is_some(),
             SaveData::Everything => DELETE_ROWS[..3].iter().any(|&w| self.has(w)),
         }
     }
@@ -270,42 +279,52 @@ impl OptionsMenu {
                 0 => none(),
                 n => format!("{n} of {SLOTS}"),
             }),
-            SaveData::InGameSave => Some(self.srm_when.clone().unwrap_or_else(none)),
+            SaveData::InGameSave => Some(match self.own_saves {
+                Some(core) => format!("Kept by {core}"),
+                None => self.srm_when.clone().unwrap_or_else(none),
+            }),
             SaveData::Everything => None,
         }
     }
 
     /// The confirmation before deleting `what`, which leaves what it did for [`Self::after_delete`].
     fn confirm_delete(&self, what: SaveData) -> Confirm {
-        let (title, body) = match what {
-            SaveData::ResumeState => (
-                "Delete the Resume State?".to_owned(),
-                "The next launch starts from power-on. Your In-game Save and Save States stay.",
-            ),
-            SaveData::SaveStates => (
-                match self.filled() {
-                    1 => "Delete the Save State?".to_owned(),
-                    n => format!("Delete {n} Save States?"),
-                },
-                "They are deleted for good, with their screenshots.",
-            ),
-            SaveData::InGameSave => (
-                "Delete the In-game Save?".to_owned(),
-                "Your in-game progress is deleted for good, and so is the Resume State. The next \
-                 launch starts a new save file.",
-            ),
-            SaveData::Everything => (
-                "Delete all save data?".to_owned(),
-                "The In-game Save, the Resume State and every Save State are deleted for good. The \
-                 next launch starts a new save file.",
-            ),
+        let title = match what {
+            SaveData::ResumeState => "Delete the Resume State?".to_owned(),
+            SaveData::SaveStates => match self.filled() {
+                1 => "Delete the Save State?".to_owned(),
+                n => format!("Delete {n} Save States?"),
+            },
+            SaveData::InGameSave => "Delete the In-game Save?".to_owned(),
+            SaveData::Everything => "Delete all save data?".to_owned(),
         };
+        let body = self.delete_body(what);
         let (states, srm, deleted) = (self.states.clone(), self.srm.clone(), self.deleted.clone());
         Confirm::new(title, body, "Delete", move |ctx| {
             *deleted.borrow_mut() = Some(states::delete(what, &states, &srm));
             // The Details Page's Save State count reloads.
             ctx.revision += 1;
         })
+    }
+
+    /// The line under the confirmation's question before deleting `what`.
+    fn delete_body(&self, what: SaveData) -> String {
+        match (what, self.own_saves) {
+            (SaveData::ResumeState, _) => {
+                "The next launch starts from power-on. Your In-game Save and Save States stay.".to_owned()
+            }
+            (SaveData::SaveStates, _) => "They are deleted for good, with their screenshots.".to_owned(),
+            (SaveData::InGameSave, _) => "Your in-game progress is deleted for good, and so is the Resume \
+                 State. The next launch starts a new save file."
+                .to_owned(),
+            (SaveData::Everything, None) => "The In-game Save, the Resume State and every Save State are \
+                 deleted for good. The next launch starts a new save file."
+                .to_owned(),
+            (SaveData::Everything, Some(core)) => format!(
+                "The Resume State and every Save State are deleted for good. In-game Saves stay: \
+                 {core} keeps them itself."
+            ),
+        }
     }
 
     /// Once a confirmed delete is done: re-reads what the Game has, goes back to the list when
@@ -1641,6 +1660,30 @@ mod tests {
             menu.focused(),
             Item::StartFromPowerOn,
             "focus leaves the disabled item"
+        );
+    }
+
+    #[test]
+    fn a_core_that_keeps_its_own_saves_offers_no_in_game_save_and_everything_says_they_stay() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = dir.path().join("Games");
+        let found = [FoundGame {
+            system: "psp",
+            rel_path: "psp/G.iso".into(),
+            title: "G".into(),
+        }];
+        ctx.library.sync_system("psp", &found, 0).unwrap();
+        let game = ctx.library.system_games("psp", SortOrder::AZ).unwrap().remove(0);
+        // A stray `.srm`, which PPSSPP never reads.
+        write_saves(&ctx, &game, true, true);
+        let mut menu = OptionsMenu::new(game, &ctx.games_root);
+        open_delete(&mut menu, &mut ctx);
+        assert_eq!(pickable_rows(&menu), [true, false, false, true]);
+        assert_eq!(delete_subs(&menu)[2].as_deref(), Some("Kept by PPSSPP"));
+        assert!(
+            menu.delete_body(SaveData::Everything)
+                .contains("In-game Saves stay")
         );
     }
 

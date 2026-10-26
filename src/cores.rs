@@ -191,6 +191,12 @@ impl CoreInfo {
     pub fn stick_is_dpad(&self) -> bool {
         !(std::ptr::eq(self, &MUPEN64PLUS_NEXT) || std::ptr::eq(self, &PPSSPP))
     }
+
+    /// Whether the Core keeps a Game's In-game Saves in files of its own under the save directory
+    /// rather than handing over its save memory, so the Game has no `.srm` Game37 could delete.
+    pub fn keeps_own_saves(&self) -> bool {
+        std::ptr::eq(self, &PPSSPP)
+    }
 }
 
 /// The Core for a System, or `None` for an External System, which never uses a Core, or for an

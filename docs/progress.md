@@ -198,7 +198,7 @@ The owner's `~/.config/game37/secrets.toml` holds a real SteamGridDB key (mode 6
   - A cancelled Core download stuck in DNS or connect lingers in the background until its 30 s
     timeout, then cleans up.
   - If `~/Games` is itself a mount point, the watcher misses a remount.
-  - Two Games in the same folder with the same stem but different extensions share save files.
+  - Two Games in the same folder with the same stem but different extensions share save files, so Delete save data on one deletes the other's too.
   - "No match" from SteamGridDB never expires; only a rename asks again.
   - The Artwork picker lists only the first page of results.
 - **From M5's last review:** items 1 and 2 (cover order, permanent 404s) were fixed in M6. Still open,
