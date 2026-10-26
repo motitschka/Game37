@@ -1,6 +1,6 @@
 # Game37 Milestones
 
-The build order for v1 (M1–M6), the road from the first beta to version 1.0 (B1–B3), and then the speedrun timer (M7, version 1.1). Each milestone leaves Game37 runnable and builds on the one before it. Story and requirement IDs refer to [user-stories.md](user-stories.md) and [requirements.md](requirements.md).
+The build order for v1 (M1–M6), Windows support (W), the road from the first beta to version 1.0 (B1–B3), and then the speedrun timer (M7, version 1.1). Each milestone leaves Game37 runnable and builds on the one before it. Story and requirement IDs refer to [user-stories.md](user-stories.md) and [requirements.md](requirements.md).
 
 Testing uses free, legal homebrew games and test ROMs, never commercial game files. Nothing from `~/Games/` is ever committed.
 
@@ -120,6 +120,22 @@ Testing uses free, legal homebrew games and test ROMs, never commercial game fil
 **Done when**
 - A fresh user account with no Config goes from First-run Setup to playing a homebrew game by following only the in-app steps and the README.
 - Search finds Games with both the keyboard and the controller.
+
+## W — Windows support
+
+**Goal:** Game37 runs on Windows 10 and 11 as it does on Linux. The owner asked for it before the 1.0 work (ADR 0015).
+
+**Scope**
+- **W1 Platform foundations:** Game37 builds for `x86_64-pc-windows-gnu`, cross-compiled in a container. Windows places for the Config, data and default Games Root; paths handed to Cores; Windows Cores from the build server; every Core's OpenGL context through SDL; Explorer for "Show file"; the app icon on the window. The Linux build is unchanged.
+- **W2 External emulators on Windows:** find each Standalone Emulator in its usual install places, choose an `.exe` when one isn't found (First-run Setup, the Console Page notice, Settings → Emulators), keep the choice in the Config, `winget install` commands or download pages instead of `flatpak install`, and Windows command lines for all eight emulators. Mockups first, for the Windows variants of Setup step 2, the notice and Settings → Emulators.
+- **W3 Installer and release checks:** an NSIS installer built in a container, the unit tests and a headless screenshot run under Wine, all in `scripts/release/`.
+- **W4 Docs:** the README's Windows install guide, and `docs/manual-checks-windows.md` for the tester.
+
+**Delivers:** FR-WIN-1–8 · NFR-1 · NFR-7
+
+**Done when**
+- The automated checks pass: the Windows build, the unit tests under Wine, a headless screenshot under Wine, and every Linux check as before.
+- On a real Windows 11 PC, the tester installs Game37 with the installer and works through `docs/manual-checks-windows.md`: a fresh account goes from First-run Setup to playing a homebrew Game on an Embedded System, an installed emulator starts a Game, a missing emulator's `.exe` can be chosen, and uninstalling leaves the Games and data in place.
 
 ## Road to 1.0
 

@@ -143,6 +143,19 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
   5. Download Cores for the chosen Embedded Systems.
   6. Optionally enter the API key.
 
+### Windows
+
+Built in milestone W (ADR 0015). Everything above applies on Windows too, except where this section says otherwise.
+
+- **FR-WIN-1** Game37 runs on Windows 10 and 11 x86_64 with the same screens, controls and features as on Linux.
+- **FR-WIN-2** On Windows the Config lives in `%APPDATA%\game37\`, Game37's data (library database, Cores, Artwork, logs) in `%LOCALAPPDATA%\game37\`, and the default Games Root is `%USERPROFILE%\Games`. Paths shown to the player use Windows separators.
+- **FR-WIN-3** Cores are the Windows builds (`.dll`) from the libretro build server.
+- **FR-WIN-4** Game37 finds each Standalone Emulator in its usual install places (its installer's folder and registry entry, winget's folders). When one isn't found, the player chooses its `.exe` from First-run Setup, from the Console Page notice or from Settings → Emulators, and the choice is kept in the Config. Settings → Emulators also shows where each found emulator is and lets the player choose a different `.exe`.
+- **FR-WIN-5** Where the Linux screens show a `flatpak install` command (First-run Setup, the missing-emulator notice), Windows shows the `winget install` command for emulators that have a winget package, and the emulator's download page for those that don't.
+- **FR-WIN-6** External emulators start with the Game file directly and fullscreen where they support it, as on Linux (FR-EXT-1), and Game37 comes back to the front when they exit.
+- **FR-WIN-7** "Show file in file manager" opens Explorer with the file selected.
+- **FR-WIN-8** Game37 is installed with an installer: Program Files, a Start menu entry with the app icon, and an uninstaller in Windows' Installed apps. Uninstalling removes the program only, never the Games Root, saves, Config or data.
+
 ### Speedrun timer
 
 Built in milestone 7, after v1.
@@ -167,13 +180,13 @@ Built in milestone 7, after v1.
 
 ## Non-functional requirements
 
-- **NFR-1 Platform:** Linux x86_64 (developed on Arch, GNOME, Wayland). Other platforms are out of scope.
+- **NFR-1 Platform:** Linux x86_64 (developed on Arch, GNOME, Wayland) and Windows 10 and 11 x86_64 (ADR 0015, FR-WIN). Other platforms are out of scope.
 - **NFR-2 Stack:** Rust, SDL3, OpenGL.
 - **NFR-3 Responsiveness:** Library navigation stays smooth with a library of thousands of Games. Artwork loads asynchronously and never blocks input.
 - **NFR-4 Emulation timing:** Embedded games run at their native frame rate without audio crackle on the owner's machine.
 - **NFR-5 Privacy:** No telemetry. Network access is limited to the libretro build server and SteamGridDB.
 - **NFR-6 Repo hygiene:** The public repo never contains game files, BIOS files, console keys, or API keys. `.gitignore` enforces this for the usual file types.
-- **NFR-7 Distribution:** v1 is built from source with `cargo build --release`. The README documents this. Game37 is not distributed as a Flatpak.
+- **NFR-7 Distribution:** On Linux, Game37 is built from source with `cargo build --release` or installed from a prebuilt tarball or the Nix flake; it is not distributed as a Flatpak. On Windows it is installed with an installer. The README documents each.
 - **NFR-8 License:** GPL-3.0-or-later, copyright Matei Novotny (ADR 0014). The full text is in `LICENSE`.
 
 ## Milestones
