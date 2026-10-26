@@ -78,15 +78,14 @@ impl Key {
         };
     }
 
-    /// Confirm on the focus. On the field it opens the on-screen keyboard for a controller; the
-    /// keyboard types into the field in place.
+    /// Confirm on the focus. On the field it opens the on-screen keyboard: only a controller's
+    /// Confirm gets there, since the field is a text field, where the keyboard's Enter is Start.
     fn confirm(&mut self) -> Go {
         match self.focus {
-            Focus::Field if self.kind == InputKind::Controller => {
+            Focus::Field => {
                 self.keyboard_open = true;
                 self.opened_with = self.entry.text().to_owned();
             }
-            Focus::Field => {}
             Focus::Skip => {
                 self.skip = true;
                 return Go::Next;
@@ -299,8 +298,10 @@ impl super::Step for Key {
         self.keyboard_open
     }
 
+    /// The focused field is a text field whatever the player last used, so the first key after a
+    /// switch from the controller already types (or erases) instead of acting.
     fn types_in_place(&self) -> bool {
-        !self.keyboard_open && self.focus == Focus::Field && self.kind == InputKind::Keyboard
+        !self.keyboard_open && self.focus == Focus::Field
     }
 }
 
@@ -473,6 +474,26 @@ mod tests {
         }
     }
 
+    /// The first keys after the controller was last used are read in the field's text mode too:
+    /// the step only learns the new input kind on the next frame, so a Backspace there must erase,
+    /// not go back to step 4 and throw the key away.
+    #[test]
+    fn the_first_keys_after_the_controller_already_type_into_the_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let (mut setup, mut ctx) = on_key(&path);
+        ctx.input_kind = InputKind::Controller;
+        setup.tick(&mut ctx);
+        let mut controls = Controls::new(InputKind::Controller);
+        let keys = [Ev::Typed("ab"), down(Keycode::Backspace), ctrl(Keycode::V)];
+        feed(&mut setup, &mut ctx, &mut controls, &keys, "cd");
+        assert_eq!(setup.step(), 5, "Backspace erased instead of going back");
+        let finish = [down(Keycode::Return)];
+        feed(&mut setup, &mut ctx, &mut controls, &finish, "");
+        let saved = config::load_api_key(&path).unwrap();
+        assert_eq!(saved.as_ref().map(config::ApiKey::expose), Some("acd"));
+    }
+
     /// Setup on step 5 after a frame in which the player used the keyboard.
     fn on_key_by_keyboard(config_path: &std::path::Path) -> (Setup, Ctx, Controls) {
         let (mut setup, mut ctx) = on_key(config_path);
@@ -575,7 +596,8 @@ mod tests {
         assert!(setup.text_input(), "the on-screen keyboard is open");
         typed(&mut setup, &mut ctx, "zz");
         act(&mut setup, &mut ctx, Action::Back);
-        assert!(!setup.text_input(), "Cancel closes it");
+        let keyboard = TextEntry::hints(InputKind::Controller, "Save");
+        assert_ne!(setup.hints(), keyboard, "Cancel closes it");
         assert_eq!(setup.step(), 5);
         act(&mut setup, &mut ctx, Action::Settings);
         let saved = config::load_api_key(&path).unwrap();
@@ -603,12 +625,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         let (mut setup, mut ctx) = on_key(&path);
-        assert!(
-            !setup.text_input(),
-            "no text field until the on-screen keyboard opens"
-        );
+        let keyboard = TextEntry::hints(InputKind::Controller, "Save");
+        assert_ne!(setup.hints(), keyboard, "the on-screen keyboard starts closed");
         act(&mut setup, &mut ctx, Action::Confirm);
         assert!(setup.text_input());
-        assert_eq!(setup.hints(), TextEntry::hints(InputKind::Controller, "Save"));
+        assert_eq!(setup.hints(), keyboard);
     }
 }
