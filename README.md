@@ -86,11 +86,14 @@ Systems played with a Core are **Embedded Systems**; the others are **External S
 ## Install
 
 Game37 runs on Linux on x86_64. It's developed on Arch Linux with GNOME on Wayland. The build below is
-checked on Arch, Fedora 44, Ubuntu 26.04 LTS and Debian 13; older releases may not package SDL3. Other
-platforms aren't supported.
+checked on Arch, Fedora 44, Ubuntu 26.04 LTS and Debian 13 (older releases may not package SDL3), and
+the Nix flake with nixpkgs 26.05. Other platforms aren't supported.
 
-You can [download a prebuilt binary](#prebuilt-binary-arch-linux) on Arch Linux, or
-[build it yourself](#build-from-source) on any of these distributions.
+There are three ways to get it:
+
+- a [prebuilt binary](#prebuilt-binary-arch-linux-and-ubuntu) for Arch Linux and Ubuntu;
+- the [Nix flake](#nixos) on NixOS;
+- [building it yourself](#build-from-source) on Arch, Fedora, Ubuntu or Debian.
 
 ### What Game37 needs
 
@@ -102,19 +105,29 @@ You can [download a prebuilt binary](#prebuilt-binary-arch-linux) on Arch Linux,
   need it.
 - **XWayland or an X session**, for PSP only. GNOME has XWayland.
 
-### Prebuilt binary (Arch Linux)
+### Prebuilt binary (Arch Linux and Ubuntu)
 
-The binary is built on Arch and uses the system's SDL3, so keep your Arch up to date (`sudo pacman
--Syu`).
+The binaries use your system's SDL3, so they need an up-to-date Arch (`sudo pacman -Syu`), or Ubuntu
+26.04 LTS or newer.
 
-1. Install what Game37 needs:
+1. Install what Game37 needs.
+
+   **Arch Linux:**
 
    ```bash
    sudo pacman -S --needed sdl3 sdl3_ttf fontconfig adwaita-fonts flatpak
    ```
 
-2. Download `game37-0.1.0-beta.1-x86_64-arch.tar.gz` and its `.sha256` file from the
-   [Releases page](https://github.com/motitschka/Game37/releases), then check and unpack it:
+   **Ubuntu:**
+
+   ```bash
+   sudo apt install libsdl3-0 libsdl3-ttf0 fontconfig flatpak
+   ```
+
+2. From the [Releases page](https://github.com/motitschka/Game37/releases), download the file for your
+   distribution and its `.sha256` file: `game37-0.1.0-beta.1-x86_64-arch.tar.gz` or
+   `game37-0.1.0-beta.1-x86_64-ubuntu.tar.gz`. Then check and unpack it; on Ubuntu, write `ubuntu` in
+   place of `arch`:
 
    ```bash
    sha256sum -c game37-0.1.0-beta.1-x86_64-arch.tar.gz.sha256
@@ -131,9 +144,42 @@ The binary is built on Arch and uses the system's SDL3, so keep your Arch up to 
 To start it from your app menu, see [Add Game37 to your app menu](#add-game37-to-your-app-menu); use
 `game37-0.1.0-beta.1/game37` in place of `target/release/game37` there.
 
+### NixOS
+
+The prebuilt binaries don't run on NixOS. Use Game37's Nix flake instead. It needs flakes turned on, and
+OpenGL and Flatpak in your NixOS configuration. Desktop environments usually turn on OpenGL already:
+
+```nix
+nix.settings.experimental-features = [ "nix-command" "flakes" ];
+hardware.graphics.enable = true; # OpenGL
+services.flatpak.enable = true; # for the External Systems' Standalone Emulators
+```
+
+Then set up Flathub, as in [step 3](#3-set-up-flathub) below.
+
+To try Game37 without installing it:
+
+```bash
+nix run github:motitschka/Game37/v0.1.0-beta.1
+```
+
+To install it, with an entry in your app menu, add the flake to your system flake:
+
+```nix
+# flake.nix, under inputs:
+game37.url = "github:motitschka/Game37/v0.1.0-beta.1";
+
+# Your NixOS configuration, with inputs passed in through specialArgs:
+environment.systemPackages = [ inputs.game37.packages.x86_64-linux.default ];
+```
+
+Nix builds Game37 on your machine the first time, which takes a few minutes; there's no binary cache
+yet. The libretro Cores Game37 downloads expect a few libraries that NixOS doesn't keep in `/usr/lib`.
+The flake loads them into Game37, so Embedded Systems work as on other distributions.
+
 ### Build from source
 
-The first build takes a few minutes.
+On NixOS, use the [flake](#nixos) instead. The first build takes a few minutes.
 
 #### 1. Install the build tools and libraries
 
