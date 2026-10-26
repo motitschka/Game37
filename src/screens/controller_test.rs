@@ -500,6 +500,16 @@ mod tests {
     }
 
     #[test]
+    fn playstation_face_buttons_are_labelled_with_their_glyphs() {
+        let view = PadView::new(&PadState::default(), ButtonStyle::PlayStation);
+        assert_eq!(
+            view.face.map(|l| l.label),
+            ["△", "○", "✕", "□"],
+            "top (Sort), right (Back), bottom (Confirm), left (Options)"
+        );
+    }
+
+    #[test]
     fn sticks_are_normalised_and_read_out_in_hundredths() {
         let stick = Stick::new(
             (0.62 * i16::MAX as f32) as i16,
@@ -554,6 +564,26 @@ mod tests {
         assert_eq!(tick_at(&mut nav, ctx, 2499), 2);
         assert_eq!(tick_at(&mut nav, ctx, 2500), 1);
         assert_eq!(nav.top().title(), "Settings");
+    }
+
+    #[test]
+    fn holding_back_leaves_with_the_xbox_style_too_where_back_is_east_not_south() {
+        {
+            let ctx = &mut ctx_with(&[pressed(Pad::East)]);
+            ctx.button_style = ButtonStyle::Xbox;
+            let mut nav = nav();
+            assert_eq!(tick_at(&mut nav, ctx, 0), 2);
+            assert_eq!(tick_at(&mut nav, ctx, 1500), 1, "East is Back on Xbox");
+        }
+        let ctx = &mut ctx_with(&[pressed(Pad::South)]);
+        ctx.button_style = ButtonStyle::Xbox;
+        let mut nav = nav();
+        assert_eq!(tick_at(&mut nav, ctx, 0), 2);
+        assert_eq!(
+            tick_at(&mut nav, ctx, 1500),
+            2,
+            "South is Confirm on Xbox, not Back"
+        );
     }
 
     #[test]
