@@ -50,7 +50,8 @@ playing, Artwork, the Details Page, the Options Menu, Settings and search all wo
 | M4 OpenGL rendering | N64, DS, PS1 and PSP inside Game37 | Done |
 | M5 Artwork, Details Page, Options Menu | SteamGridDB covers, per-Game page and actions | Done |
 | M6 Settings, search, First-run Setup | Everything a new player needs, without editing files | Done |
-| M7 Speedrun timer | Your own Splits per Game, LiveSplit-compatible | Planned |
+| 1.0 | Beta fixes, hand-checked on real Games, CI, AUR package | Planned |
+| M7 Speedrun timer (1.1) | Your own Splits per Game, LiveSplit-compatible | Planned |
 
 Details are in [docs/milestones.md](docs/milestones.md), and the current state in
 [docs/progress.md](docs/progress.md).

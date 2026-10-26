@@ -1,6 +1,6 @@
 # Game37 Milestones
 
-The build order for v1 (M1–M6), followed by the speedrun timer (M7). Each milestone leaves Game37 runnable and builds on the one before it. Story and requirement IDs refer to [user-stories.md](user-stories.md) and [requirements.md](requirements.md).
+The build order for v1 (M1–M6), the road from the first beta to version 1.0 (B1–B3), and then the speedrun timer (M7, version 1.1). Each milestone leaves Game37 runnable and builds on the one before it. Story and requirement IDs refer to [user-stories.md](user-stories.md) and [requirements.md](requirements.md).
 
 Testing uses free, legal homebrew games and test ROMs, never commercial game files. Nothing from `~/Games/` is ever committed.
 
@@ -121,9 +121,64 @@ Testing uses free, legal homebrew games and test ROMs, never commercial game fil
 - A fresh user account with no Config goes from First-run Setup to playing a homebrew game by following only the in-app steps and the README.
 - Search finds Games with both the keyboard and the controller.
 
-## M7 — Speedrun timer
+## Road to 1.0
 
-**Goal:** Speedrunners time their Runs in Game37 against their own Splits. This comes after v1.
+v1 (M1–M6) shipped as 0.1.0-beta.1 on 2026-10-26. Version 1.0 is the same scope, made solid and
+checked by hand: it adds no features. The speedrun timer (M7) follows as 1.1.
+
+### B1 — Beta hardening (0.1.0-beta.2)
+
+**Goal:** Known bugs are fixed before anyone else hits them.
+
+**Scope**
+- Fix the segfault when OpenGL is missing and Game37 falls back to the software renderer.
+- The low-severity leftovers from the M5 and M6 reviews and the smaller known gaps in
+  [progress.md](progress.md#known-issues-and-checks-only-the-owner-can-do). Each gets a GitHub issue;
+  fix it or explicitly defer it past 1.0.
+- Bugs reported against beta.1.
+- Close the user-story issues that shipped. Those still waiting on a manual check stay open until it passes.
+
+**Done when**
+- Every open bug issue is fixed or labelled as deferred past 1.0.
+- 0.1.0-beta.2 is released with the same checks as beta.1.
+
+### B2 — Owner verification
+
+**Goal:** Every "done when" of M1–M6 has been seen working in a real window with real Games.
+
+**Scope**
+- The owner works through [manual-checks.md](manual-checks.md). Each failure becomes an issue and is
+  fixed, then checked again.
+
+**Done when**
+- Every box in manual-checks.md is ticked, and every user story US-1 to US-39 is closed.
+
+### B3 — Release engineering
+
+**Goal:** Releasing is repeatable, and Game37 is easy to install and find.
+
+**Scope**
+- GitHub Actions: `cargo test`, clippy and `cargo fmt --check` on every push and pull request, with a
+  CI badge in the README.
+- The distro build and run checks used for beta.1 (clean Arch, Fedora, Ubuntu and Debian containers,
+  the tarballs in containers with only their runtime packages, the Nix flake) kept as scripts in
+  `scripts/`, so every release repeats them.
+- An AUR package.
+- `CHANGELOG.md`, and a `.desktop` file with AppStream metadata, so app menus and software centres
+  show Game37 with its icon.
+
+**Done when**
+- CI is green on `main`.
+- One release script builds and checks every tarball and the flake.
+- The AUR package installs and starts Game37 in a clean Arch container.
+
+### 1.0
+
+A release candidate (1.0.0-rc.1) once B1–B3 are done, then 1.0.0 if nothing new turns up.
+
+## M7 — Speedrun timer (1.1)
+
+**Goal:** Speedrunners time their Runs in Game37 against their own Splits. This comes after 1.0, as version 1.1.
 
 **Scope**
 - Mockups for the Speedrun Page, the Splits editor, the in-game splits panel and the Timer Window, added to `design/generate_mockups.py` before building.
