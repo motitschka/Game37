@@ -38,9 +38,20 @@ const FACE: [(Pad, f32, f32); 4] = [
 ];
 const DPAD: [Pad; 4] = [Pad::DPadUp, Pad::DPadRight, Pad::DPadDown, Pad::DPadLeft];
 
-#[derive(Default)]
 pub struct ControllerTest {
     hold: HoldToExit,
+    /// What the player last used, so the hint names the right way to leave: a controller holds
+    /// Back, but on the keyboard Esc leaves at once.
+    kind: InputKind,
+}
+
+impl Default for ControllerTest {
+    fn default() -> ControllerTest {
+        ControllerTest {
+            hold: HoldToExit::default(),
+            kind: InputKind::Controller,
+        }
+    }
 }
 
 impl ControllerTest {
@@ -203,6 +214,7 @@ impl Screen for ControllerTest {
     }
 
     fn tick(&mut self, ctx: &mut Ctx) -> Transition {
+        self.kind = ctx.input_kind;
         if self.hold.update(back_held(ctx), ctx.ticks) {
             Transition::Pop
         } else {
@@ -260,7 +272,11 @@ impl Screen for ControllerTest {
     }
 
     fn hints(&self) -> Vec<Hint> {
-        vec![Hint::new(&[Action::Back], "Hold to exit")]
+        let text = match self.kind {
+            InputKind::Controller => "Hold to exit",
+            InputKind::Keyboard => "Back",
+        };
+        vec![Hint::new(&[Action::Back], text)]
     }
 
     fn raw_controller(&self) -> bool {
@@ -576,5 +592,21 @@ mod tests {
             ControllerTest::new().hints(),
             vec![Hint::new(&[Action::Back], "Hold to exit")]
         );
+    }
+
+    #[test]
+    fn the_hint_names_hold_to_exit_on_a_controller_and_back_on_the_keyboard() {
+        let ctx = &mut ctx_with(&[]);
+        let mut nav = nav();
+        ctx.input_kind = InputKind::Controller;
+        tick_at(&mut nav, ctx, 0);
+        assert_eq!(
+            nav.top().hints(),
+            vec![Hint::new(&[Action::Back], "Hold to exit")]
+        );
+
+        ctx.input_kind = InputKind::Keyboard;
+        tick_at(&mut nav, ctx, 0);
+        assert_eq!(nav.top().hints(), vec![Hint::new(&[Action::Back], "Back")]);
     }
 }

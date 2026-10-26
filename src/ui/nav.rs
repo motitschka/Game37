@@ -38,6 +38,11 @@ pub trait Screen {
     fn tick(&mut self, _ctx: &mut Ctx) -> Transition {
         Transition::None
     }
+    /// Called once a frame for every screen below the top of the active tab's stack, so
+    /// asynchronous work (a Core download, say) keeps progressing while something covers it, e.g.
+    /// Hidden games, Controller test, a confirm modal or Search over Settings. No transition: a
+    /// covered screen can't leave or push on its own.
+    fn tick_covered(&mut self, _ctx: &mut Ctx) {}
     /// Whether the screen has asynchronous work pending that screenshot mode should keep
     /// ticking through before drawing the next step, e.g. a Core still downloading.
     fn busy(&self) -> bool {
@@ -269,16 +274,18 @@ impl Nav {
 
     /// Pushes the `entry` screen over the active one. Only a screen with chrome that is neither a
     /// modal nor typing into a field opens it, and only in a Nav with a library; anywhere else
-    /// `input` goes to the top screen as usual. When the entry screen is already on top, it gets the
-    /// entry's action instead of a second copy being pushed.
+    /// `input` goes to the top screen as usual. When the entry screen is already somewhere on the
+    /// active tab's stack, opening it pops back to it and hands it the entry's action instead of a
+    /// second copy being pushed (opening one while it is already open does nothing).
     fn open(&mut self, entry: Entry, input: Input, ctx: &mut Ctx) -> Flow {
         let top = self.top();
         let shut = top.is_modal() || !top.chrome() || top.text_input();
-        let current = top.entry();
         let Some(entries) = self.entries.as_ref().filter(|_| !shut) else {
             return self.apply(input, ctx);
         };
-        if current == Some(entry) {
+        let stack = &self.tabs[self.active].stack;
+        if let Some(i) = stack.iter().rposition(|s| s.entry() == Some(entry)) {
+            self.tabs[self.active].stack.truncate(i + 1);
             return self.apply(Input::Action(entry.action()), ctx);
         }
         let screen = match entry {
@@ -313,9 +320,15 @@ impl Nav {
         self.tabs[self.active].stack.push(screen);
     }
 
-    /// Polls the top screen's pending async work and carries out its transition. Call once a
+    /// Polls the top screen's pending async work and carries out its transition, after letting
+    /// every screen below it on the active tab's stack progress its own async work. Call once a
     /// frame, for every frame, not only when there is input.
     pub fn tick(&mut self, ctx: &mut Ctx) -> Flow {
+        let stack = &mut self.tabs[self.active].stack;
+        let top = stack.len() - 1;
+        for screen in &mut stack[..top] {
+            screen.tick_covered(ctx);
+        }
         let transition = self.top().tick(ctx);
         self.follow(transition)
     }
@@ -425,6 +438,39 @@ mod tests {
         assert_eq!(*left.borrow(), ["Home"], "clicking the active tab leaves nothing");
         nav.leave_all(ctx);
         assert_eq!(*left.borrow(), ["Home", "Home", "Consoles"]);
+    }
+
+    /// A screen that records when `tick_covered` reaches it.
+    struct Covered(&'static str, Rc<RefCell<Vec<&'static str>>>);
+
+    impl Screen for Covered {
+        fn title(&self) -> &str {
+            self.0
+        }
+        fn handle(&mut self, _: Input, _: &mut Ctx) -> Transition {
+            Transition::None
+        }
+        fn draw(&mut self, _: &mut Gfx<'_>, _: &Ctx) {}
+        fn hints(&self) -> Vec<Hint> {
+            Vec::new()
+        }
+        fn tick_covered(&mut self, _: &mut Ctx) {
+            self.1.borrow_mut().push(self.0);
+        }
+    }
+
+    #[test]
+    fn tick_covers_every_screen_below_the_top_of_the_active_tab() {
+        let covered = Rc::new(RefCell::new(Vec::new()));
+        let mut nav = Nav::single(Box::new(Covered("Base", covered.clone())));
+        nav.push(Box::new(Covered("Middle", covered.clone())));
+        nav.push(probe("Top", &Log::default(), || Transition::None));
+        nav.tick(&mut Ctx::empty());
+        assert_eq!(
+            *covered.borrow(),
+            ["Base", "Middle"],
+            "every screen below the top is ticked, the top through tick instead"
+        );
     }
 
     fn probe(title: &'static str, log: &Log, on_confirm: fn() -> Transition) -> Box<dyn Screen> {
@@ -735,6 +781,49 @@ mod tests {
             ],
             "a click on the pill arrives as the action"
         );
+    }
+
+    #[test]
+    fn opening_settings_already_lower_on_the_stack_pops_back_to_it() {
+        let log = Log::default();
+        let mut nav = library(&log);
+        act(&mut nav, Action::Settings);
+        nav.push(Box::new(spot("Hidden games", &log)));
+        assert_eq!(titles(&nav), ["Home", "Settings", "Hidden games"]);
+        act(&mut nav, Action::Settings);
+        assert_eq!(titles(&nav), ["Home", "Settings"], "pops back to Settings");
+        assert_eq!(
+            log.borrow().last(),
+            Some(&("Settings", Input::Action(Action::Settings))),
+            "Settings gets the action"
+        );
+    }
+
+    #[test]
+    fn opening_search_already_lower_on_the_stack_pops_back_to_it() {
+        let log = Log::default();
+        let mut nav = library(&log);
+        act(&mut nav, Action::Search);
+        nav.push(Box::new(spot("Details Page", &log)));
+        assert_eq!(titles(&nav), ["Home", "Search", "Details Page"]);
+        act(&mut nav, Action::Search);
+        assert_eq!(titles(&nav), ["Home", "Search"], "pops back to Search");
+        assert_eq!(
+            log.borrow().last(),
+            Some(&("Search", Input::Action(Action::Search))),
+            "Search gets the action"
+        );
+    }
+
+    #[test]
+    fn settings_then_search_still_pushes_search_and_settings_pops_back_to_it() {
+        let log = Log::default();
+        let mut nav = library(&log);
+        act(&mut nav, Action::Settings);
+        act(&mut nav, Action::Search);
+        assert_eq!(titles(&nav), ["Home", "Settings", "Search"], "Search is pushed");
+        act(&mut nav, Action::Settings);
+        assert_eq!(titles(&nav), ["Home", "Settings"], "pops back to Settings");
     }
 
     #[test]
