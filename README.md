@@ -14,8 +14,10 @@ a single console-style menu, with a controller or with mouse and keyboard.
 
 ## Status
 
-Game37 v1 is complete: First-run Setup, the library, both ways of playing, Artwork, the Details Page,
-the Options Menu, Settings and search all work today.
+**Beta.** Version 0.1.0-beta.1 is the first public release: everything planned for v1 is in, but it has
+mostly been played with homebrew and test programs so far. First-run Setup, the library, both ways of
+playing, Artwork, the Details Page, the Options Menu, Settings and search all work. Please
+[report what breaks](https://github.com/motitschka/Game37/issues).
 
 | Milestone | What it brings | State |
 |---|---|---|
@@ -81,39 +83,188 @@ Listed in System Order: Nintendo first, then Sony, each by European release date
 
 Systems played with a Core are **Embedded Systems**; the others are **External Systems**.
 
-## Requirements
+## Install
 
-- Linux on x86_64. Game37 is developed on Arch Linux with GNOME on Wayland; other platforms aren't
-  supported.
-- To build: the Rust toolchain (1.88 or newer), a C compiler (`build.rs` compiles a small C file), and
-  the SDL3 and SDL3_ttf development packages for your distribution.
-- At runtime: OpenGL, `fc-match` (from fontconfig) to find the Adwaita Sans font (GNOME's interface
-  font; fontconfig picks a fallback if it's missing, and Game37 won't start if `fc-match` itself isn't
-  on your `PATH`), Flatpak with the Flathub remote enabled for the External Systems' Standalone
-  Emulators, and XWayland or an X session for PSP.
+Game37 runs on Linux on x86_64. It's developed on Arch Linux with GNOME on Wayland. The build below is
+checked on Arch, Fedora 44, Ubuntu 26.04 LTS and Debian 13; older releases may not package SDL3. Other
+platforms aren't supported.
 
-On Arch Linux:
+You can [download a prebuilt binary](#prebuilt-binary-arch-linux) on Arch Linux, or
+[build it yourself](#build-from-source) on any of these distributions.
+
+### What Game37 needs
+
+- **SDL3 and SDL3_ttf**, version 3.2 or newer.
+- **OpenGL**, which every desktop has.
+- **fontconfig's `fc-match`**, to find the Adwaita Sans font (GNOME's interface font). fontconfig picks
+  another font if Adwaita Sans is missing, but Game37 won't start without `fc-match`.
+- **Flatpak with Flathub**, for the Standalone Emulators of the External Systems. Embedded Systems don't
+  need it.
+- **XWayland or an X session**, for PSP only. GNOME has XWayland.
+
+### Prebuilt binary (Arch Linux)
+
+The binary is built on Arch and uses the system's SDL3, so keep your Arch up to date (`sudo pacman
+-Syu`).
+
+1. Install what Game37 needs:
+
+   ```bash
+   sudo pacman -S --needed sdl3 sdl3_ttf fontconfig adwaita-fonts flatpak
+   ```
+
+2. Download `game37-0.1.0-beta.1-x86_64-arch.tar.gz` and its `.sha256` file from the
+   [Releases page](https://github.com/motitschka/Game37/releases), then check and unpack it:
+
+   ```bash
+   sha256sum -c game37-0.1.0-beta.1-x86_64-arch.tar.gz.sha256
+   tar -xzf game37-0.1.0-beta.1-x86_64-arch.tar.gz
+   ```
+
+3. Set up Flathub, as in [step 3](#3-set-up-flathub) below.
+4. Start it:
+
+   ```bash
+   ./game37-0.1.0-beta.1/game37
+   ```
+
+To start it from your app menu, see [Add Game37 to your app menu](#add-game37-to-your-app-menu); use
+`game37-0.1.0-beta.1/game37` in place of `target/release/game37` there.
+
+### Build from source
+
+The first build takes a few minutes.
+
+#### 1. Install the build tools and libraries
+
+Pick your distribution. Each line also installs Git, fontconfig and Flatpak.
+
+**Arch Linux:**
 
 ```bash
-sudo pacman -S --needed rust base-devel sdl3 sdl3_ttf fontconfig adwaita-fonts flatpak
+sudo pacman -S --needed rust base-devel git sdl3 sdl3_ttf fontconfig adwaita-fonts flatpak
 ```
 
-If Flathub isn't set up yet, add it once:
+**Fedora:**
+
+```bash
+sudo dnf install gcc pkgconf-pkg-config git SDL3-devel SDL3_ttf-devel fontconfig flatpak
+```
+
+**Debian and Ubuntu:**
+
+```bash
+sudo apt install build-essential pkg-config git curl libsdl3-dev libsdl3-ttf-dev fontconfig flatpak
+```
+
+#### 2. Install Rust
+
+Game37 needs Rust 1.88 or newer. On Arch, the `rust` package from step 1 is new enough: skip this
+step. Elsewhere the distribution's Rust is often older, so install it with rustup, the official
+installer, and accept its defaults:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Then open a new terminal, so `cargo` is on your `PATH`, and check the version:
+
+```bash
+cargo --version
+```
+
+#### 3. Set up Flathub
+
+The External Systems' Standalone Emulators come from Flathub. If it isn't set up yet, add it once:
 
 ```bash
 flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 ```
 
-## Build and run
+#### 4. Get the source
 
 ```bash
-git clone https://github.com/motitschka/Game37.git
+git clone --branch v0.1.0-beta.1 https://github.com/motitschka/Game37.git
 cd Game37
+```
+
+Leave out `--branch v0.1.0-beta.1` to get the latest development version instead of this release.
+
+#### 5. Build
+
+```bash
 cargo build --release
+```
+
+The first build downloads the Rust libraries Game37 uses. When it's done, the program is at
+`target/release/game37`.
+
+#### 6. Start Game37
+
+```bash
 ./target/release/game37
 ```
 
-Game37 isn't packaged; you run it from the build. F11 switches between window and fullscreen.
+The first start opens First-run Setup; see [Setting up](#setting-up). F11 switches between window and
+fullscreen.
+
+### Add Game37 to your app menu
+
+From the `Game37` folder, copy the program to `~/.local/bin` and add a menu entry for it:
+
+```bash
+install -Dm755 target/release/game37 ~/.local/bin/game37
+```
+
+```bash
+mkdir -p ~/.local/share/applications
+```
+
+```bash
+cat > ~/.local/share/applications/game37.desktop <<EOF
+[Desktop Entry]
+Type=Application
+Name=Game37
+Comment=Play your Nintendo and Sony games
+Exec=$HOME/.local/bin/game37
+Terminal=false
+Categories=Game;Emulator;
+EOF
+```
+
+Game37 then shows up in your app menu. The program is a single file: everything else it needs is
+downloaded or created at first start, in the places listed under
+[Where your data lives](#where-your-data-lives).
+
+### Updating
+
+From the `Game37` folder, fetch the new release, check out its tag (shown on the
+[Releases page](https://github.com/motitschka/Game37/releases); `v0.1.0-beta.2` is an example) and build
+again:
+
+```bash
+git fetch --tags
+```
+
+```bash
+git checkout v0.1.0-beta.2
+```
+
+```bash
+cargo build --release
+```
+
+If you added Game37 to your app menu, run the `install` line from that section again. Your Config,
+library, saves and states live outside the `Game37` folder and stay as they are.
+
+### If the build fails
+
+- **It fails at `sdl3-sys` or `sdl3-ttf-sys`, or the last step can't find `-lSDL3` or `-lSDL3_ttf`:**
+  the SDL3 or SDL3_ttf development package from step 1 is missing, or older than 3.2.
+- **`linker 'cc' not found`, or `cc` missing:** the C compiler from step 1 is missing.
+- **Errors about `edition2024`, or compile errors in Game37's own code:** your Rust is probably older
+  than 1.88; check with `cargo --version`. Install Rust with rustup (step 2), or run `rustup update` if
+  you already use rustup.
 
 ## Setting up
 
