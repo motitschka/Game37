@@ -306,6 +306,10 @@ impl Step for Cores {
         !self.queue.running()
     }
 
+    fn busy(&self) -> bool {
+        self.queue.running()
+    }
+
     fn handle(&mut self, input: Input, _: &mut Model, ctx: &mut Ctx) -> Go {
         match input {
             Input::Action(Action::Confirm) => return self.confirm(ctx),
@@ -361,6 +365,7 @@ mod tests {
     use crate::cores::testing::manual;
     use crate::cores::{DownloadState, MESEN};
     use crate::systems::SYSTEMS;
+    use crate::ui::input::{InputKind, glyph_label};
     use crate::ui::nav::Screen;
     use std::cell::RefCell;
     use std::fs;
@@ -557,6 +562,38 @@ mod tests {
         setup.tick(ctx);
         assert_eq!(setup.steps[setup.at].focused_button(), Some(Button::Continue));
         assert_eq!(hints(&setup), ["Continue", "Back"]);
+    }
+
+    #[test]
+    fn setup_is_busy_while_a_core_downloads() {
+        let (dir, mut ctx, started) = world();
+        let ctx = &mut ctx;
+        let mut setup = on_cores(dir.path(), &["nes"], ctx);
+        assert!(setup.busy(), "Mesen is downloading");
+        set(&started, 0, DownloadState::Done(ctx.data_dir.clone()));
+        setup.tick(ctx);
+        assert!(!setup.busy());
+    }
+
+    #[test]
+    fn on_the_keyboard_the_focused_continue_hints_enter_not_ctrl_comma() {
+        let (dir, mut ctx, started) = world();
+        let ctx = &mut ctx;
+        let mut setup = on_cores(dir.path(), &["nes"], ctx);
+        set(&started, 0, DownloadState::Done(ctx.data_dir.clone()));
+        ctx.input_kind = InputKind::Keyboard;
+        setup.tick(ctx);
+        assert_eq!(
+            setup.hints(),
+            [
+                Hint::new(&[Action::Confirm], "Continue"),
+                Hint::new(&[Action::Back], "Back")
+            ]
+        );
+        let style = ctx.button_style;
+        assert_eq!(glyph_label(Action::Confirm, InputKind::Keyboard, style), "Enter");
+        act(&mut setup, ctx, Action::Confirm);
+        assert_eq!(setup.step(), 5, "Enter on the focused Continue goes on");
     }
 
     #[test]

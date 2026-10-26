@@ -101,11 +101,12 @@ shot m6-setup-folders "$root/missing.toml" \
 # Cores, which the smoke data dirs already have, so nothing downloads
 shot m6-setup-cores "$root/missing.toml" "confirm,down,down,right,right,confirm,settings,confirm,settings"
 # First-run Setup step 5: NES ticked, step 2 passed over, Create folders on step 3, on through the
-# placeholder step 4, to the SteamGridDB key field, typing into it without finishing (so no Config
-# appears: the shots here share missing.toml).
+# Cores on step 4 (already in the smoke data dir, so nothing downloads), to the SteamGridDB key
+# field, typing into it on the keyboard without finishing (so no Config appears: the shots here
+# share missing.toml).
 shot m6-setup-key "$root/missing.toml" "confirm,settings,confirm,settings,settings,text:abcdef0123456789"
 # First-run Setup's Finish: NES ticked, step 2 passed over, Create folders on step 3, on through
-# the placeholder step 4 and the (here empty) key step, then Finish, which writes its own Config
+# the Cores on step 4 and the (here empty) key step, then Finish, which writes its own Config
 # in the smoke dir and switches to Home. The shots above share missing.toml, so check no Finish
 # wrote it.
 shot m6-setup-finish "$root/setup-finish.toml" "confirm,settings,confirm,settings,settings,settings,wait:5"
