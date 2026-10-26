@@ -1,6 +1,6 @@
 # Game37 progress and handoff
 
-Where the build stands after milestone 5, written so a new chat can pick up M6 without this one's
+Where the build stands after milestone 6, written so a new chat can pick up M7 without this one's
 history. The specs are still the source of truth: [requirements.md](requirements.md),
 [user-stories.md](user-stories.md), [milestones.md](milestones.md) and the [ADRs](adr/). This file
 covers what they don't: what's built, where it lives, how to check it, the decisions made along the
@@ -15,12 +15,13 @@ way, and what's still open.
 | M3 Embedded player (software) | Done, reviewed, regression-checked | `m3-embedded` | Yes |
 | M4 OpenGL hardware rendering | Done, reviewed, regression-checked | `m4-opengl` | Yes |
 | M5 Artwork, Details Page, Options Menu | Done, reviewed twice, regression-checked | `m5-artwork` | Yes |
-| M6 Settings, search, First-run Setup | Not started | | |
+| M6 Settings, search, First-run Setup | Done, reviewed (three reviewers), regression-checked | `m6-settings` | Waiting for the owner's OK |
 | M7 Speedrun timer (after v1) | Specified 2026-10-21, not started | | |
 
 Each milestone branch builds on the previous one. `main` has everything through M5 (merged on
-2026-10-25), plus the M7 spec, the license and the README. Start M6 from `main`, on a new branch
-`m6-…`.
+2026-10-25), plus the M7 spec, the license and the README. M6 is on `m6-settings` and waits for the
+owner's OK to merge. With M6 merged, v1 is complete. Start M7 from `main` once it has M6, on a new
+branch `m7-…`.
 
 ## Code map
 
@@ -37,6 +38,9 @@ Each milestone branch builds on the previous one. `main` has everything through 
 | `src/session/` | Running an embedded Game: `sdl.rs` (session, audio, timing, GL host choice, start state), `input.rs` (ports, pads, keyboard, pointer, sticks, pause trigger), `timing.rs`, `saves.rs` (In-game Saves), `states.rs` (Save States, Resume State, slot info), `gl.rs` / `glx.rs` (GL hosts) |
 | `src/screens/` | Home, game grid (See all, Console Pages), Carousel, `details.rs` (Details Page), `options.rs` (Options Menu with its replace picker, slot picker and rename view), `artwork_picker.rs`, Pause Menu, Playing, download, messages |
 | `src/ui/` | `gfx.rs` (drawing over SDL_Renderer, game textures, the Artwork texture cache), `cover.rs` (covers with placeholder fallback), `text_entry.rs` (text field and on-screen keyboard; M6 search reuses it), `nav.rs` (screens, tabs, modals, `Transition::Replace`), `controls.rs` / `input.rs` (menu input, text mode), `chrome.rs`, `text.rs`, `theme.rs` |
+| `src/screens/settings/` | Settings (M6): `mod.rs` (sections column, the `Section` trait, `Row`), one file per section (`library.rs`, `games_root.rs`, `hidden.rs`, `artwork.rs` with the key modal, `bios.rs`, `cores.rs`, `controls.rs`, `display.rs`, `about.rs`) |
+| `src/screens/setup/` | First-run Setup (M6): `mod.rs` (frame, `Model`, `Step` trait, Finish), steps `systems.rs`, `emulators.rs`, `folders.rs`, `cores.rs`, `key.rs` |
+| `src/screens/search.rs`, `controller_test.rs`, `confirm.rs`, `core_queue.rs` | Search; Controller test (raw pad state from `ctx.controllers`); the reusable confirmation modal; the Core download queue shared by Settings and Setup |
 | `src/app.rs`, `src/cli.rs` | Window and loop (events fed one at a time in the text mode the top screen wants), screenshot mode, command-line options |
 
 ## How to check everything
@@ -44,15 +48,16 @@ Each milestone branch builds on the previous one. `main` has everything through 
 - `cargo test`: 464 unit and integration tests, no external data or network needed.
 - `cargo test -- --ignored`: 13 tests against real Cores and test ROMs in `.testdata/` (below).
 - `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check`.
-- `scripts/smoke-screens.sh [out-dir]` renders every screen and flow from M1–M5 headless (27 shots,
-  about 15 s) into `target/smoke/`. Look at them before every new milestone, and add a shot for
+- `scripts/smoke-screens.sh [out-dir]` renders every screen and flow from M1–M6 headless (52 shots,
+  about a minute) into `target/smoke/`. Look at them before every new milestone, and add a shot for
   every new screen. A worktree has no `.testdata/`: symlink it in (it's gitignored) and remove the
   link afterwards.
 
 Screenshot mode drives the real app headless: `cargo run -- --screenshot out.bmp --config <cfg>
 --data-dir <dir> --actions nexttab,right,confirm,wait:120,back --frames 300`. Actions are `up`,
-`down`, `left`, `right`, `confirm`, `back`, `options`, `sort`, `prevtab`, `nexttab`, `start`, `click:X:Y`
-and `wait:N`. While a Game runs, `back` is Esc. `--missing-emulators wiiu,ps3` simulates missing
+`down`, `left`, `right`, `confirm`, `back`, `options`, `sort`, `prevtab`, `nexttab`, `start`, `search`,
+`settings`, `paste`, `click:X:Y`, `text:<chars>` (types them; no commas) and `wait:N`. A `text:` or
+`click:` step switches the input kind to the keyboard, any other step to the controller. While a Game runs, `back` is Esc. `--missing-emulators wiiu,ps3` simulates missing
 Standalone Emulators. `--artwork` turns real Artwork on (key from `secrets.toml` next to `--config`,
 cache under `--data-dir`); without it screenshot mode stays offline with placeholders. **Use a fresh
 `--data-dir` per run**: the Carousel remembers its position in the library database, so a reused one
@@ -146,6 +151,27 @@ The owner's `~/.config/game37/secrets.toml` holds a real SteamGridDB key (mode 6
     heroes 1920×1080), cached in memory up to 256 MB; textures are dropped after 300 frames unseen
     or over 128 MB.
 
+- **M6 (Settings, search, First-run Setup):** the decisions are in [m6-design.md](m6-design.md)
+  and the mockups `design/mockups/17-*` to `32-*`. Beyond them:
+  - Search and Settings open from anywhere with chrome that isn't a modal or a text field. When one
+    is already on the stack, opening it pops back to it rather than pushing a second copy.
+  - Search hides the Home/Consoles tabs so its field has the top bar. Other pushed screens still
+    draw the tabs with a "‹ title" crumb; the mockups show only the crumb (open, below).
+  - Screens below the top get `tick_covered`, so Settings' Core downloads keep going under a modal.
+  - The Controller test turns off menu input from pads (`raw_controller`) and leaves on a 1.5 s
+    hold of Back; keyboard and mouse still work.
+  - Ctrl+V pastes the clipboard into any text field (`Action::Paste`, read in `app.rs`).
+  - The Config is rewritten with `toml_edit`, so a hand-written Config keeps its comments; files
+    are replaced atomically and fsynced. `config.toml` keeps its mode (0644 when new), and
+    `secrets.toml` is always 0600.
+  - The menu settings (button style, window mode, last fullscreen) live in the library database.
+    The window mode takes effect at the next start.
+  - First-run Setup writes nothing to the Config until Finish. Its default Games Root is `~/Games`,
+    or `<data dir>/Games` in screenshot mode. Finish switches the running app to Home through
+    `ctx.setup_finished` and `app.rs` `finish_setup`, the same steps as a normal start.
+  - Screenshot mode needs both `--config` and `--data-dir`, so it never touches the real Config or
+    data. `--screen controller-test` shows the Controller test with a fake pad.
+
 ## Known issues and checks only the owner can do
 
 - **N64:** the test demo stays black even in software mode; it doesn't boot on Mupen64Plus-Next. The
@@ -174,25 +200,35 @@ The owner's `~/.config/game37/secrets.toml` holds a real SteamGridDB key (mode 6
     timeout, then cleans up.
   - If `~/Games` is itself a mount point, the watcher misses a remount.
   - Two Games in the same folder with the same stem but different extensions share save files.
-  - Hidden Games can't be unhidden until M6's Settings.
   - "No match" from SteamGridDB never expires; only a rename asks again.
   - The Artwork picker lists only the first page of results.
-- **Open from M5's last review (low severity, not fixed; do 1 and 2 first in M6):**
-  1. Among visible Games, the last cover drawn is fetched first, so the focused top-left cover of a
-     new Console Page loads last (~10 s for 15 covers). Rank by the first ask's tick or by focus
-     (`src/artwork.rs` ~368–371, ~886–888).
-  2. Every file-host status counts as temporary, so a Game whose top files permanently return 404
-     repeats a listing and three downloads every run. Treat 404/410 as unusable files
-     (`src/artwork.rs` ~1304, ~1308).
-  3. `all_favorites` doesn't filter hidden rows, and Hide unfavorites in a second UPDATE outside a
-     transaction (`db.rs` ~380, `options.rs` ~350).
-  4. Quit is now handled after that frame's watcher, launcher, `nav.tick` and `sdl::start`, so a
-     download finishing in the frame the window closes starts and at once ends a session
-     (`app.rs` ~150–208).
-  5. Mouse events set `controls.kind` when collected, key and pad events later in `feed`, so a pad
-     press then a mouse move in one frame leaves controller glyphs (`app.rs` ~630–646).
-  6. No test checks that `sdl::start` pushes the slot-failure Message over the session (deleting the
-     `nav.push` at `session/sdl.rs` ~535 keeps the suite green).
+- **From M5's last review:** items 1 and 2 (cover order, permanent 404s) were fixed in M6. Still open,
+  low severity:
+  - `all_favorites` doesn't filter hidden rows, and Hide unfavorites in a second UPDATE outside a
+    transaction (`db.rs`, `options.rs`).
+  - Quit is handled after that frame's watcher, launcher, `nav.tick` and `sdl::start`, so a
+    download finishing in the frame the window closes starts and at once ends a session (`app.rs`).
+  - Mouse events set `controls.kind` when collected, key and pad events later in `feed`, so a pad
+    press then a mouse move in one frame leaves controller glyphs (`app.rs`).
+  - No test checks that `sdl::start` pushes the slot-failure Message over the session.
+- **Open from M6's reviews (low severity, not fixed):**
+  - If opening the library fails at Setup's Finish, Game37 exits after the Config was written, so
+    the next start hits the same failure without Setup (`app.rs` `finish_setup`).
+  - After a key change or Remove key, the old Artwork service's network thread finishes its current
+    lookup (up to two more requests with the old key) while the new one starts (`artwork.rs`
+    `Workers`); a cancel flag checked before each request would stop it.
+  - Two quick F11 presses can be lost, because SDL applies fullscreen late and `toggle_fullscreen`
+    reads the current state (`gfx.rs`).
+  - Pushed screens draw the Home/Consoles tabs; the mockups show only the crumb.
+- **M6, manual, in a real window:**
+  - a fresh user account with no Config: First-run Setup to playing a homebrew Game, with real
+    Flatpak detection and Core downloads (M6's "done when"; checked headless only);
+  - the Controller test with real pads, including hold to exit;
+  - Menu button style with a real pad in each style;
+  - Startup window mode across restarts;
+  - entering the real key in Settings and covers appearing without a restart;
+  - moving the Games Root in Settings while Game37 runs, and the watcher following it;
+  - typing in Search with a real keyboard, and Ctrl+V paste.
 
 ## How the work was run
 
@@ -215,6 +251,18 @@ Lessons from M5:
   one at a time, not chained with `&&`.
 - A large milestone's diff needs two reviewers split by area; one ran out of context halfway.
 
+Lessons from M6:
+- Builders reached their 120k context mark after one or two steps, mostly from reading. Briefs that
+  quote the plan, name the line ranges to read, and carry one step each (with "commit after each
+  step") finished; a fresh agent picked up the next step from the last one's notes in the same
+  worktree.
+- Three usage-limit stops killed every running agent; committing their worktrees' uncommitted work
+  as a WIP commit before restarting kept nothing from being lost.
+- Merging parallel branches into the shared files (`app.rs`, `settings/mod.rs`, the smoke script)
+  conflicted each time; the orchestrator resolved them, keeping both sides, then ran the full suite.
+- Three reviewers split by area (Settings/Search/input, First-run Setup, the rest) each fit in
+  their context; one reviewer for the whole milestone would not have.
+
 Test data was only downloaded after the owner approved the exact list (file, source, size). Keep
 asking first for anything new.
 
@@ -223,21 +271,20 @@ Cost from the `agent-cost` skill (input-equivalent tokens): M1 10.9M, M3 10.7M, 
 review rounds). M2 wasn't measured separately. Measure a milestone with
 `agent-cost --project Game37 --since <its start time>`.
 
-## Next: M6 (Settings, search, First-run Setup)
+## Next: M7 (Speedrun timer, after v1)
 
-Scope is in [milestones.md](milestones.md#m6--settings-search-first-run-setup). Points to know
-before starting:
+Scope is in [milestones.md](milestones.md#m7--speedrun-timer): FR-RUN-1–14, US-40–45, ADRs 0012
+and 0013, and mockups 11–16, which already exist. Points to know before starting:
 
-- **First:** the two Artwork leftovers above (focused cover first, permanent 404s recorded).
-- **Settings → SteamGridDB API key:** writes `secrets.toml` next to the Config (mode 600) and should
-  restart the Artwork service so it applies without a restart (today the key is read only at start).
-  Use `config::ApiKey`; never show the key in full.
-- **Settings → Hidden games:** unhide with `Library::set_hidden(id, false)`; Hide also cleared the
-  Favorite, which stays cleared.
-- **Search:** reuse `ui/text_entry.rs` (`TextEntry::new`, `handle → Outcome`, `draw_field`,
-  `draw_keyboard`, `hints`) and `Screen::text_input()`; results are a grid with System badges.
-- **README:** rewrite "Setting up" for First-run Setup, and describe Settings and search.
-
-M7, the speedrun timer, comes after v1: own Splits per Game in LiveSplit `.lss` files, a timer beside
-embedded games, and a separate Timer Window for every Run (FR-RUN-1–14, ADRs 0012 and 0013).
-It needs M6's on-screen keyboard and Settings.
+- **First:** merge M6 into `main` (with the owner's OK), regression-check, and branch `m7-…` from it.
+- **Categories are LiveSplit `.lss` files** under `<Games Root>/splits/<system>/`, picked up live like
+  Games, so the watcher (`library/watch.rs`) and the Games Root folders from First-run Setup and
+  Settings → Games Root location need a `splits/` folder too.
+- **Settings → Speedrun controls** is a new Settings section: add it as a `Section` in
+  `src/screens/settings/` (see `controls.rs` for choice rows); the menu settings live in the
+  library database (`Library::button_style()` is the model).
+- **The Splits editor** types names with the on-screen keyboard (`ui/text_entry.rs`), as Rename,
+  Search and the key fields do.
+- **Controller split input** while an External emulator has focus, and the Timer Window, are new
+  ground: the Controller test's raw pad snapshot (`ctx.controllers`) and `raw_controller` hook are
+  the closest existing pieces.
