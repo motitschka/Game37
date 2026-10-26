@@ -23,7 +23,7 @@ const STATUS_X: f32 = RX + 320.0;
 /// The BIOS files the Missing text asks for. Beetle PSX HW is the only Core with a `required_bios`
 /// list, so, like launching's message (`launch::missing_bios_message`), this names PS1's three
 /// region BIOS files rather than every name the check accepts. A test keeps the two the same.
-const ASK_FOR: &str = "scph5500.bin, scph5501.bin or scph5502.bin";
+pub(crate) const ASK_FOR: &str = "scph5500.bin, scph5501.bin or scph5502.bin";
 
 /// One System's BIOS status.
 #[derive(Debug, Clone, PartialEq, Eq)]

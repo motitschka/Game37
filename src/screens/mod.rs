@@ -4,6 +4,7 @@ pub mod artwork_picker;
 mod carousel;
 pub mod confirm;
 pub mod controller_test;
+pub mod core_queue;
 pub mod details;
 pub mod download_core;
 pub mod game_grid;

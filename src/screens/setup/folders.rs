@@ -410,9 +410,13 @@ mod tests {
         setup
     }
 
-    /// Setup on step 3, Embedded Systems only being ticked.
+    /// Setup on step 3, Embedded Systems only being ticked. The Cores step after it gets downloads
+    /// that never run on their own, in a data dir under `root` that nothing writes.
     fn on_folders(root: &Path, ids: &[&str]) -> (Setup, Ctx) {
         let mut ctx = Ctx::empty();
+        ctx.data_dir = root.join("data");
+        ctx.start_download = Box::new(|_, _| crate::cores::testing::manual().0);
+        ctx.start_assets_download = Box::new(|_| crate::cores::testing::manual().0);
         let mut setup = ticking(root, ids);
         act(&mut setup, &mut ctx, Action::Settings);
         assert_eq!(setup.step(), 3);

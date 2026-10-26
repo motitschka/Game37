@@ -6,7 +6,7 @@
 
 mod about;
 mod artwork;
-mod bios;
+pub(super) mod bios;
 mod controls;
 mod cores;
 mod display;
