@@ -431,6 +431,9 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
                 finish_setup(&mut nav, &mut ctx, config, |ctx| {
                     start_shot_library(ctx, shot.artwork)
                 })?;
+                // Finish already wrote the Config; later input in this step must not reach
+                // Setup, which would save again or step it back after it is gone.
+                break;
             }
             if let Some(game) = ctx.launch.take() {
                 launcher.start(&game, &mut nav, &ctx);
@@ -670,12 +673,20 @@ fn feed(
                     }
                 }
                 started(nav, ctx);
+                // Finish already wrote the Config; later input in this frame must not reach
+                // Setup, which would save again or step it back after it is gone.
+                if ctx.setup_finished.is_some() {
+                    return Flow::Continue;
+                }
                 continue;
             }
             if nav.handle(input, hits, ctx) == Flow::Quit {
                 return Flow::Quit;
             }
             started(nav, ctx);
+            if ctx.setup_finished.is_some() {
+                return Flow::Continue;
+            }
         }
     }
     controls.text = wants_text(nav);
@@ -1134,5 +1145,66 @@ mod tests {
         );
         assert_eq!(flow, Flow::Continue);
         assert_eq!(*log.borrow(), paste_inputs("ab"));
+    }
+
+    /// A screen that sets `ctx.setup_finished` on its first input and records every input it is
+    /// handed, for the test below.
+    struct FinishesSetupOnFirstInput(std::rc::Rc<std::cell::RefCell<Vec<Input>>>);
+
+    impl crate::ui::nav::Screen for FinishesSetupOnFirstInput {
+        fn title(&self) -> &str {
+            "Setup"
+        }
+        fn handle(&mut self, input: Input, ctx: &mut Ctx) -> crate::ui::nav::Transition {
+            let mut log = self.0.borrow_mut();
+            log.push(input);
+            if log.len() == 1 {
+                ctx.setup_finished = Some(crate::config::Config {
+                    games_root: std::path::PathBuf::from("/games"),
+                });
+            }
+            crate::ui::nav::Transition::None
+        }
+        fn draw(&mut self, _: &mut Gfx<'_>, _: &Ctx) {}
+        fn hints(&self) -> Vec<crate::ui::nav::Hint> {
+            Vec::new()
+        }
+    }
+
+    /// Input later in the same frame must not reach Setup once Finish has set
+    /// `ctx.setup_finished`: the caller takes it and switches away before the next input, so a
+    /// second input reaching the same screen in this batch would either save again or step Setup
+    /// back after Finish.
+    #[test]
+    fn feed_stops_handling_input_once_setup_has_finished() {
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut nav = Nav::single(Box::new(FinishesSetupOnFirstInput(log.clone())));
+        let mut ctx = Ctx::empty();
+        let mut controls = Controls::new(InputKind::Controller);
+        let feeds = [
+            Feed::Input(Input::Action(Action::Confirm)),
+            Feed::Input(Input::Action(Action::Back)),
+        ];
+        let flow = feed(
+            &mut controls,
+            feeds,
+            &mut nav,
+            &Hits::default(),
+            &mut ctx,
+            String::new,
+            |_, _| {},
+        );
+        assert_eq!(flow, Flow::Continue);
+        assert_eq!(
+            *log.borrow(),
+            [Input::Action(Action::Confirm)],
+            "the second input must not reach Setup once Finish has already run"
+        );
+        assert_eq!(
+            ctx.setup_finished,
+            Some(crate::config::Config {
+                games_root: std::path::PathBuf::from("/games")
+            })
+        );
     }
 }
