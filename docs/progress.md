@@ -15,13 +15,12 @@ way, and what's still open.
 | M3 Embedded player (software) | Done, reviewed, regression-checked | `m3-embedded` | Yes |
 | M4 OpenGL hardware rendering | Done, reviewed, regression-checked | `m4-opengl` | Yes |
 | M5 Artwork, Details Page, Options Menu | Done, reviewed twice, regression-checked | `m5-artwork` | Yes |
-| M6 Settings, search, First-run Setup | Done, reviewed (three reviewers, then a second round), regression-checked | `m6-settings` | Waiting for the owner's OK |
+| M6 Settings, search, First-run Setup | Done, reviewed (three reviewers, then a second round), regression-checked | `m6-settings` | Yes |
 | M7 Speedrun timer (after v1) | Specified 2026-10-21, not started | | |
 
-Each milestone branch builds on the previous one. `main` has everything through M5 (merged on
-2026-10-25), plus the M7 spec, the license and the README. M6 is on `m6-settings` and waits for the
-owner's OK to merge. With M6 merged, v1 is complete. Start M7 from `main` once it has M6, on a new
-branch `m7-…`.
+Each milestone branch builds on the previous one. `main` has everything through M6 (merged on
+2026-10-26), plus the M7 spec, the license and the README: v1 is complete. Start M7 from `main`, on
+a new branch `m7-…`.
 
 ## Code map
 
@@ -280,7 +279,7 @@ reviewers and a second round). M2 wasn't measured separately. Measure a mileston
 Scope is in [milestones.md](milestones.md#m7--speedrun-timer): FR-RUN-1–14, US-40–45, ADRs 0012
 and 0013, and mockups 11–16, which already exist. Points to know before starting:
 
-- **First:** merge M6 into `main` (with the owner's OK), regression-check, and branch `m7-…` from it.
+- **First:** regression-check `main`, and branch `m7-…` from it.
 - **Categories are LiveSplit `.lss` files** under `<Games Root>/splits/<system>/`, picked up live like
   Games, so the watcher (`library/watch.rs`) and the Games Root folders from First-run Setup and
   Settings → Games Root location need a `splits/` folder too.
