@@ -422,6 +422,18 @@ mod tests {
     }
 
     #[test]
+    fn save_keeps_a_config_s_own_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(&dir, "games_root = \"/old\"\n");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let config = Config {
+            games_root: PathBuf::from("/mnt/games"),
+        };
+        save(&path, &config).unwrap();
+        assert_eq!(mode(&path), 0o640);
+    }
+
+    #[test]
     fn save_to_a_new_file_comes_out_0644() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");

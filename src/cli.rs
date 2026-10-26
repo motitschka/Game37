@@ -8,7 +8,8 @@ use crate::ui::input::{Action, Input, Pointer, TextInput};
 
 pub const USAGE: &str = "usage: game37 [--config <path>] [--data-dir <path>] \
 [--screenshot <out.bmp> [--actions <a,b,...>] [--missing-emulators <system ids>] [--frames <n>] \
-[--artwork] [--screen controller-test]]";
+[--artwork] [--screen controller-test]]\n\
+--screenshot needs --config and --data-dir too, so it never touches your real Config and data";
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Options {
