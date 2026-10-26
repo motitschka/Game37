@@ -97,6 +97,9 @@ shot m6-setup-emulators-all "$root/missing.toml" "sort,settings" --missing-emula
 shot m6-setup-folders "$root/missing.toml" \
     "confirm,down,confirm,down,right,confirm,up,right,right,right,right,confirm,settings,settings,confirm" \
     --missing-emulators switch,ps2
+# First-run Setup step 4: NES and PSP ticked, step 2 passed over, Create folders on step 3, then the
+# Cores, which the smoke data dirs already have, so nothing downloads
+shot m6-setup-cores "$root/missing.toml" "confirm,down,down,right,right,confirm,settings,confirm,settings"
 # First-run Setup's Finish: NES ticked, step 2 passed over, Create folders on step 3, on through
 # the placeholder steps 4 and 5, then Finish, which writes its own Config in the smoke dir and
 # switches to Home. The shots above share missing.toml, so check no Finish wrote it.
