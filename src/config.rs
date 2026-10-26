@@ -187,11 +187,16 @@ fn portable_games_root(path: &Path) -> String {
 }
 
 /// Writes `config.games_root` into the Config at `path`, keeping everything else in the file (other
-/// keys, comments, formatting). Creates the file and its parent folder if either is missing.
+/// keys, comments, formatting). Creates the file and its parent folder if either is missing. Keeps
+/// the existing file's mode if it has one, or 0644 for a new file: unlike `save_api_key`, the Config
+/// holds no secret, so it doesn't need to be mode 600.
 pub fn save(path: &Path, config: &Config) -> Result<(), ConfigError> {
     let mut doc = read_document(path)?;
     doc["games_root"] = toml_edit::value(portable_games_root(&config.games_root));
-    write_atomic(path, doc.to_string().as_bytes(), None)
+    let mode = std::fs::metadata(path)
+        .map(|m| m.permissions().mode() & 0o777)
+        .unwrap_or(0o644);
+    write_atomic(path, doc.to_string().as_bytes(), Some(mode))
 }
 
 /// Sets or removes the SteamGridDB API key in `secrets.toml` next to the Config at `config_path`.
@@ -238,6 +243,9 @@ fn write_atomic(path: &Path, bytes: &[u8], mode: Option<u32>) -> Result<(), Conf
             .set_permissions(std::fs::Permissions::from_mode(mode))
             .map_err(|e| ConfigError::Write(path.to_owned(), e))?;
     }
+    tmp.as_file()
+        .sync_all()
+        .map_err(|e| ConfigError::Write(path.to_owned(), e))?;
     tmp.persist(path)
         .map_err(|e| ConfigError::Write(path.to_owned(), e.error))?;
     Ok(())
@@ -399,6 +407,29 @@ mod tests {
     fn mode(path: &Path) -> u32 {
         use std::os::unix::fs::PermissionsExt;
         std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn save_over_an_existing_0644_file_leaves_it_0644() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(&dir, "games_root = \"/old\"\n");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let config = Config {
+            games_root: PathBuf::from("/mnt/games"),
+        };
+        save(&path, &config).unwrap();
+        assert_eq!(mode(&path), 0o644);
+    }
+
+    #[test]
+    fn save_to_a_new_file_comes_out_0644() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = Config {
+            games_root: PathBuf::from("/mnt/games"),
+        };
+        save(&path, &config).unwrap();
+        assert_eq!(mode(&path), 0o644);
     }
 
     #[test]
