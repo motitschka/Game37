@@ -115,6 +115,12 @@ trait Step {
     fn text_input(&self) -> bool {
         false
     }
+    /// Whether the keyboard types into a field on the step itself, its buttons still shown: Setup
+    /// is then in text mode, so printable keys, Backspace and Ctrl+V reach the step as text, Enter
+    /// goes on and Esc goes back.
+    fn types_in_place(&self) -> bool {
+        false
+    }
 }
 
 pub struct Setup {
@@ -331,7 +337,7 @@ impl Screen for Setup {
     }
 
     fn text_input(&self) -> bool {
-        self.steps[self.at].text_input()
+        self.steps[self.at].text_input() || self.steps[self.at].types_in_place()
     }
 }
 

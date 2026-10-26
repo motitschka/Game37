@@ -41,7 +41,8 @@ pub struct Key {
     error: Option<String>,
     /// `secrets.toml`'s path, with `~` for home.
     secrets: String,
-    /// What the player last used, as of the last frame, for the hints.
+    /// What the player last used, as of the last frame, for the hints and for whether the
+    /// keyboard types into the field in place.
     kind: InputKind,
     /// Where the field and Skip were drawn, for the mouse.
     hits: Vec<(Rect, Focus)>,
@@ -73,9 +74,12 @@ impl Key {
         };
     }
 
+    /// Confirm on the focus. On the field it opens the on-screen keyboard for a controller; the
+    /// keyboard types into the field in place.
     fn confirm(&mut self) -> Go {
         match self.focus {
-            Focus::Field => self.keyboard_open = true,
+            Focus::Field if self.kind == InputKind::Controller => self.keyboard_open = true,
+            Focus::Field => {}
             Focus::Skip => {
                 self.skip = true;
                 return Go::Next;
@@ -173,6 +177,7 @@ impl super::Step for Key {
     }
 
     fn enter(&mut self, _model: &Model, ctx: &mut Ctx) {
+        self.kind = ctx.input_kind;
         self.focus = Focus::Field;
         self.error = None;
         self.skip = false;
@@ -181,6 +186,10 @@ impl super::Step for Key {
             &config::secrets_path(&ctx.config_path),
             dirs::home_dir().as_deref(),
         );
+    }
+
+    fn tick(&mut self, _model: &Model, ctx: &mut Ctx) {
+        self.kind = ctx.input_kind;
     }
 
     fn leave(&mut self) {
@@ -259,7 +268,8 @@ impl super::Step for Key {
             return TextEntry::hints(self.kind, "Save");
         }
         match self.kind {
-            InputKind::Keyboard => vec![Hint::new(&[Action::Paste], "Paste")],
+            InputKind::Keyboard if self.types_in_place() => vec![Hint::new(&[Action::Paste], "Paste")],
+            InputKind::Keyboard => Vec::new(),
             InputKind::Controller => vec![Hint::new(&[Action::Confirm], "Type")],
         }
     }
@@ -274,6 +284,10 @@ impl super::Step for Key {
     fn text_input(&self) -> bool {
         self.keyboard_open
     }
+
+    fn types_in_place(&self) -> bool {
+        !self.keyboard_open && self.focus == Focus::Field && self.kind == InputKind::Keyboard
+    }
 }
 
 #[cfg(test)]
@@ -281,22 +295,25 @@ mod tests {
     use super::super::Setup;
     use super::super::tests::act;
     use super::*;
+    use crate::ui::controls::{ControlEvent, Controls};
     use crate::ui::nav::{Screen, Transition};
+    use sdl3::keyboard::Keycode;
 
     const SECRET: &str = "0123456789abcdef0123456789ab3f9a";
 
-    /// Setup on step 5 (the key step), nothing ticked but NES, so earlier steps pass quickly.
+    /// Setup on step 5 (the key step), nothing ticked but NES, so earlier steps pass quickly. The
+    /// Games Root and the data dir are beside `config_path`, so they last as long as it does.
     fn on_key(config_path: &std::path::Path) -> (Setup, Ctx) {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = config_path.parent().unwrap();
         let mut ctx = Ctx::empty();
         ctx.config_path = config_path.to_path_buf();
         // Mesen is already in the data dir, so the Cores step downloads nothing.
-        ctx.data_dir = dir.path().join("data");
+        ctx.data_dir = dir.join("data");
         let mesen = crate::cores::installed_path(&ctx.data_dir, &crate::cores::MESEN);
         std::fs::create_dir_all(mesen.parent().unwrap()).unwrap();
         std::fs::write(mesen, b"dummy").unwrap();
         ctx.start_download = Box::new(|_, _| panic!("Mesen is already installed"));
-        let mut setup = Setup::new(dir.path().join("Games"));
+        let mut setup = Setup::new(dir.join("Games"));
         act(&mut setup, &mut ctx, Action::Confirm); // tick NES
         act(&mut setup, &mut ctx, Action::Settings); // -> folders (emulators skipped)
         act(&mut setup, &mut ctx, Action::Confirm); // create folders
@@ -392,5 +409,137 @@ mod tests {
         act(&mut setup, &mut ctx, Action::Settings);
         let saved = config::load_api_key(&path).unwrap();
         assert_eq!(saved.as_ref().map(config::ApiKey::expose), Some(SECRET));
+    }
+
+    /// One thing the player does: a key or gamepad event, or text the keyboard typed (SDL's text
+    /// input event).
+    enum Ev<'a> {
+        Event(ControlEvent),
+        Typed(&'a str),
+    }
+
+    fn down(key: Keycode) -> Ev<'static> {
+        Ev::Event(ControlEvent::KeyDown {
+            key,
+            repeat: false,
+            ctrl: false,
+        })
+    }
+
+    fn ctrl(key: Keycode) -> Ev<'static> {
+        Ev::Event(ControlEvent::KeyDown {
+            key,
+            repeat: false,
+            ctrl: true,
+        })
+    }
+
+    /// Feeds `evs` to `setup` through `controls` as `app::feed` does: each in the text mode Setup
+    /// asks for by then, with Paste turned into `clipboard`'s characters.
+    fn feed(setup: &mut Setup, ctx: &mut Ctx, controls: &mut Controls, evs: &[Ev<'_>], clipboard: &str) {
+        for ev in evs {
+            let mut inputs = Vec::new();
+            controls.text = setup.text_input();
+            match ev {
+                Ev::Event(event) => controls.handle(0, *event, &mut inputs),
+                Ev::Typed(text) => controls.typed(text, &mut inputs),
+            }
+            for input in inputs {
+                match input {
+                    Input::Action(Action::Paste) => {
+                        for paste in crate::app::paste_inputs(clipboard) {
+                            setup.handle(paste, ctx);
+                        }
+                    }
+                    input => {
+                        setup.handle(input, ctx);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Setup on step 5 after a frame in which the player used the keyboard.
+    fn on_key_by_keyboard(config_path: &std::path::Path) -> (Setup, Ctx, Controls) {
+        let (mut setup, mut ctx) = on_key(config_path);
+        ctx.input_kind = InputKind::Keyboard;
+        setup.tick(&mut ctx);
+        (setup, ctx, Controls::new(InputKind::Keyboard))
+    }
+
+    #[test]
+    fn the_keyboard_types_and_erases_in_the_field_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let (mut setup, mut ctx, mut controls) = on_key_by_keyboard(&path);
+        assert!(
+            setup.text_input(),
+            "the focused field is a text field on the keyboard"
+        );
+        let qef = [
+            down(Keycode::Q),
+            Ev::Typed("q"),
+            down(Keycode::E),
+            Ev::Typed("e"),
+            down(Keycode::F),
+            Ev::Typed("f"),
+        ];
+        feed(&mut setup, &mut ctx, &mut controls, &qef, "");
+        let erase = [
+            down(Keycode::Backspace),
+            down(Keycode::Backspace),
+            down(Keycode::Backspace),
+        ];
+        feed(&mut setup, &mut ctx, &mut controls, &erase, "");
+        assert_eq!(setup.step(), 5, "Backspace erases, and does not go back");
+        let rest = [Ev::Typed(SECRET), ctrl(Keycode::Comma)];
+        feed(&mut setup, &mut ctx, &mut controls, &rest, "");
+        let saved = config::load_api_key(&path).unwrap();
+        assert_eq!(
+            saved.as_ref().map(config::ApiKey::expose),
+            Some(SECRET),
+            "Q, E and F typed, and erased"
+        );
+    }
+
+    #[test]
+    fn ctrl_v_pastes_into_the_field_through_controls() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let (mut setup, mut ctx, mut controls) = on_key_by_keyboard(&path);
+        let pasted = format!("\t {SECRET} \n");
+        let evs = [ctrl(Keycode::V), Ev::Typed("v"), ctrl(Keycode::Comma)];
+        feed(&mut setup, &mut ctx, &mut controls, &evs, &pasted);
+        let saved = config::load_api_key(&path).unwrap();
+        assert_eq!(saved.as_ref().map(config::ApiKey::expose), Some(SECRET));
+    }
+
+    #[test]
+    fn on_the_keyboard_down_leaves_the_field_and_esc_goes_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let (mut setup, mut ctx, mut controls) = on_key_by_keyboard(&path);
+        assert_eq!(setup.hints()[0], Hint::new(&[Action::Paste], "Paste"));
+        feed(&mut setup, &mut ctx, &mut controls, &[down(Keycode::Down)], "");
+        assert!(!setup.text_input(), "on Finish, keys act again");
+        assert!(setup.hints().iter().all(|h| h.text != "Paste"));
+        feed(&mut setup, &mut ctx, &mut controls, &[down(Keycode::Up)], "");
+        assert!(setup.text_input());
+        feed(&mut setup, &mut ctx, &mut controls, &[down(Keycode::Escape)], "");
+        assert_eq!(setup.step(), 4);
+    }
+
+    #[test]
+    fn on_a_controller_confirm_on_the_field_opens_the_on_screen_keyboard() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let (mut setup, mut ctx) = on_key(&path);
+        assert!(
+            !setup.text_input(),
+            "no text field until the on-screen keyboard opens"
+        );
+        act(&mut setup, &mut ctx, Action::Confirm);
+        assert!(setup.text_input());
+        assert_eq!(setup.hints(), TextEntry::hints(InputKind::Controller, "Save"));
     }
 }
