@@ -31,6 +31,7 @@
         # Game37 finds its font with fontconfig's fc-match.
         postInstall = ''
           wrapProgram $out/bin/game37 --prefix PATH : ${lib.makeBinPath [ pkgs.fontconfig ]}
+          install -Dm644 ${./data/game37.svg} $out/share/icons/hicolor/scalable/apps/game37.svg
         '';
 
         desktopItems = [
@@ -39,6 +40,8 @@
             desktopName = "Game37";
             comment = "Play your Nintendo and Sony games";
             exec = "game37";
+            icon = "game37";
+            startupWMClass = "game37";
             categories = [ "Game" "Emulator" ];
           })
         ];

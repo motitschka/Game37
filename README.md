@@ -144,7 +144,7 @@ The binaries use your system's SDL3, so they need an up-to-date Arch (`sudo pacm
    **Ubuntu:**
 
    ```bash
-   sudo apt install libsdl3-0 libsdl3-ttf0 fontconfig flatpak
+   sudo apt install libsdl3-0 libsdl3-ttf0 fontconfig flatpak curl
    ```
 
 2. From the [Releases page](https://github.com/motitschka/Game37/releases), download the file for your
@@ -186,7 +186,7 @@ To try Game37 without installing it:
 nix run github:motitschka/Game37/v0.1.0-beta.1
 ```
 
-To install it, with an entry in your app menu, add the flake to your system flake:
+To install it, with an entry and icon in your app menu, add the flake to your system flake:
 
 ```nix
 # flake.nix, under inputs:
@@ -279,10 +279,14 @@ fullscreen.
 
 ### Add Game37 to your app menu
 
-From the `Game37` folder, copy the program to `~/.local/bin` and add a menu entry for it:
+From the `Game37` folder, copy the program to `~/.local/bin`, fetch its icon, and add a menu entry for it:
 
 ```bash
 install -Dm755 target/release/game37 ~/.local/bin/game37
+```
+
+```bash
+curl -fsSL --create-dirs -o ~/.local/share/icons/hicolor/scalable/apps/game37.svg https://raw.githubusercontent.com/motitschka/Game37/main/data/game37.svg
 ```
 
 ```bash
@@ -296,13 +300,15 @@ Type=Application
 Name=Game37
 Comment=Play your Nintendo and Sony games
 Exec=$HOME/.local/bin/game37
+Icon=game37
+StartupWMClass=game37
 Terminal=false
 Categories=Game;Emulator;
 EOF
 ```
 
-Game37 then shows up in your app menu. The program is a single file: everything else it needs is
-downloaded or created at first start, in the places listed under
+Game37 then shows up in your app menu with its icon. Apart from the icon, the program is a single file:
+everything else it needs is downloaded or created at first start, in the places listed under
 [Where your data lives](#where-your-data-lives).
 
 ### Updating

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1F2431"/>
+      <stop offset="1" stop-color="#0B0D12"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.62" r="0.55">
+      <stop offset="0" stop-color="#8B7BFF" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#8B7BFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="12" y="12" width="232" height="232" rx="52" fill="url(#tile)"/>
+  <rect x="12" y="12" width="232" height="232" rx="52" fill="url(#glow)"/>
+  <rect x="13" y="13" width="230" height="230" rx="51" fill="none" stroke="#2A3142" stroke-width="2"/>
+  <text x="128" y="92" text-anchor="middle" font-family="Adwaita Sans" font-size="38" font-weight="800"
+        letter-spacing="4" fill="#F2F4F8">GAME</text>
+  <text x="128" y="200" text-anchor="middle" font-family="Adwaita Sans" font-size="124" font-weight="800"
+        fill="#8B7BFF">37</text>
+</svg>
