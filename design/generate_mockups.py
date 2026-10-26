@@ -564,6 +564,7 @@ def screen_options():
     sv.add(text(sx + 168, 118, g["title"], 28, 800), text(sx + 168, 152, "SNES  ·  12h 40m played", 18, 500,
                                                             fill=C["muted"]))
     items = [("★", "Remove from favorites", None), ("↺", "Load save state", "2 of 3"),
+             ("⏻", "Start from power-on", None), ("⌫", "Delete save data", None),
              ("▣", "Choose artwork", None), ("✎", "Rename", None), ("⊘", "Hide game", None),
              ("▤", "Show file in file manager", None)]
     for i, (icon, label, extra) in enumerate(items):
@@ -574,9 +575,41 @@ def screen_options():
                text(sx + 100, y + 45, label, 22, 600 if i == 1 else 500))
         if extra:
             sv.add(text(sx + sw - 76, y + 45, extra, 18, 500, fill=C["muted"], anchor="end"))
-        if label in ("Load save state", "Choose artwork"):
+        if label in ("Load save state", "Delete save data", "Choose artwork"):
             sv.add(text(sx + sw - 48, y + 45, "›", 26, 600, fill=C["muted"], anchor="end"))
     hintbar(sv, [(["A"], "Choose"), (["B"], "Close")])
+    sv.save()
+
+
+def screen_options_delete():
+    """The Options Menu's delete view (FR-DET-4): what the Game has of each kind of save data,
+    the kind it has none of dimmed and never focused."""
+    sv = Svg("33-options-delete-save-data", "Options Menu: Delete save data")
+    home(sv)
+    dim(sv, 0.62)
+    sx, sw = W - 600, 600
+    sv.add(rect(sx, 0, sw, H, C["surface"]), rect(sx, 0, 1, H, C["line"]))
+    g = FAVS[0]
+    cover(sv, sx + 48, 64, 96, 144, g, show_sys=False)
+    sv.add(text(sx + 168, 118, g["title"], 28, 800), text(sx + 168, 152, "SNES  ·  12h 40m played", 18, 500,
+                                                            fill=C["muted"]))
+    sv.add(text(sx + 48, 238, "Delete save data", 24, 800))
+    sv.add(text(sx + 48, 268, "Choose what to delete", 18, 500, fill=C["muted"]))
+    rows = [("Resume State", "Today, 17:43", True), ("Save States", "None", False),
+            ("In-game Save", "Yesterday, 18:45", True), ("Everything", None, True)]
+    for i, (label, sub, has) in enumerate(rows):
+        y = 290 + i * 112
+        if i == 0 and has:
+            sv.add(rect(sx + 24, y, sw - 48, 100, C["surface2"], rx=14),
+                   rect(sx + 24, y + 30, 5, 40, C["accent"], rx=2))
+        ink = C["text"] if has else C["dim"]
+        sub_ink = C["muted"] if has else C["dim"]
+        if sub is not None:
+            sv.add(text(sx + 48, y + 46, label, 22, 700, fill=ink))
+            sv.add(text(sx + 48, y + 76, sub, 18, 500, fill=sub_ink))
+        else:
+            sv.add(text(sx + 48, y + 58, label, 22, 700, fill=ink))
+    hintbar(sv, [(["A"], "Delete"), (["B"], "Back")])
     sv.save()
 
 
@@ -1573,7 +1606,7 @@ def screen_setup_key():
 
 if __name__ == "__main__":
     for fn in [screen_home, screen_home_empty, screen_carousel, screen_console_page, screen_details,
-               screen_options, screen_pause, screen_ds, screen_console_missing_emulator,
+               screen_options, screen_options_delete, screen_pause, screen_ds, screen_console_missing_emulator,
                screen_details_missing_emulator, screen_speedrun_page, screen_splits_editor,
                screen_speedrun_embedded, screen_pause_run, screen_timer_window, screen_details_speedrun,
                screen_settings_library, screen_settings_bios, screen_settings_cores, screen_settings_api_key,

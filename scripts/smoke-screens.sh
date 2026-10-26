@@ -68,6 +68,14 @@ shot m3-gbc "$root/cfg.toml" "nexttab,right,right,right,right,confirm,confirm,co
 shot m3-gba "$root/cfg.toml" "nexttab,right,right,right,right,right,confirm,confirm,confirm" --frames 240
 shot m3-pause-saved "$root/cfg.toml" \
     "nexttab,right,right,confirm,confirm,confirm,wait:120,back,down,confirm,confirm,confirm"
+# Options Menu: Start from power-on and Delete save data, now that the SNES Game has a Save State
+# (m3-pause-saved filled its slot 1 in the shared games dir, so Load save state and Delete save
+# data are both enabled here)
+shot m5-start-power-on "$root/cfg.toml" "nexttab,right,right,confirm,confirm,options,down,down"
+shot m5-delete-save-data "$root/cfg.toml" "nexttab,right,right,confirm,confirm,options,down,down,down,confirm"
+# Cancel is focused, so confirming it here deletes nothing
+shot m5-delete-confirm "$root/cfg.toml" \
+    "nexttab,right,right,confirm,confirm,options,down,down,down,confirm,confirm"
 shot m3-pause-restart-confirm "$root/cfg.toml" \
     "nexttab,right,right,confirm,confirm,confirm,wait:120,back,down,down,down,confirm"
 # M4: OpenGL Cores (N64, PSP), DS layout, PS1 without a BIOS
@@ -82,11 +90,14 @@ shot m5-details "$root/cfg.toml" "nexttab,right,right,confirm,confirm"
 shot m5-options "$root/cfg.toml" "down,down,options"
 shot m5-favorite-replace "$root/cfg.toml" "down,down$(printf ',options,confirm,right%.0s' {1..5}),options,confirm,down"
 shot m5-load-state "$root/cfg.toml" "nexttab,right,right,confirm,confirm,options,down,confirm"
-# Choose artwork: offline, without --artwork, the picker says it needs a SteamGridDB API key
-shot m5-choose-artwork "$root/cfg.toml" "down,down,options,down,confirm"
-# Rename with the on-screen keyboard: erase the Display Title, then Shift, m, k and a space
+# Choose artwork: offline, without --artwork, the picker says it needs a SteamGridDB API key. This
+# Game already has a Resume State (m3-gb left one in the shared games dir), so only Load save
+# state is skipped (its Save States are still empty); three downs reach Choose artwork.
+shot m5-choose-artwork "$root/cfg.toml" "down,down,options,down,down,down,confirm"
+# Rename with the on-screen keyboard: erase the Display Title, then Shift, m, k and a space. Four
+# downs reach Rename, past Choose artwork (Load save state alone is skipped, see above).
 shot m5-rename "$root/cfg.toml" \
-    "down,down,options,down,down,confirm$(printf ',options%.0s' {1..40}),down,down,confirm,$(printf 'right,%.0s' {1..7})confirm,up,left,confirm,sort,up"
+    "down,down,options,down,down,down,down,confirm$(printf ',options%.0s' {1..40}),down,down,confirm,$(printf 'right,%.0s' {1..7})confirm,up,left,confirm,sort,up"
 # M6: top bar entries
 shot m6-search-open "$root/cfg.toml" "down,down,search"
 shot m6-settings-open "$root/cfg.toml" "settings"
@@ -127,10 +138,10 @@ shot m6-search-empty "$root/cfg.toml" "search,click:1000:68"
 shot m6-search-controller "$root/cfg.toml" "search,text:test,up"
 
 # M6: Settings: Library with the focus on Hidden games, the Hidden games list after hiding a Game
-# from its Options Menu (three downs reach Hide game: an empty Load save state is skipped), the Reset
-# confirmation, About
+# from its Options Menu (five downs reach Hide game: Load save state alone is skipped, see the
+# Choose artwork shot above), the Reset confirmation, About
 shot m6-settings-library "$root/cfg.toml" "settings,right,down,down"
-shot m6-settings-hidden "$root/cfg.toml" "down,down,options,down,down,down,confirm,settings,right,down,down,confirm"
+shot m6-settings-hidden "$root/cfg.toml" "down,down,options,down,down,down,down,down,confirm,settings,right,down,down,confirm"
 shot m6-settings-reset "$root/cfg.toml" "settings,right,down,down,down,confirm"
 shot m6-settings-about "$root/cfg.toml" "settings$(printf ',down%.0s' {1..6})"
 # M6: Settings BIOS and Cores, each with the focus on its first row (no download starts)

@@ -72,7 +72,7 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 - **FR-DET-1** Selecting a Game opens its Details Page. Pressing confirm on Play launches it.
 - **FR-DET-2** The Details Page shows the hero Artwork as background, plus System, Playtime, last played, date added, Favorite status, number of Save States (embedded only), file name and size.
 - **FR-DET-3** The Options Menu opens with Y or right-click on any highlighted Game (Shelves, grids, search results) and from the Details Page.
-- **FR-DET-4** Options Menu actions: add or remove Favorite, load Save State (with slot picker, embedded only), choose different Artwork, rename Display Title, hide Game, show file in the file manager.
+- **FR-DET-4** Options Menu actions: add or remove Favorite, load Save State (with slot picker, embedded only), start from power-on (embedded only), delete save data: Resume State, Save States, In-game Save, or everything (embedded only), choose different Artwork, rename Display Title, hide Game, show file in the file manager.
 - **FR-DET-5** Renaming never changes the file on disk.
 - **FR-DET-6** Hidden Games appear in no view except Settings → Hidden games, where they can be unhidden.
 
@@ -96,7 +96,7 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 - **FR-EMB-3** The Pause Menu opens with the Guide button, with Select+Start, or with Esc.
 - **FR-EMB-4** The Pause Menu offers: resume, save to slot, load from slot, restart, and quit to library.
 - **FR-EMB-5** Each Game has 3 manual Save State slots. Each slot shows a screenshot and a timestamp.
-- **FR-EMB-6** Quitting an embedded Game writes a Resume State. The next launch of that Game continues from it.
+- **FR-EMB-6** Quitting an embedded Game writes a Resume State. The next launch of that Game continues from it, unless the player chose Start from power-on.
 - **FR-EMB-7** In-game Saves are always written to disk, regardless of Save States.
 - **FR-EMB-8** 2–4 controllers are supported. Player order follows connection order.
 - **FR-EMB-9** A fixed default keyboard layout allows playing without a controller.
