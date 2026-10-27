@@ -22,8 +22,6 @@ use crate::ui::theme::{DANGER, LINE, MUTED, SURFACE, TEXT};
 
 /// As long as a path may be on Linux.
 const MAX_PATH_CHARS: usize = 4096;
-/// What a relative path gets, as in First-run Setup.
-const RELATIVE: &str = "Use a full path, starting with / or ~";
 const NOTE: &str = "Game37 looks for Games in one folder per System inside it.";
 
 /// Typing a new Games Root, over Settings: the field starts with the current one, `~` standing for
@@ -59,7 +57,7 @@ impl GamesRootEntry {
         }
         let root = config::expand_home(typed);
         if root.is_relative() {
-            self.error = Some(RELATIVE.to_owned());
+            self.error = Some(config::RELATIVE_GAMES_ROOT.to_owned());
             return Transition::None;
         }
         let unchanged = match (root.canonicalize(), ctx.games_root.canonicalize()) {
@@ -216,8 +214,9 @@ mod tests {
         }
     }
 
+    /// `p` as the field shows it and as the player would type it.
     fn path(p: &Path) -> String {
-        p.to_str().unwrap().to_owned()
+        tilde(p, dirs::home_dir().as_deref())
     }
 
     /// What can't be undone by a save that didn't happen: the Config, the Games Root, the library
@@ -248,7 +247,8 @@ mod tests {
     fn the_field_shows_a_root_under_home_in_its_tilde_form() {
         let mut ctx = Ctx::empty();
         ctx.games_root = dirs::home_dir().unwrap().join("Games");
-        assert_eq!(GamesRootEntry::new(&ctx).entry.text(), "~/Games");
+        let shown = format!("~{}Games", std::path::MAIN_SEPARATOR);
+        assert_eq!(GamesRootEntry::new(&ctx).entry.text(), shown);
     }
 
     #[test]
@@ -304,7 +304,7 @@ mod tests {
         let before = state(ctx);
         let mut entry = GamesRootEntry::new(ctx);
         assert!(matches!(save(&mut entry, ctx, "Games"), Transition::None));
-        assert_eq!(entry.error.as_deref(), Some(RELATIVE));
+        assert_eq!(entry.error.as_deref(), Some(config::RELATIVE_GAMES_ROOT));
         assert_eq!(state(ctx), before);
         entry.handle(Input::Text(TextInput::Backspace), ctx);
         assert_eq!(entry.error, None, "typing clears the error");
@@ -320,7 +320,11 @@ mod tests {
         let mut entry = GamesRootEntry::new(ctx);
         let under = file.join("Games");
         assert!(matches!(save(&mut entry, ctx, &path(&under)), Transition::None));
-        let shown = format!("Can't create {}: Not a directory", path(&under));
+        let shown = format!(
+            "Can't create {}: {}",
+            path(&under),
+            crate::screens::not_a_directory()
+        );
         assert_eq!(entry.error, Some(shown));
         assert_eq!(state(ctx), before);
     }

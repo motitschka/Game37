@@ -446,13 +446,14 @@ mod tests {
     fn empty_hint_names_the_system_and_its_folder_with_a_tilde() {
         let nes = &SYSTEMS[systems::index_of("nes").unwrap()];
         let home = Path::new("/home/ann");
+        let sep = std::path::MAIN_SEPARATOR;
         assert_eq!(
             empty_hint(nes, Path::new("/home/ann/Games"), Some(home)),
-            "Put NES games in ~/Games/nes"
+            format!("Put NES games in ~{sep}Games{sep}nes")
         );
         assert_eq!(
             empty_hint(nes, Path::new("/mnt/games"), Some(home)),
-            "Put NES games in /mnt/games/nes"
+            format!("Put NES games in /mnt/games{sep}nes")
         );
     }
 

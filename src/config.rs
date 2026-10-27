@@ -170,17 +170,26 @@ pub fn load(path: &Path) -> Result<Option<Config>, ConfigError> {
     Ok(Some(Config { games_root }))
 }
 
-/// `path` with a leading `~` standing for the home folder; anything else as given.
+/// `path` with a leading `~` standing for the home folder (on Windows the profile folder, and `~\`
+/// works as well as `~/`); anything else as given.
 pub fn expand_home(path: &str) -> PathBuf {
-    match path.strip_prefix("~/") {
-        Some(rest) => dirs::home_dir().expect("no home directory").join(rest),
-        None if path == "~" => dirs::home_dir().expect("no home directory"),
-        None => PathBuf::from(path),
+    let home = || dirs::home_dir().expect("no home directory");
+    match path.strip_prefix('~') {
+        Some("") => home(),
+        Some(rest) if rest.starts_with(std::path::is_separator) => home().join(&rest[1..]),
+        _ => PathBuf::from(path),
     }
 }
 
-/// The inverse of `expand_home`: a path under the home folder is written back as `~/…`, so the Config
-/// stays portable across machines; anything else is written as given.
+/// Why a typed Games Root was refused: it isn't a full path.
+pub const RELATIVE_GAMES_ROOT: &str = if cfg!(windows) {
+    "Use a full path, starting with a drive letter or ~"
+} else {
+    "Use a full path, starting with / or ~"
+};
+
+/// The inverse of `expand_home`: a path under the home folder is written back as `~/…` (`~\…` on
+/// Windows), so the Config stays portable across machines; anything else is written as given.
 fn portable_games_root(path: &Path) -> String {
     if let Some(home) = dirs::home_dir()
         && let Ok(rest) = path.strip_prefix(&home)
@@ -188,7 +197,7 @@ fn portable_games_root(path: &Path) -> String {
         return if rest.as_os_str().is_empty() {
             "~".to_owned()
         } else {
-            format!("~/{}", rest.display())
+            format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display())
         };
     }
     path.display().to_string()
@@ -270,6 +279,9 @@ fn write_atomic(path: &Path, bytes: &[u8], mode: Option<u32>) -> Result<(), Conf
 mod tests {
     use super::*;
 
+    /// A full path outside the home folder.
+    const ELSEWHERE: &str = if cfg!(windows) { r"D:\Games" } else { "/mnt/games" };
+
     fn write(dir: &tempfile::TempDir, text: &str) -> PathBuf {
         let path = dir.path().join("config.toml");
         std::fs::write(&path, text).unwrap();
@@ -292,6 +304,16 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)] // `\` separates folders only on Windows.
+    fn a_backslash_after_the_tilde_also_stands_for_the_profile_folder() {
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(expand_home(r"~\Spiele\NES"), home.join("Spiele").join("NES"));
+        assert_eq!(expand_home("~/Spiele"), home.join("Spiele"));
+        assert_eq!(expand_home(r"~\"), home.join(""));
+        assert_eq!(expand_home(r"~Spiele"), PathBuf::from("~Spiele"));
+    }
+
+    #[test]
     fn games_root_defaults_to_home_games() {
         let dir = tempfile::tempdir().unwrap();
         let config = load(&write(&dir, "")).unwrap().unwrap();
@@ -301,10 +323,10 @@ mod tests {
     #[test]
     fn absolute_games_root_is_kept() {
         let dir = tempfile::tempdir().unwrap();
-        let config = load(&write(&dir, "games_root = \"/mnt/games\"\n"))
+        let config = load(&write(&dir, &format!("games_root = {ELSEWHERE:?}\n")))
             .unwrap()
             .unwrap();
-        assert_eq!(config.games_root, PathBuf::from("/mnt/games"));
+        assert_eq!(config.games_root, PathBuf::from(ELSEWHERE));
     }
 
     #[test]
@@ -383,7 +405,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = write(&dir, "# a note\ngames_root = \"/old\"\nunknown_key = 42\n");
         let config = Config {
-            games_root: PathBuf::from("/mnt/games"),
+            games_root: PathBuf::from(ELSEWHERE),
         };
         save(&path, &config).unwrap();
 
@@ -403,7 +425,9 @@ mod tests {
         save(&path, &config).unwrap();
 
         let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.contains("~/Spiele"), "{text}");
+        let raw: RawConfig = toml::from_str(&text).unwrap();
+        let tilde = format!("~{}Spiele", std::path::MAIN_SEPARATOR);
+        assert_eq!(raw.games_root, Some(tilde), "{text}");
         assert_eq!(load(&path).unwrap().unwrap(), config);
     }
 
@@ -412,7 +436,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nested/config.toml");
         let config = Config {
-            games_root: PathBuf::from("/mnt/games"),
+            games_root: PathBuf::from(ELSEWHERE),
         };
         save(&path, &config).unwrap();
         assert_eq!(load(&path).unwrap().unwrap(), config);
@@ -431,7 +455,7 @@ mod tests {
         let path = write(&dir, "games_root = \"/old\"\n");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         let config = Config {
-            games_root: PathBuf::from("/mnt/games"),
+            games_root: PathBuf::from(ELSEWHERE),
         };
         save(&path, &config).unwrap();
         assert_eq!(mode(&path), 0o644);
@@ -444,7 +468,7 @@ mod tests {
         let path = write(&dir, "games_root = \"/old\"\n");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
         let config = Config {
-            games_root: PathBuf::from("/mnt/games"),
+            games_root: PathBuf::from(ELSEWHERE),
         };
         save(&path, &config).unwrap();
         assert_eq!(mode(&path), 0o640);
@@ -456,7 +480,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         let config = Config {
-            games_root: PathBuf::from("/mnt/games"),
+            games_root: PathBuf::from(ELSEWHERE),
         };
         save(&path, &config).unwrap();
         assert_eq!(mode(&path), 0o644);

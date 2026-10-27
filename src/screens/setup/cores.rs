@@ -245,8 +245,9 @@ fn bios_note(model: &Model) -> Option<String> {
         .find(|s| cores::for_system(s).is_some_and(|c| !c.required_bios.is_empty()))?;
     let dir = tilde(&model.games_root.join("bios"), dirs::home_dir().as_deref());
     Some(format!(
-        "{} needs a BIOS file: put {ASK_FOR} in {dir}/.",
-        system.name
+        "{} needs a BIOS file: put {ASK_FOR} in {dir}{}.",
+        system.name,
+        std::path::MAIN_SEPARATOR
     ))
 }
 
@@ -620,8 +621,12 @@ mod tests {
     fn the_bios_note_shows_only_with_playstation_ticked() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(bios_note(&model(dir.path(), &["nes", "psp"])), None);
-        let bios = tilde(&dir.path().join("Games/bios"), dirs::home_dir().as_deref());
-        let note = format!("PlayStation needs a BIOS file: put {ASK_FOR} in {bios}/.");
+        let bios = tilde(
+            &dir.path().join("Games").join("bios"),
+            dirs::home_dir().as_deref(),
+        );
+        let sep = std::path::MAIN_SEPARATOR;
+        let note = format!("PlayStation needs a BIOS file: put {ASK_FOR} in {bios}{sep}.");
         assert_eq!(bios_note(&model(dir.path(), &["nes", "ps1"])), Some(note));
     }
 }

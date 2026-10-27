@@ -57,6 +57,22 @@ fn entries() -> Entries {
     }
 }
 
+/// What the system says, without its "(os error n)", when a folder is made inside a file: "Not a
+/// directory" on Linux. Windows words it differently, and Wine differently again.
+#[cfg(test)]
+pub(crate) fn not_a_directory() -> String {
+    if cfg!(unix) {
+        return "Not a directory".to_owned();
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("file");
+    std::fs::write(&file, b"").unwrap();
+    let text = std::fs::create_dir_all(file.join("folder"))
+        .unwrap_err()
+        .to_string();
+    text[..text.find(" (os error").unwrap()].to_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

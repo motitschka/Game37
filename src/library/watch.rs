@@ -303,6 +303,11 @@ impl Worker {
     /// Rescans, in System Order, every pending System that has been quiet for long enough.
     fn rescan_due(&mut self) -> Result<(), Stopped> {
         let now = Instant::now();
+        // Windows' folder watcher doesn't report the Games Root itself going, as inotify does, so a
+        // rescan that finds it gone stops watching it; it is watched afresh once it is back.
+        if self.root_found && !self.root.is_dir() && self.next_due().is_some_and(|due| now >= due) {
+            self.root_lost();
+        }
         for system in &SYSTEMS {
             if self
                 .pending
@@ -373,6 +378,7 @@ mod tests {
     }
 
     /// Polls like the UI does until `done` holds, or fails the test after `DEADLINE`.
+    #[track_caller]
     fn poll_until(watcher: &mut LibraryWatcher, library: &mut Library, done: impl Fn(&Library) -> bool) {
         let deadline = Instant::now() + DEADLINE;
         loop {

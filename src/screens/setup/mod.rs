@@ -520,8 +520,11 @@ mod tests {
         assert_eq!(setup.step(), 5);
         assert_eq!(ctx.setup_finished, None);
         assert_eq!(
-            setup.error.as_deref(),
-            Some("Can't write the Config: Not a directory")
+            setup.error,
+            Some(format!(
+                "Can't write the Config: {}",
+                crate::screens::not_a_directory()
+            ))
         );
 
         act(&mut setup, &mut ctx, Action::Back);

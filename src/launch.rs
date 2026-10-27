@@ -536,7 +536,10 @@ mod tests {
         let gone = dir.path().join("gone.iso");
         assert_eq!(
             game_file(&PCSX2, &gone, Some(dir.path())),
-            Err("~/gone.iso isn't there any more.".to_owned())
+            Err(format!(
+                "~{}gone.iso isn't there any more.",
+                std::path::MAIN_SEPARATOR
+            ))
         );
     }
 
@@ -551,13 +554,41 @@ mod tests {
     }
 
     /// Runs `sh -c <script>` in place of the emulator.
+    /// A fake emulator: a `sh` script, or on Windows a `cmd` one.
     struct Shell(&'static str);
 
+    #[cfg(unix)]
     impl Spawner for Shell {
         fn spawn(&mut self, _: &[OsString], log: &Path) -> io::Result<Receiver<Exited>> {
             spawn_process(&["sh".into(), "-c".into(), self.0.into()], log)
         }
     }
+
+    /// Each word of the script is its own argument, `GAME` standing for the Game file, so the one
+    /// that can hold a space is quoted the way `cmd` reads it.
+    #[cfg(windows)]
+    impl Spawner for Shell {
+        fn spawn(&mut self, argv: &[OsString], log: &Path) -> io::Result<Receiver<Exited>> {
+            let game = argv.last().unwrap();
+            let words = self
+                .0
+                .split(' ')
+                .map(|w| if w == "GAME" { game.clone() } else { w.into() });
+            let argv: Vec<OsString> = ["cmd".into(), "/c".into()].into_iter().chain(words).collect();
+            spawn_process(&argv, log)
+        }
+    }
+
+    /// The fake emulator's script: `unix` for `sh`, `windows` for `cmd`.
+    fn script(unix: &'static str, windows: &'static str) -> &'static str {
+        if cfg!(windows) { windows } else { unix }
+    }
+
+    /// Sleeps about a second.
+    const SLEEP_1: &str = "ping -n 2 127.0.0.1 >nul";
+    /// Runs until the Game file is gone (at most 30 s), then says "stopped": [`KillOnDrop`] removes it.
+    const UNTIL_GAME_GONE: &str =
+        "(for /l %i in (1,1,30) do @if exist GAME ping -n 2 127.0.0.1 >nul) & echo stopped";
 
     struct World {
         _dir: tempfile::TempDir,
@@ -583,7 +614,7 @@ mod tests {
             ("Home", Box::new(Home::new())),
             ("Consoles", Box::new(Stub::new("Consoles"))),
         ]);
-        let mut launcher = Launcher::new(Box::new(Shell(script)), dir.path().join("data/logs"));
+        let mut launcher = Launcher::new(Box::new(Shell(script)), dir.path().join("data").join("logs"));
         launcher.home = None;
         World {
             _dir: dir,
@@ -621,8 +652,25 @@ mod tests {
 
     /// Kills a fake emulator that prints its pid first (`echo $$; exec ...`) when the test ends,
     /// so a long-running one doesn't outlive it. Declare it after the `World`, so it drops first.
+    /// On Windows it removes the Game file, which stops [`UNTIL_GAME_GONE`], and waits for that.
     struct KillOnDrop(PathBuf);
 
+    #[cfg(windows)]
+    impl Drop for KillOnDrop {
+        fn drop(&mut self) {
+            let logs = self.0.parent().unwrap();
+            let _ = fs::remove_file(logs.join("../../Games/gc/Zelda.iso"));
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                if fs::read_to_string(&self.0).is_ok_and(|log| log.contains("stopped")) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    }
+
+    #[cfg(unix)]
     impl Drop for KillOnDrop {
         fn drop(&mut self) {
             let deadline = Instant::now() + Duration::from_secs(5);
@@ -643,7 +691,7 @@ mod tests {
 
     #[test]
     fn a_one_second_run_records_a_second_of_playtime_and_reloads_the_views() {
-        let mut w = world("sleep 1");
+        let mut w = world(script("sleep 1", SLEEP_1));
         assert!(w.start());
         assert_eq!(w.nav.top().title(), "Playing");
         assert_eq!(w.wait(), Ok(()));
@@ -657,10 +705,15 @@ mod tests {
 
     #[test]
     fn an_early_failure_records_nothing_and_explains_itself() {
-        let mut w = world("echo oops >&2; exit 3");
+        let mut w = world(script("echo oops >&2; exit 3", "echo oops 1>&2 & exit 3"));
         assert!(w.start());
         let text = w.wait().unwrap_err();
-        let log = w._dir.path().join("data/logs/org.DolphinEmu.dolphin-emu.log");
+        let log = w
+            ._dir
+            .path()
+            .join("data")
+            .join("logs")
+            .join("org.DolphinEmu.dolphin-emu.log");
         assert_eq!(
             text,
             format!(
@@ -682,7 +735,7 @@ mod tests {
 
     #[test]
     fn a_non_zero_exit_after_the_early_window_still_records_playtime() {
-        let mut w = world("sleep 1; exit 3");
+        let mut w = world(script("sleep 1; exit 3", "ping -n 2 127.0.0.1 >nul & exit 3"));
         w.launcher.early = Duration::from_millis(100);
         assert!(w.start());
         assert_eq!(w.wait(), Ok(()));
@@ -693,6 +746,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // Process groups are Unix only.
     fn the_emulator_runs_in_its_own_process_group() {
         // Exits 0 only when its process group id is its own pid.
         let mut w = world(r#"[ "$(cut -d' ' -f5 /proc/$$/stat)" = "$$" ]"#);
@@ -711,7 +765,7 @@ mod tests {
 
     #[test]
     fn quitting_while_playing_records_playtime_so_far() {
-        let mut w = world("echo $$; exec sleep 30");
+        let mut w = world(script("echo $$; exec sleep 30", UNTIL_GAME_GONE));
         let _child = kill_on_drop(&w);
         assert!(w.start());
         std::thread::sleep(Duration::from_millis(1100));
@@ -725,7 +779,7 @@ mod tests {
 
     #[test]
     fn input_is_swallowed_while_playing() {
-        let mut w = world("echo $$; exec sleep 30");
+        let mut w = world(script("echo $$; exec sleep 30", UNTIL_GAME_GONE));
         let _child = kill_on_drop(&w);
         assert!(w.start());
         let hits = Hits {
@@ -774,7 +828,7 @@ mod tests {
     fn confirm_asks_to_play_an_embedded_game_when_its_core_is_installed() {
         let mut w = world("exit 0");
         w.ctx.data_dir = w._dir.path().join("data");
-        touch(&w.ctx.data_dir.join("cores/bsnes_libretro.so"));
+        touch(&cores::installed_path(&w.ctx.data_dir, &cores::BSNES));
         let snes = game_of(&w, "snes");
         assert!(matches!(confirm_game(&snes, &mut w.ctx), Transition::None));
         assert_eq!(
@@ -799,7 +853,7 @@ mod tests {
     fn confirm_on_an_embedded_game_whose_core_is_missing_downloads_it() {
         let mut w = world("exit 0");
         w.ctx.data_dir = w._dir.path().join("data");
-        touch(&w.ctx.data_dir.join("cores/bsnes_libretro.so"));
+        touch(&cores::installed_path(&w.ctx.data_dir, &cores::BSNES));
         // Never touches the network: this only checks that Confirm starts a download.
         w.ctx.start_download = Box::new(cores::testing::spawn_failing);
         let gba = game_of(&w, "gba");
@@ -811,7 +865,7 @@ mod tests {
     fn confirm_on_ps1_with_no_bios_shows_the_missing_bios_message() {
         let mut w = world("exit 0");
         w.ctx.data_dir = w._dir.path().join("data");
-        touch(&w.ctx.data_dir.join("cores/mednafen_psx_hw_libretro.so"));
+        touch(&cores::installed_path(&w.ctx.data_dir, &cores::BEETLE_PSX_HW));
         let ps1 = game_of(&w, "ps1");
         let Transition::Push(screen) = confirm_game(&ps1, &mut w.ctx) else {
             panic!("expected the missing-BIOS message to be pushed");
@@ -824,7 +878,7 @@ mod tests {
     fn confirm_on_ps1_with_any_bios_file_in_any_case_starts_it() {
         let mut w = world("exit 0");
         w.ctx.data_dir = w._dir.path().join("data");
-        touch(&w.ctx.data_dir.join("cores/mednafen_psx_hw_libretro.so"));
+        touch(&cores::installed_path(&w.ctx.data_dir, &cores::BEETLE_PSX_HW));
         fs::create_dir_all(w.ctx.games_root.join("bios")).unwrap();
         fs::write(w.ctx.games_root.join("bios/SCPH5502.bin"), b"bios data").unwrap();
         let ps1 = game_of(&w, "ps1");
@@ -861,7 +915,7 @@ mod tests {
     fn confirm_on_psp_with_both_the_core_and_its_assets_installed_plays() {
         let mut w = world("exit 0");
         w.ctx.data_dir = w._dir.path().join("data");
-        touch(&w.ctx.data_dir.join("cores/ppsspp_libretro.so"));
+        touch(&cores::installed_path(&w.ctx.data_dir, &cores::PPSSPP));
         fs::create_dir_all(cores::assets_dir(&w.ctx.data_dir)).unwrap();
         let psp = game_of(&w, "psp");
         assert!(matches!(confirm_game(&psp, &mut w.ctx), Transition::None));
@@ -884,7 +938,7 @@ mod tests {
     fn confirm_asks_to_play_a_ds_game_once_its_core_is_installed() {
         let mut w = world("exit 0");
         w.ctx.data_dir = w._dir.path().join("data");
-        touch(&w.ctx.data_dir.join("cores/melondsds_libretro.so"));
+        touch(&cores::installed_path(&w.ctx.data_dir, &cores::MELONDS_DS));
         let nds = game_of(&w, "nds");
         assert!(matches!(confirm_game(&nds, &mut w.ctx), Transition::None));
         assert_eq!(w.ctx.play.take().map(|p| p.game.system), Some("nds".to_owned()));

@@ -4,7 +4,7 @@
 
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 
 use super::{Button, CONTENT_Y, Go, Model, Pill, SETUP_W, Step, WHITE, pill, pill_width, tick};
 use crate::config;
@@ -19,6 +19,8 @@ use crate::ui::text_entry::{KEYBOARD_W, Outcome, TextEntry};
 use crate::ui::theme::{DANGER, DIM, LINE, MUTED, SUCCESS, SURFACE, SURFACE2, TEXT};
 use crate::ui::{M, Rect, hit};
 
+/// What the empty Games Root field suggests.
+const PLACEHOLDER: &str = if cfg!(windows) { r"~\Games" } else { "~/Games" };
 /// The most characters a typed Games Root can have, as Linux limits a path.
 const MAX_PATH_CHARS: usize = 4096;
 const ROOT_H: f32 = 96.0;
@@ -150,7 +152,7 @@ impl Folders {
         }
         let root = config::expand_home(typed);
         if root.is_relative() {
-            self.entry_error = Some("Use a full path, starting with / or ~");
+            self.entry_error = Some(config::RELATIVE_GAMES_ROOT);
             return;
         }
         model.games_root = root;
@@ -196,7 +198,7 @@ impl Folders {
         };
         let label = TextStyle::new(14, Weight::Bold, MUTED);
         gfx.text(M, CONTENT_Y + 20.0, "GAMES ROOT", label, Align::Left);
-        entry.draw_field(gfx, Rect::new(M, CONTENT_Y + 40.0, KEYBOARD_W, 88.0), "~/Games");
+        entry.draw_field(gfx, Rect::new(M, CONTENT_Y + 40.0, KEYBOARD_W, 88.0), PLACEHOLDER);
         if let Some(error) = self.entry_error {
             let style = TextStyle::new(18, Weight::Medium, DANGER);
             gfx.text(M, CONTENT_Y + 162.0, error, style, Align::Left);
@@ -264,7 +266,7 @@ impl Folders {
             } else if error.is_some() {
                 gfx.fill_circle(fx + 9.0, fy + 26.0, 6.0, DANGER);
             }
-            let shown = format!("{}/", tilde(&folder.path, home.as_deref()));
+            let shown = format!("{}{}", tilde(&folder.path, home.as_deref()), MAIN_SEPARATOR);
             let shown = trim_start(&shown, LABEL_X - 34.0 - 12.0, |s| gfx.measure(s, path_style));
             gfx.text(fx + 34.0, fy + 34.0, &shown, path_style, Align::Left);
             let room = if col + 1 == COLS {
@@ -578,13 +580,14 @@ mod tests {
         let mut model = Model::new(root.path().to_path_buf());
         step.entry = Some(TextEntry::new("Games", MAX_PATH_CHARS));
         step.save(&mut model);
-        assert_eq!(step.entry_error, Some("Use a full path, starting with / or ~"));
+        assert_eq!(step.entry_error, Some(config::RELATIVE_GAMES_ROOT));
         step.handle(Input::Action(Action::Back), &mut model, &mut ctx);
         assert_eq!(step.entry_error, None, "closing the field clears it");
-        step.entry = Some(TextEntry::new("/mnt/Games", MAX_PATH_CHARS));
+        let full = if cfg!(windows) { r"D:\Games" } else { "/mnt/Games" };
+        step.entry = Some(TextEntry::new(full, MAX_PATH_CHARS));
         step.save(&mut model);
         assert_eq!((step.entry.is_none(), step.entry_error), (true, None));
-        assert_eq!(model.games_root, Path::new("/mnt/Games"));
+        assert_eq!(model.games_root, Path::new(full));
     }
 
     #[test]
@@ -601,7 +604,8 @@ mod tests {
         let mut step = Folders::new();
         let mut model = Model::new(file.clone());
         step.create(&mut model);
-        assert_eq!(step.error(&file.join("bios")), Some("Not a directory"));
+        let why = crate::screens::not_a_directory();
+        assert_eq!(step.error(&file.join("bios")), Some(why.as_str()));
         assert_eq!(step.focus, Focus::Create, "for trying again");
         assert!(!step.can_continue(&model));
     }

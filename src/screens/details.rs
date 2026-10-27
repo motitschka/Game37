@@ -504,7 +504,7 @@ impl Screen for DetailsPage {
 
         let folder = matches!(self.size, Size::Known(Some(Measured { folder: true, .. })));
         let path = if folder {
-            format!("{}/", self.path)
+            format!("{}{}", self.path, std::path::MAIN_SEPARATOR)
         } else {
             self.path.clone()
         };
@@ -586,7 +586,7 @@ mod tests {
     #[test]
     fn play_on_the_details_page_plays_an_embedded_game_whose_core_is_installed() {
         let (_dir, mut ctx, game) = world("snes", "snes/Zelda.sfc");
-        touch(&ctx.data_dir.join("cores/bsnes_libretro.so"));
+        touch(&cores::installed_path(&ctx.data_dir, &cores::BSNES));
         let mut page = DetailsPage::new(game.clone(), &ctx);
         assert_eq!(page.focus, Button::Play, "focus starts on Play");
         assert_eq!(page.hints()[0], PLAY_HINT);

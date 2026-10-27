@@ -564,10 +564,24 @@ fn run(
         .map_err(|e| save_failed(core, &e))?;
     check_cancel(cancel)?;
     let final_path = installed_path(data_dir, core);
-    library
-        .persist(&final_path)
-        .map_err(|e| save_failed(core, &e.error))?;
+    persist(library, &final_path).map_err(|e| save_failed(core, &e))?;
     Ok(final_path)
+}
+
+/// Moves a finished file into place. Windows refuses to replace a file ("Access denied") while
+/// another download of the same Core is replacing it, so there it tries again for up to a second.
+fn persist(mut file: NamedTempFile, to: &Path) -> io::Result<()> {
+    for _ in 0..50 {
+        match file.persist(to) {
+            Ok(_) => return Ok(()),
+            Err(e) if cfg!(windows) && e.error.kind() == io::ErrorKind::PermissionDenied => {
+                file = e.file;
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => return Err(e.error),
+        }
+    }
+    file.persist(to).map(drop).map_err(|e| e.error)
 }
 
 /// Reads a Core out of its zip `entry`, a chunk at a time so a cancel is seen promptly. An entry

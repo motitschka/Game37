@@ -110,11 +110,11 @@ pub fn refocus(old: &[GameRow], col: usize, new: &[GameRow]) -> usize {
     }
 }
 
-/// "~/Games" for a Games Root inside the home directory.
+/// "~/Games" (on Windows "~\\Games") for a Games Root inside the home directory.
 pub fn tilde(path: &Path, home: Option<&Path>) -> String {
     match home.and_then(|h| path.strip_prefix(h).ok()) {
         Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
-        Some(rest) => format!("~/{}", rest.display()),
+        Some(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
         None => path.display().to_string(),
     }
 }
@@ -621,6 +621,18 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
+    fn games_root_in_the_profile_folder_is_written_with_a_tilde_and_backslashes() {
+        let home = Path::new(r"C:\Users\ann");
+        assert_eq!(tilde(Path::new(r"C:\Users\ann\Games"), Some(home)), r"~\Games");
+        assert_eq!(tilde(&home.join("Games").join("nes"), Some(home)), r"~\Games\nes");
+        assert_eq!(tilde(home, Some(home)), "~");
+        assert_eq!(tilde(Path::new(r"D:\Games"), Some(home)), r"D:\Games");
+        assert_eq!(tilde(Path::new(r"D:\Games"), None), r"D:\Games");
+    }
+
+    #[test]
+    #[cfg(unix)] // Its paths are Unix ones; the test above is Windows'.
     fn games_root_in_home_is_written_with_a_tilde() {
         let home = Path::new("/home/ann");
         assert_eq!(tilde(Path::new("/home/ann/Games"), Some(home)), "~/Games");

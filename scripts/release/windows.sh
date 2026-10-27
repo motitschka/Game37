@@ -3,7 +3,7 @@
 # MinGW-w64, and runs what it built under Wine there.
 #
 #   scripts/release/windows.sh build    game37.exe and the DLLs it needs, in target/release-check/windows/
-#   scripts/release/windows.sh test     the unit tests built for Windows, run under Wine
+#   scripts/release/windows.sh test [filter]   the unit tests built for Windows, run under Wine
 #   scripts/release/windows.sh clippy   clippy for the Windows target, all targets, -D warnings
 #   scripts/release/windows.sh smoke    build, then one headless screenshot under Wine (windows-smoke.png)
 #
@@ -16,7 +16,7 @@
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
-command=${1:?usage: windows.sh <build|test|clippy|smoke>}
+command=${1:?usage: windows.sh <build|test [filter]|clippy|smoke>}
 image=game37-windows-build:debian13
 toolchain=$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu
 cache=$out/windows-cache
@@ -109,7 +109,7 @@ main() {
     test)
         in_container '
 export WINEPATH=$(cargo test --locked --offline --target $target --no-run 2>&1 | tail -1 >&2; runtime_path debug)
-xvfb-run -a cargo test --locked --offline --target $target 2>&1 | grep -v "^test .* ok$"
+xvfb-run -a cargo test --locked --offline --target $target -- '"${2:-}"' 2>&1 | grep -v "^test .* ok$"
 '
         ;;
     smoke)
@@ -130,4 +130,4 @@ xvfb-run -a cargo test --locked --offline --target $target 2>&1 | grep -v "^test
 }
 
 mkdir -p "$out/out" "$out/windows"
-main 2>&1 | tee "$out/out/windows-$command.log"
+main "$@" 2>&1 | tee "$out/out/windows-$command.log"

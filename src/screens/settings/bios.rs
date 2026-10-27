@@ -2,6 +2,8 @@
 //! table of every System in System Order and its BIOS status, using the same check as launching
 //! (FR-EMB-12). The rows have no action: the section can be entered only to move down the table.
 
+use std::path::MAIN_SEPARATOR;
+
 use super::{RW, RX, Row, Section, TOP};
 use crate::cores;
 use crate::ctx::Ctx;
@@ -49,7 +51,7 @@ impl Status {
                 Some(file) => Status::Found(file),
                 None => {
                     let dir = tilde(&ctx.games_root.join("bios"), dirs::home_dir().as_deref());
-                    Status::Missing(format!("Missing: put {ASK_FOR} in {dir}/"))
+                    Status::Missing(format!("Missing: put {ASK_FOR} in {dir}{MAIN_SEPARATOR}"))
                 }
             },
             _ => Status::NotNeeded,
@@ -191,7 +193,7 @@ mod tests {
         let rows = Bios::default().rows(&ctx);
         let bios = ctx.games_root.join("bios");
         let dir = tilde(&bios, dirs::home_dir().as_deref());
-        let missing = format!("Missing: put {ASK_FOR} in {dir}/");
+        let missing = format!("Missing: put {ASK_FOR} in {dir}{MAIN_SEPARATOR}");
         assert_eq!(value(&rows, "ps1"), missing);
         for id in ["nes", "gb", "snes", "n64", "gbc", "gba", "nds", "psp"] {
             assert_eq!(value(&rows, id), "No BIOS needed", "{id}");
