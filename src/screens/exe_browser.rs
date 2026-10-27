@@ -6,8 +6,9 @@
 //! Up and Down move in a column, Left and Right between the two. Confirm opens a place or a folder
 //! and chooses an `.exe`, which hands its path to the callback and closes the browser. Back goes up
 //! a folder; from the folder of the place last opened it goes to the places instead, and from the
-//! places it cancels, as X does anywhere. Folders are read on a thread of their own (NFR-3), so even
-//! `C:\Windows\System32` never holds up a frame.
+//! places it cancels, as X does anywhere. Folders are read, and the places discovered, each on a
+//! thread of their own (NFR-3), so even `C:\Windows\System32` or a disconnected network drive never
+//! holds up a frame; the places column shows "Loading…" until they arrive.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -50,6 +51,8 @@ const CRUMB_SEP: &str = "  ›  ";
 type OnChoose = Box<dyn FnOnce(&mut Ctx, PathBuf)>;
 /// Reads one folder's listing, on the reading thread.
 type Read = Arc<dyn Fn(&Path) -> io::Result<Vec<Item>> + Send + Sync>;
+/// Finds this computer's places, on the discovery thread.
+type Discover = Arc<dyn Fn() -> Vec<Place> + Send + Sync>;
 
 /// One entry of the places column: a folder to start from.
 #[derive(Debug, Clone, PartialEq)]
@@ -234,6 +237,14 @@ pub struct ExeBrowser {
     /// The folder asked to start in, if any; else the first place's.
     start: Option<PathBuf>,
     places: Vec<Place>,
+    /// Whether `places` has arrived: the places column shows "Loading…" until it has.
+    places_ready: bool,
+    /// The discovery under way, if it has started; it starts on the next tick.
+    places_pending: Option<Receiver<Vec<Place>>>,
+    discover: Discover,
+    /// True until `places` has arrived, when `start` was `None`: `open` needs the places to pick a
+    /// folder to start in.
+    awaiting_places: bool,
     /// The place last opened, or the one the start folder is in: Back from its own folder goes to
     /// the places column rather than further up.
     place: Option<usize>,
@@ -266,14 +277,19 @@ impl ExeBrowser {
         in_setup: bool,
         on_choose: impl FnOnce(&mut Ctx, PathBuf) + 'static,
     ) -> ExeBrowser {
+        let awaiting_places = start.is_none();
         let mut browser = ExeBrowser {
             title: format!("Choose {emulator}'s program"),
             usually: format!("Usually {expected}"),
             expected: expected.to_owned(),
             in_setup,
             on_choose: Some(Box::new(on_choose)),
-            start,
+            start: start.clone(),
             places: Vec::new(),
+            places_ready: false,
+            places_pending: None,
+            discover: Arc::new(places),
+            awaiting_places,
             place: None,
             column: Column::List,
             place_focus: 0,
@@ -288,20 +304,30 @@ impl ExeBrowser {
             place_hits: Vec::new(),
             item_hits: Vec::new(),
         };
-        browser.set_places(places());
+        if let Some(start) = start {
+            browser.open(start);
+        }
         browser
     }
 
-    /// Shows `places` instead of this computer's: the seam tests and screenshot mode use.
+    /// Shows `places` instead of this computer's, synchronously: the seam tests and screenshot
+    /// mode use.
     pub fn with_places(mut self, places: Vec<Place>) -> ExeBrowser {
         self.set_places(places);
         self
     }
 
+    /// `places` has arrived (synchronously from `with_places`, or off the discovery thread):
+    /// opens the start folder if `open` was waiting on it, and marks the place it's in.
     fn set_places(&mut self, places: Vec<Place>) {
         self.places = places;
-        let first = self.places.first().map(|p| p.path.clone());
-        self.open(self.start.clone().or(first).unwrap_or_default());
+        self.places_ready = true;
+        self.places_pending = None;
+        if self.awaiting_places {
+            let first = self.places.first().map(|p| p.path.clone());
+            self.open(self.start.clone().or(first).unwrap_or_default());
+            self.awaiting_places = false;
+        }
         self.place = place_of(&self.places, &self.folder);
         self.place_focus = self.place.unwrap_or(0);
     }
@@ -343,8 +369,36 @@ impl ExeBrowser {
         }
     }
 
+    /// Starts discovering the places if it hasn't started, and takes them once they arrive.
+    fn poll_places(&mut self) {
+        if !self.places_ready && self.places_pending.is_none() {
+            let (send, receive) = mpsc::channel();
+            let discover = self.discover.clone();
+            thread::spawn(move || {
+                // The browser may have moved on and dropped the receiver: nobody needs this then.
+                let _ = send.send(discover());
+            });
+            self.places_pending = Some(receive);
+        }
+        let Some(pending) = &self.places_pending else {
+            return;
+        };
+        let places = match pending.try_recv() {
+            Ok(places) => places,
+            Err(TryRecvError::Empty) => return,
+            // The discovery thread is gone without an answer: show no places rather than hang.
+            Err(TryRecvError::Disconnected) => Vec::new(),
+        };
+        self.set_places(places);
+    }
+
     /// Starts reading the folder if it hasn't started, and takes the listing once it has arrived.
     fn poll(&mut self) {
+        self.poll_places();
+        if self.awaiting_places {
+            // `open` needs the places first; `set_places` will call it once they arrive.
+            return;
+        }
         if matches!(self.listing, Listing::Loading) && self.pending.is_none() {
             let (send, receive) = mpsc::channel();
             let (read, dir) = (self.read.clone(), self.folder.clone());
@@ -486,6 +540,17 @@ impl ExeBrowser {
         let panel = Rect::new(M, TOP, PLACES_W, BOTTOM - TOP);
         draw_panel(gfx, panel);
         self.place_hits.clear();
+        if !self.places_ready {
+            let style = TextStyle::new(20, Weight::Medium, MUTED);
+            gfx.text(
+                M + 40.0,
+                TOP + PAD + PLACE_H / 2.0 + 7.0,
+                "Loading…",
+                style,
+                Align::Left,
+            );
+            return;
+        }
         gfx.clip(Some(panel.inset(8.0)));
         for (i, place) in self.places.iter().enumerate() {
             let r = Rect::new(
@@ -647,7 +712,7 @@ impl Screen for ExeBrowser {
     }
 
     fn busy(&self) -> bool {
-        matches!(self.listing, Listing::Loading)
+        !self.places_ready || matches!(self.listing, Listing::Loading)
     }
 
     fn draw(&mut self, gfx: &mut Gfx<'_>, _: &Ctx) {
@@ -922,6 +987,57 @@ mod tests {
         open.send(()).unwrap();
         settle(&mut b, ctx);
         assert_eq!(names(b.items()), ["a.exe"]);
+    }
+
+    #[test]
+    fn slow_place_discovery_runs_off_the_ui_thread_and_shows_loading_meanwhile() {
+        let ctx = &mut Ctx::empty();
+        let dir = tree(&[], &["a.exe"]);
+        let (open, gate) = mpsc::channel::<()>();
+        let gate = Mutex::new(gate);
+        // Discovery on the UI thread (e.g. a disconnected network drive) would wait out the gate
+        // here, stalling `new` and every tick until it timed out.
+        let discover: Discover = Arc::new(move || {
+            gate.lock().unwrap().recv_timeout(Duration::from_secs(5)).unwrap();
+            Vec::new()
+        });
+        let started = Instant::now();
+        let mut b = ExeBrowser::new(
+            "PCSX2",
+            "pcsx2-qt.exe",
+            Some(dir.path().to_owned()),
+            false,
+            |_, _| {},
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "new() waited on place discovery"
+        );
+        b.discover = discover;
+        let ticked = Instant::now();
+        b.tick(ctx);
+        assert!(
+            ticked.elapsed() < Duration::from_millis(500),
+            "tick() waited on place discovery"
+        );
+        b.tick(ctx);
+        assert!(!b.places_ready, "the gate is still shut");
+        assert!(b.busy());
+        // The folder listing, read independently, still arrives while the places are loading.
+        let listed = Instant::now() + Duration::from_secs(5);
+        while matches!(b.listing, Listing::Loading) && Instant::now() < listed {
+            thread::sleep(Duration::from_millis(1));
+            b.tick(ctx);
+        }
+        assert_eq!(names(b.items()), ["a.exe"]);
+        open.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !b.places_ready && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+            b.tick(ctx);
+        }
+        assert!(b.places_ready, "the places never arrived");
+        assert!(!b.busy());
     }
 
     #[test]
