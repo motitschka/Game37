@@ -9,6 +9,12 @@ use crate::ui::{H, Rect, W};
 const LOCKSTEP_TOLERANCE: f64 = 0.01;
 /// The most Core frames one displayed frame runs; the backlog beyond is dropped (no fast-forward).
 pub const MAX_FRAMES_PER_DISPLAY: u32 = 3;
+/// How much of each displayed frame's time goes into the running average of their length.
+const INTERVAL_SMOOTHING: f64 = 0.05;
+/// Lockstep holds while displayed frames average at least this share of the display's refresh
+/// interval. Shorter means presents aren't waiting for the display (vsync isn't working), and one
+/// Core frame per displayed frame would run the Game too fast.
+const LOCKSTEP_MIN_INTERVAL: f64 = 0.9;
 
 /// Decides how many Core frames each displayed frame runs.
 #[derive(Debug, Clone, PartialEq)]
@@ -16,6 +22,9 @@ pub struct Scheduler {
     fps: f64,
     /// The display's refresh rate when it is close enough to the Core's fps to run in lockstep.
     lockstep: Option<f64>,
+    /// The running average length of a displayed frame, in seconds: lockstep only while it shows
+    /// the display really paces them.
+    interval: f64,
     due: f64,
 }
 
@@ -26,16 +35,23 @@ impl Scheduler {
         Scheduler {
             fps,
             lockstep,
+            interval: lockstep.map_or(0.0, |r| 1.0 / r),
             due: 0.0,
         }
     }
 
-    /// Core frames to run for a displayed frame that came `dt` seconds after the last one.
+    /// Core frames to run for a displayed frame that came `dt` seconds after the last one. In
+    /// lockstep that is one, as long as the displayed frames keep to the display's rate; when
+    /// they come faster (vsync isn't holding them back), the clock decides instead.
     pub fn frames(&mut self, dt: f64) -> u32 {
+        let dt = dt.max(0.0);
         if self.lockstep.is_some() {
-            return 1;
+            self.interval += (dt - self.interval) * INTERVAL_SMOOTHING;
+            if self.locked() {
+                return 1;
+            }
         }
-        self.due += dt.max(0.0) * self.fps;
+        self.due += dt * self.fps;
         let whole = self.due.floor();
         self.due -= whole;
         (whole as u32).min(MAX_FRAMES_PER_DISPLAY)
@@ -49,7 +65,16 @@ impl Scheduler {
     /// The audio speed that matches the Core's output to real time: in lockstep the Core runs at
     /// the display's rate, not its own, so its audio comes that much faster or slower.
     pub fn base_ratio(&self) -> f64 {
-        self.lockstep.map_or(1.0, |r| r / self.fps)
+        match self.lockstep {
+            Some(r) if self.locked() => r / self.fps,
+            _ => 1.0,
+        }
+    }
+
+    /// Whether displayed frames are paced by the display, so lockstep holds.
+    fn locked(&self) -> bool {
+        self.lockstep
+            .is_some_and(|r| self.interval >= LOCKSTEP_MIN_INTERVAL / r)
     }
 }
 
@@ -196,6 +221,21 @@ mod tests {
         let total: u32 = frames.iter().sum();
         assert!((600..=601).contains(&total), "{total} Core frames in 10 s");
         assert_eq!(s.base_ratio(), 1.0);
+    }
+
+    /// Presents that don't wait for the display (vsync off) would run the Game at their rate: at
+    /// 3400 a second, that's 57 times too fast. The clock takes over instead.
+    #[test]
+    fn lockstep_without_vsync_holding_presents_back_follows_the_clock() {
+        let mut s = Scheduler::new(NES, Some(60.0));
+        let frames = run(&mut s, 3400.0, 34_000);
+        let total: u32 = frames.iter().sum();
+        assert!((595..=605).contains(&total), "{total} Core frames in 10 s");
+        assert_eq!(s.base_ratio(), 1.0, "not in lockstep");
+        assert!(
+            run(&mut s, 60.0, 600).iter().skip(120).all(|&n| n == 1),
+            "back in lockstep"
+        );
     }
 
     #[test]

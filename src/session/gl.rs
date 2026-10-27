@@ -8,7 +8,8 @@ use sdl3::sys::video::{
     SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_MAJOR_VERSION, SDL_GL_CONTEXT_MINOR_VERSION,
     SDL_GL_CONTEXT_PROFILE_COMPATIBILITY, SDL_GL_CONTEXT_PROFILE_CORE, SDL_GL_CONTEXT_PROFILE_MASK,
     SDL_GL_CreateContext, SDL_GL_DestroyContext, SDL_GL_GetAttribute, SDL_GL_GetProcAddress,
-    SDL_GL_MakeCurrent, SDL_GL_SetAttribute, SDL_GLAttr, SDL_GLContext,
+    SDL_GL_GetSwapInterval, SDL_GL_MakeCurrent, SDL_GL_SetAttribute, SDL_GL_SetSwapInterval, SDL_GLAttr,
+    SDL_GLContext,
 };
 use sdl3::video::Window;
 
@@ -42,6 +43,17 @@ impl SdlGl {
     }
 }
 
+/// Puts back the frontend's swap interval `vsync` read before a Core's context was made, with the
+/// frontend's context current.
+fn restore_vsync(vsync: Option<c_int>) {
+    // SAFETY: a plain setter; the frontend's context is current.
+    if let Some(vsync) = vsync
+        && !unsafe { SDL_GL_SetSwapInterval(vsync) }
+    {
+        eprintln!("game37: can't restore vsync: {}", sdl3::get_error());
+    }
+}
+
 /// The context attributes a Core's context is made with, as `(attribute, value)`.
 fn attributes(request: GlRequest) -> [(SDL_GLAttr, c_int); 4] {
     let profile = if request.core_profile {
@@ -69,6 +81,12 @@ impl GlHost for SdlGl {
             return Err("the Core already has a context".into());
         }
         self.make_current(self.frontend);
+        // SDL resets its swap interval to 0 when it makes any context, and on Wayland that one
+        // setting is the whole process's: the renderer would lose vsync for good. It's put back
+        // once the frontend's context is current again.
+        let mut vsync = 0;
+        // SAFETY: a plain query with a live out-pointer.
+        let vsync = unsafe { SDL_GL_GetSwapInterval(&mut vsync) }.then_some(vsync);
         let wanted = attributes(request);
         let mut saved = wanted;
         // SAFETY: plain attribute calls; each pointer is to a live local.
@@ -87,6 +105,7 @@ impl GlHost for SdlGl {
         if core.is_null() {
             let e = sdl3::get_error().to_string();
             self.make_current(self.frontend);
+            restore_vsync(vsync);
             let kind = if request.core_profile {
                 "core"
             } else {
@@ -100,6 +119,7 @@ impl GlHost for SdlGl {
         self.core = core;
         // Making a context makes it current.
         self.make_current(self.frontend);
+        restore_vsync(vsync);
         Ok(())
     }
 
@@ -248,6 +268,9 @@ mod real_core_tests {
             SDL_GL_GetCurrentContext()
         };
         assert!(!frontend.is_null(), "{}", sdl3::get_error());
+        // Vsync on, as Game37's renderer asks for it.
+        // SAFETY: a plain setter; the renderer's context is current.
+        assert!(unsafe { SDL_GL_SetSwapInterval(1) }, "{}", sdl3::get_error());
         let window = canvas.window().clone();
         let host: Box<dyn GlHost> = match host {
             Host::Sdl => Box::new(SdlGl::new(window, frontend)),
@@ -337,6 +360,32 @@ mod real_core_tests {
             Host::Sdl,
         );
         assert_drawn_with_gl(&frame);
+    }
+
+    /// Making Mupen64Plus-Next's context leaves the renderer's vsync on. SDL resets the swap
+    /// interval for every new context, and on Wayland that's the whole process's setting: DS
+    /// Games played after an N64 Game ran at the screen's present rate, several times too fast.
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn hw_mupen64plus_next_leaves_the_renderers_vsync_on() {
+        let _serial = serial();
+        let system = TempDir::new().unwrap();
+        let mut gl = start_on_gl(
+            "mupen64plus_next_libretro.so",
+            "n64/N64 NICCC (World).n64",
+            system.path(),
+            (640, 480),
+            Host::Sdl,
+        );
+        gl.run(10);
+        let mut vsync = -2;
+        // SAFETY: a plain query with a live out-pointer; the renderer's context is current.
+        assert!(
+            unsafe { SDL_GL_GetSwapInterval(&mut vsync) },
+            "{}",
+            sdl3::get_error()
+        );
+        assert_eq!(vsync, 1, "the renderer's vsync");
     }
 
     /// Mupen64Plus-Next saves, restores and resets with its own context current: the renderer
