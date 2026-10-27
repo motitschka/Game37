@@ -8,7 +8,7 @@ use crate::ui::input::{Action, Input, Pointer, TextInput};
 
 pub const USAGE: &str = "usage: game37 [--config <path>] [--data-dir <path>] \
 [--screenshot <out.bmp> [--actions <a,b,...>] [--missing-emulators <system ids>] [--frames <n>] \
-[--artwork] [--screen controller-test]]\n\
+[--artwork] [--screen controller-test|exe-browser]]\n\
 --screenshot needs --config and --data-dir too, so it never touches your real Config and data";
 
 #[derive(Debug, Default, PartialEq)]
@@ -46,6 +46,9 @@ pub struct Screenshot {
 pub enum ShotScreen {
     /// `controller-test`: the Controller test over Settings, with fake controllers connected.
     ControllerTest,
+    /// `exe-browser`: the `.exe` browser (FR-WIN-4), as First-run Setup or Settings would open it
+    /// for PCSX2, with a fake set of places.
+    ExeBrowser,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -139,7 +142,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
         screen: match screen.as_deref() {
             None => None,
             Some("controller-test") => Some(ShotScreen::ControllerTest),
-            Some(other) => return Err(format!("bad --screen {other:?}: expected controller-test")),
+            Some("exe-browser") => Some(ShotScreen::ExeBrowser),
+            Some(other) => {
+                return Err(format!(
+                    "bad --screen {other:?}: expected controller-test or exe-browser"
+                ));
+            }
         },
     });
     Ok(options)
@@ -311,11 +319,18 @@ mod tests {
             shot("--screen controller-test --screenshot o.bmp").screen,
             Some(ShotScreen::ControllerTest)
         );
+        assert_eq!(
+            shot("--screen exe-browser --screenshot o.bmp").screen,
+            Some(ShotScreen::ExeBrowser)
+        );
         let err = parse(args("--screen controller-test")).unwrap_err();
         assert!(err.contains("--screen") && err.contains("--screenshot"), "{err}");
         let err = parse(shot_args("--screenshot o.bmp --screen settings")).unwrap_err();
-        assert!(err.contains("controller-test"), "{err}");
-        assert!(USAGE.contains("[--screen controller-test]"));
+        assert!(
+            err.contains("controller-test") && err.contains("exe-browser"),
+            "{err}"
+        );
+        assert!(USAGE.contains("[--screen controller-test|exe-browser]"));
     }
 
     #[test]
