@@ -3,7 +3,7 @@
 These scripts build and check the release files in clean Docker containers. They read the version from
 `Cargo.toml` and write only under `target/release-check/`:
 
-- `pkg/`: the tarballs and their `.sha256` files, the files to upload;
+- `pkg/`: the tarballs, the Windows installer and their `.sha256` files, the files to upload;
 - `out/`: one log and one screenshot per check, and the binary each distro built;
 - `vendor/`: the crates, so the containers build offline.
 
@@ -16,13 +16,17 @@ These scripts build and check the release files in clean Docker containers. They
 | `windows.sh test [filter]` | The unit tests built for Windows, run under Wine; `filter` is passed to the test binary. |
 | `windows.sh clippy` | Clippy for the Windows target, all targets, `-D warnings`. |
 | `windows.sh smoke` | `build`, then one headless screenshot under Wine (`windows-smoke.png`), with a two-minute timeout. Copies the host's Adwaita Sans next to the exe for the run. |
+| `windows.sh installer` | `build`, then the NSIS installer from `installer/game37.nsi`: `pkg/game37-<version>-x86_64-windows-setup.exe` and its `.sha256`. It holds `game37.exe` (with the app icon and version info), the SDL DLLs, `fonts\` with Adwaita Sans and its licence (downloaded from GNOME's `adwaita-fonts` release, checked by SHA-256), `LICENSE` and `README.md`. |
+| `windows.sh installer-check` | That installer in a fresh Wine prefix, with a Config and a Games Root planted first: a silent install (`/S`), its files, Start menu shortcut and uninstall registry key; a screenshot with the installed `game37.exe` (`windows-installer-home.png`); a 20-second normal run, which writes `logs\game37.log` and `library.db`; a silent uninstall, after which the program folder, shortcut and key are gone and the Config, data and Games Root are unchanged. |
 
 Both container scripts take the install command from `README.md` itself, so they also check that the
 commands people copy work. The distro builds use the host's rustup stable toolchain.
 
 `windows.sh` builds in `game37-windows-build:debian13`, an image it makes once from `debian:13` with
-MinGW-w64 and Wine, also with the host's toolchain (which needs the `x86_64-pc-windows-gnu` target).
-Its builds and Wine prefix stay in `windows-cache/`, so later runs are incremental.
+MinGW-w64, Wine (64- and 32-bit, as NSIS installers are 32-bit programs), NSIS and the tools that make
+the icon from `data/game37.svg`, also with the host's toolchain (which needs the
+`x86_64-pc-windows-gnu` target). Its builds, Wine prefix and the font download stay in
+`windows-cache/`, so later runs are incremental.
 
 ## Steps
 
@@ -53,6 +57,12 @@ Its builds and Wine prefix stay in `windows-cache/`, so later runs are increment
    scripts/release/windows.sh clippy && scripts/release/windows.sh test && scripts/release/windows.sh smoke
    ```
 
+6. Build the Windows installer and check it:
+
+   ```bash
+   scripts/release/windows.sh installer && scripts/release/windows.sh installer-check
+   ```
+
 ## What to look at
 
 - Each log in `target/release-check/out/` ends in `RESULT_OK <name>`. A script that fails stops there
@@ -68,11 +78,16 @@ Its builds and Wine prefix stay in `windows-cache/`, so later runs are increment
 - `windows-test.log`: `test result: ok`. `windows-smoke.png` shows Home with readable text and the
   Games Root as a Windows path (`Z:\cache\smoke\games`). The smoke run uses SDL's software renderer,
   because SDL's offscreen video driver finds no EGL under Wine; its log says so.
+- `windows-installer.log`: `Nullsoft Installer` in the `file` line. `windows-installer-check.log`: the
+  installed files, the uninstall key's values, the (normally empty) `game37.log` and `OK` for each kept
+  file. `windows-installer-home.png` shows Home in Adwaita Sans, from the installed `fonts\`.
 - The tarball contents: `tar -tzvf target/release-check/pkg/game37-<version>-x86_64-arch.tar.gz` lists
   `game37-<version>/` with `game37` (`rwxr-xr-x`), `README.md` and `LICENSE`, all `root/root`.
 
-Then upload the two tarballs and the two `.sha256` files from `pkg/` to the GitHub release for the tag
-`v<version>`.
+Then upload the two tarballs, the Windows installer and their `.sha256` files from `pkg/` to the
+GitHub release for the tag `v<version>`. The installer is unsigned, so Windows SmartScreen warns about
+it: "Windows protected your PC", with "More info" and then "Run anyway"; the UAC prompt names an
+"Unknown publisher".
 
 ## Cleaning up
 
