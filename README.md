@@ -2,7 +2,7 @@
 
 # Game37
 
-**An all-in-one game library for Nintendo and Sony consoles on Linux**
+**An all-in-one game library for Nintendo and Sony consoles on Linux and Windows**
 
 [![Release](https://img.shields.io/github/v/release/motitschka/Game37?include_prereleases&color=brightgreen&label=release)](https://github.com/motitschka/Game37/releases)
 [![Downloads](https://img.shields.io/github/downloads/motitschka/Game37/total?color=blue&label=downloads)](https://github.com/motitschka/Game37/releases)
@@ -10,6 +10,7 @@
 [![Visitors](https://visitor-badge.laobi.icu/badge?page_id=motitschka.Game37&left_text=visitors)](https://github.com/motitschka/Game37)
 
 ![Linux](https://img.shields.io/badge/Linux-Arch%20%C2%B7%20Fedora%20%C2%B7%20Ubuntu%20%C2%B7%20Debian%20%C2%B7%20NixOS-lightgrey?logo=linux&logoColor=white)
+![Windows](https://img.shields.io/badge/Windows-10%20%C2%B7%2011-lightgrey?logo=windows&logoColor=white)
 ![Rust](https://img.shields.io/badge/rust-2024%20edition-orange?logo=rust&logoColor=white)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 ![Systems](https://img.shields.io/badge/Systems-17%2C%20NES%20%E2%86%92%20PS4-8B7BFF)
@@ -110,15 +111,17 @@ Systems played with a Core are **Embedded Systems**; the others are **External S
 
 ## Install
 
-Game37 runs on Linux on x86_64. It's developed on Arch Linux with GNOME on Wayland. The build below is
-checked on Arch, Fedora 44, Ubuntu 26.04 LTS and Debian 13 (older releases may not package SDL3), and
-the Nix flake with nixpkgs 26.05. Other platforms aren't supported.
+Game37 runs on Linux and Windows on x86_64. It's developed on Arch Linux with GNOME on Wayland. The build
+below is checked on Arch, Fedora 44, Ubuntu 26.04 LTS and Debian 13 (older releases may not package
+SDL3), and the Nix flake with nixpkgs 26.05. The Windows installer is for Windows 10 and 11; Windows
+support is new (see [Windows](#windows)). Other platforms aren't supported.
 
-There are three ways to get it:
+There are four ways to get it:
 
 - a [prebuilt binary](#prebuilt-binary-arch-linux-and-ubuntu) for Arch Linux and Ubuntu;
 - the [Nix flake](#nixos) on NixOS;
-- [building it yourself](#build-from-source) on Arch, Fedora, Ubuntu or Debian.
+- [building it yourself](#build-from-source) on Arch, Fedora, Ubuntu or Debian;
+- the [installer](#windows) on Windows 10 and 11.
 
 ### What Game37 needs
 
@@ -201,6 +204,37 @@ environment.systemPackages = [ inputs.game37.packages.x86_64-linux.default ];
 Nix builds Game37 on your machine the first time, which takes a few minutes; there's no binary cache
 yet. The libretro Cores Game37 downloads expect a few libraries that NixOS doesn't keep in `/usr/lib`.
 The flake loads them into Game37, so Embedded Systems work as on other distributions.
+
+### Windows
+
+Windows support is new: it's built and checked automatically under Wine and is being tried on a real
+Windows 11 PC, but it has had far less play than Linux. Please [report what breaks](https://github.com/motitschka/Game37/issues),
+with the log file from [Where your data lives](#where-your-data-lives).
+
+1. From the [Releases page](https://github.com/motitschka/Game37/releases), download
+   `game37-<version>-x86_64-windows-setup.exe` and its `.sha256` file. To check the download, open
+   PowerShell in your Downloads folder and compare the output with the `.sha256` file:
+
+   ```powershell
+   Get-FileHash .\game37-<version>-x86_64-windows-setup.exe
+   ```
+
+2. Run the installer. It isn't signed, so Windows shows "Windows protected your PC": click **More info**,
+   then **Run anyway**. The next prompt names an "Unknown publisher"; click **Yes**. Game37 installs into
+   Program Files, with an entry in the Start menu.
+3. Start Game37 from the Start menu. First-run Setup walks you through the rest.
+
+The newer Systems need their emulators, as on Linux, but Windows has no Flatpak. Setup and each System's
+Console Page show a `winget install` command where the emulator has a winget package (Cemu, Azahar,
+PCSX2, shadPS4); paste it into PowerShell or Terminal. Dolphin, Ryubing and RPCS3 come as zip files from
+their own download pages, which Game37 opens for you. Game37 finds emulators installed with their
+installer or with winget by itself. For one it can't find, such as an emulator you unzipped somewhere,
+choose **Choose .exe** and pick its program in Game37's own file browser, which works with a controller.
+Settings → Emulators shows where each one is and lets you choose a different one.
+
+To update, run the newer installer; it replaces the program and keeps everything else. To uninstall,
+use Windows Settings → Apps → Installed apps → Game37. Uninstalling removes the program only: your
+Games, saves, Config and library stay.
 
 ### Build from source
 
@@ -469,6 +503,10 @@ players 1 to 4 in the order they connect. Without a controller, the keyboard pla
 
 ## Where your data lives
 
+On Windows, the same files live in other places: the Config and `secrets.toml` in `%APPDATA%\game37\`,
+the Games Root at `%USERPROFILE%\Games\` (with `bios\`, `saves\` and `states\` inside), and Cores,
+the library, Artwork and the log file `logs\game37.log` in `%LOCALAPPDATA%\game37\`. On Linux:
+
 | Path | What's there |
 |---|---|
 | `~/.config/game37/config.toml` | The Config: your Games Root |
@@ -496,6 +534,8 @@ fetch Artwork from SteamGridDB when you've added a key: only for the Games you l
 a second at most.
 
 ## Known limitations
+
+- On Windows the installer is unsigned, so Windows asks before running it (see [Windows](#windows)).
 
 - PSP needs an X display (XWayland on GNOME): the PPSSPP Core doesn't start on Wayland's EGL. Without
   one, Game37 shows a message instead.
