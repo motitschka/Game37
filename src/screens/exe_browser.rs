@@ -831,6 +831,16 @@ mod tests {
                 "setup.exe.bak",
             ],
         );
+        // Windows hides by the hidden attribute, not by a leading dot.
+        #[cfg(windows)]
+        for name in [".cache", ".secret.exe"] {
+            let status = std::process::Command::new("attrib")
+                .arg("+h")
+                .arg(dir.path().join(name))
+                .status()
+                .unwrap();
+            assert!(status.success(), "attrib +h {name}");
+        }
         let items = read_folder(dir.path()).unwrap();
         assert_eq!(names(&items), ["bin", "tools.d", "a.EXE", "b.exe", "c.Exe"]);
         assert!(items[0].folder && !items[2].folder);
