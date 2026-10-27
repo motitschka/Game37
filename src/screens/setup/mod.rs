@@ -10,7 +10,7 @@
 
 mod cores;
 mod emulators;
-mod folders;
+pub(super) mod folders;
 mod key;
 mod systems;
 
