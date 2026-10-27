@@ -1,12 +1,14 @@
 //! A titled grid of tall covers for a list of Games: "See all" on Home, and a System's Console
 //! Page (FR-CAR-3), after `screen_console_page` in `design/generate_mockups.py`.
 
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use super::choose_exe;
 use super::details::DetailsPage;
 use super::options::OptionsMenu;
 use crate::ctx::Ctx;
-use crate::emulators::Emulator;
+use crate::emulators::{Emulator, InstallHint};
 use crate::library::db::{DbError, GameRow, Library, SortOrder};
 use crate::systems::System;
 use crate::ui::chrome;
@@ -50,10 +52,14 @@ const NOTICE_H: f32 = 176.0;
 /// Gap between the notice and the grid or empty-state message below it.
 const NOTICE_GAP: f32 = 40.0;
 
-/// Which of the notice's two buttons has focus.
+/// Which of the notice's buttons has focus: Copy command and Check again on Linux (FR-CAR-9);
+/// on Windows, Copy command or Download page (whichever the emulator's `InstallHint` is), then
+/// Choose .exe, then Check again (FR-WIN-4, FR-WIN-5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NoticeFocus {
     Copy,
+    Page,
+    Choose,
     Check,
 }
 
@@ -78,6 +84,32 @@ fn step_focus(
         Some(_) if action == Action::Down && len > 0 => (None, 0),
         Some(nf) => (Some(nf), grid_focus),
         None if action == Action::Up && grid_focus < cols => (Some(NoticeFocus::Copy), grid_focus),
+        None => (None, step(grid_focus, len, cols, action)),
+    }
+}
+
+/// [`step_focus`] for the Windows notice, which has three buttons rather than two (FR-WIN-4,
+/// FR-WIN-5): `stops` is their order, first to last, from [`GameGrid::notice_stops`].
+fn step_notice_focus(
+    focus: Option<NoticeFocus>,
+    grid_focus: usize,
+    action: Action,
+    len: usize,
+    cols: usize,
+    stops: &[NoticeFocus],
+) -> (Option<NoticeFocus>, usize) {
+    match focus {
+        Some(nf) if action == Action::Right => {
+            let i = stops.iter().position(|&s| s == nf).unwrap_or(0);
+            (Some(stops[(i + 1).min(stops.len() - 1)]), grid_focus)
+        }
+        Some(nf) if action == Action::Left => {
+            let i = stops.iter().position(|&s| s == nf).unwrap_or(0);
+            (Some(stops[i.saturating_sub(1)]), grid_focus)
+        }
+        Some(_) if action == Action::Down && len > 0 => (None, 0),
+        Some(nf) => (Some(nf), grid_focus),
+        None if action == Action::Up && grid_focus < cols => (Some(stops[0]), grid_focus),
         None => (None, step(grid_focus, len, cols, action)),
     }
 }
@@ -149,10 +181,14 @@ pub struct GameGrid {
     notice_shown: bool,
     /// Which notice button has focus; `None` when the grid has focus, or there's no notice.
     notice_focus: Option<NoticeFocus>,
-    /// Where the notice's two buttons were last drawn, for the mouse.
-    notice_hits: Option<(Rect, Rect)>,
+    /// Where the notice's buttons were last drawn, for the mouse.
+    notice_hits: Vec<(Rect, NoticeFocus)>,
     /// Transient feedback on a notice button after it's pressed, and until when (US-39).
     feedback: Option<(NoticeFocus, &'static str, Instant)>,
+    /// Whether the notice shows Windows' winget command or download page and Choose .exe, rather
+    /// than Linux's Flatpak command (FR-WIN-4, FR-WIN-5): `cfg!(windows)`, except tests turn it
+    /// on to drive the Windows notice from Linux.
+    windows: bool,
 }
 
 impl GameGrid {
@@ -170,8 +206,9 @@ impl GameGrid {
             sort_order: SortOrder::default(),
             notice_shown: false,
             notice_focus: None,
-            notice_hits: None,
+            notice_hits: Vec::new(),
             feedback: None,
+            windows: cfg!(windows),
         }
     }
 
@@ -246,11 +283,12 @@ impl GameGrid {
     }
 
     /// Re-checks whether the notice should show, read fresh from `ctx.emulators` every call
-    /// (cheap) rather than cached across frames (FR-CAR-9). Focus starts on Copy command when the
-    /// notice newly appears; when it clears, focus moves to the grid, or to nothing on an empty
-    /// page (US-39).
+    /// (cheap) rather than cached across frames (FR-CAR-9). Focus starts on the notice's first
+    /// button when it newly appears; when it clears, focus moves to the grid, or to nothing on an
+    /// empty page (US-39).
     fn sync_notice(&mut self, ctx: &Ctx) {
-        let shown = self.missing_emulator(ctx).is_some();
+        let emulator = self.missing_emulator(ctx);
+        let shown = emulator.is_some();
         if shown == self.notice_shown {
             return;
         }
@@ -258,36 +296,79 @@ impl GameGrid {
         self.feedback = None;
         if !shown {
             // The buttons are gone: a pointer over where they were must not focus them.
-            self.notice_hits = None;
+            self.notice_hits.clear();
         }
-        if shown {
-            self.notice_focus = Some(NoticeFocus::Copy);
-        } else {
-            self.notice_focus = None;
-            self.focus = 0;
+        match emulator {
+            Some(emulator) => self.notice_focus = Some(self.notice_stops(emulator)[0]),
+            None => {
+                self.notice_focus = None;
+                self.focus = 0;
+            }
         }
     }
 
-    /// Presses the notice button that currently has focus: Copy command puts the install command
-    /// on the clipboard through `Ctx`'s seam; Check again re-detects the installed emulators and
-    /// re-syncs the notice, which clears it when the emulator is now found (US-39).
-    fn activate_notice(&mut self, ctx: &mut Ctx) {
+    /// What gets `emulator` installed, as the notice shows it: the Flatpak command on Linux; on
+    /// Windows the `windows: bool` field decides, so tests drive the Windows notice from Linux
+    /// (FR-WIN-4, FR-WIN-5).
+    fn notice_hint(&self, emulator: &Emulator) -> InstallHint {
+        if self.windows {
+            emulator.windows_install_hint()
+        } else {
+            emulator.install_hint()
+        }
+    }
+
+    /// The notice's buttons, first to last: on Linux always Copy command then Check again; on
+    /// Windows, Copy command or Download page (whichever `emulator`'s hint is), then Choose .exe,
+    /// then Check again (FR-WIN-4, FR-WIN-5).
+    fn notice_stops(&self, emulator: &Emulator) -> Vec<NoticeFocus> {
+        if !self.windows {
+            return vec![NoticeFocus::Copy, NoticeFocus::Check];
+        }
+        let first = match self.notice_hint(emulator) {
+            InstallHint::Command(_) => NoticeFocus::Copy,
+            InstallHint::Page(_) => NoticeFocus::Page,
+        };
+        vec![first, NoticeFocus::Choose, NoticeFocus::Check]
+    }
+
+    /// Re-detects the installed emulators and re-syncs the notice, which clears it when the
+    /// emulator is now found (US-39).
+    fn check_again(&mut self, ctx: &mut Ctx) {
+        ctx.emulators = (ctx.detect_emulators)();
+        self.sync_notice(ctx);
+        if self.notice_shown {
+            self.feedback = Some((NoticeFocus::Check, "Still not installed", Instant::now()));
+        }
+    }
+
+    /// Presses the notice button that currently has focus (US-39, FR-WIN-4, FR-WIN-5): Copy
+    /// command puts the install command on the clipboard through `Ctx`'s seam; Download page asks
+    /// `Ctx` to open it; Choose .exe pushes the `.exe` browser, which saves the choice and clears
+    /// the notice once it's picked; Check again re-detects the installed emulators.
+    fn activate_notice(&mut self, ctx: &mut Ctx) -> Transition {
         let (Some(focus), Some(emulator)) = (self.notice_focus, self.missing_emulator(ctx)) else {
-            return;
+            return Transition::None;
         };
         match focus {
             NoticeFocus::Copy => {
-                ctx.clipboard_request = Some(emulator.install_command());
+                ctx.clipboard_request = Some(self.notice_hint(emulator).text().to_owned());
                 self.feedback = Some((NoticeFocus::Copy, "Copied", Instant::now()));
             }
-            NoticeFocus::Check => {
-                ctx.emulators = (ctx.detect_emulators)();
-                self.sync_notice(ctx);
-                if self.notice_shown {
-                    self.feedback = Some((NoticeFocus::Check, "Still not installed", Instant::now()));
+            NoticeFocus::Page => {
+                if let InstallHint::Page(url) = self.notice_hint(emulator) {
+                    ctx.open_url_request = Some(url.to_owned());
                 }
             }
+            NoticeFocus::Choose => {
+                let on_choose = Box::new(move |ctx: &mut Ctx, path: PathBuf| {
+                    choose_exe::save(ctx, emulator, Some(&path));
+                });
+                return Transition::Push((ctx.choose_exe)(emulator, None, false, on_choose));
+            }
+            NoticeFocus::Check => self.check_again(ctx),
         }
+        Transition::None
     }
 
     /// Which notice button, if any, is under a point; `None` while the notice is hidden.
@@ -295,14 +376,7 @@ impl GameGrid {
         if !self.notice_shown {
             return None;
         }
-        let (copy, check) = self.notice_hits?;
-        if copy.contains(x, y) {
-            Some(NoticeFocus::Copy)
-        } else if check.contains(x, y) {
-            Some(NoticeFocus::Check)
-        } else {
-            None
-        }
+        hit(&self.notice_hits, x, y)
     }
 
     /// Cycles the global sort order and reloads (FR-CAR-5); a no-op on an empty Console Page, where
@@ -383,9 +457,25 @@ impl GameGrid {
     }
 
     /// The missing-emulator notice above the grid or the empty-state message (FR-CAR-9), after
-    /// `screen_console_missing_emulator` in `design/generate_mockups.py`. Returns where its Copy
-    /// command and Check again buttons were drawn, for the mouse.
-    fn draw_notice(&self, gfx: &mut Gfx<'_>, emulator: &Emulator, system: &System) -> (Rect, Rect) {
+    /// `screen_console_missing_emulator` (Linux) or `screen_console_missing_emulator_windows`
+    /// (Windows) in `design/generate_mockups.py`. Returns where its buttons were drawn, for the
+    /// mouse.
+    fn draw_notice(
+        &self,
+        gfx: &mut Gfx<'_>,
+        emulator: &Emulator,
+        system: &System,
+    ) -> Vec<(Rect, NoticeFocus)> {
+        self.draw_notice_frame(gfx, emulator, system);
+        if self.windows {
+            self.draw_notice_windows(gfx, emulator)
+        } else {
+            self.draw_notice_linux(gfx, emulator)
+        }
+    }
+
+    /// The notice's box, warning icon, headline and body line, shared by Linux and Windows.
+    fn draw_notice_frame(&self, gfx: &mut Gfx<'_>, emulator: &Emulator, system: &System) {
         let r = Rect::new(M, NOTICE_Y, W - 2.0 * M, NOTICE_H);
         gfx.fill_round_rect(r, 18.0, WARN.alpha(0.1));
         gfx.stroke_round_rect(r, 18.0, 2.0, WARN.alpha(0.55));
@@ -411,7 +501,11 @@ impl GameGrid {
             TextStyle::new(18, Weight::Medium, MUTED),
             Align::Left,
         );
+    }
 
+    /// Linux's notice buttons: the Flatpak command box with Copy command, then Check again
+    /// (FR-CAR-9). Unchanged since before Windows (mockup 09).
+    fn draw_notice_linux(&self, gfx: &mut Gfx<'_>, emulator: &Emulator) -> Vec<(Rect, NoticeFocus)> {
         let cy = NOTICE_Y + 106.0;
         let cmd = emulator.install_command();
         let cmd_box = Rect::new(M + 100.0, cy, 640.0, 48.0);
@@ -434,7 +528,69 @@ impl GameGrid {
         let check = Rect::new(copy.x + copy.w + 20.0, cy, 168.0, 48.0);
         self.draw_notice_button(gfx, check, NoticeFocus::Check, check_label);
 
-        (copy, check)
+        vec![(copy, NoticeFocus::Copy), (check, NoticeFocus::Check)]
+    }
+
+    /// Windows' notice buttons, after `screen_console_missing_emulator_windows` (mockup 36), but
+    /// 48 px tall rather than the mockup's 64, so they stay inside the 176 px notice box
+    /// (FR-WIN-4, FR-WIN-5): a winget command box with Copy command, or a Download page button
+    /// when the emulator has no winget package; then Choose .exe; then Check again.
+    fn draw_notice_windows(&self, gfx: &mut Gfx<'_>, emulator: &Emulator) -> Vec<(Rect, NoticeFocus)> {
+        let cy = NOTICE_Y + 106.0;
+        let label_style = TextStyle::new(18, Weight::SemiBold, TEXT);
+        let mut x = M + 100.0;
+        let mut hits = Vec::new();
+
+        match self.notice_hint(emulator) {
+            InstallHint::Command(cmd) => {
+                let cmd_box = Rect::new(x, cy, 640.0, 48.0);
+                gfx.fill_round_rect(cmd_box, 10.0, BG.alpha(0.4));
+                let mono = TextStyle::new(18, Weight::Medium, TEXT);
+                gfx.text(
+                    cmd_box.x + 20.0,
+                    cy + 31.0,
+                    "$",
+                    TextStyle::new(18, Weight::SemiBold, MUTED),
+                    Align::Left,
+                );
+                gfx.text(cmd_box.x + 42.0, cy + 31.0, &cmd, mono, Align::Left);
+                x += cmd_box.w + 20.0;
+
+                let copy_label = self.notice_label(NoticeFocus::Copy, "Copy command");
+                let copy = Rect::new(x, cy, 206.0, 48.0);
+                self.draw_notice_button(gfx, copy, NoticeFocus::Copy, copy_label);
+                hits.push((copy, NoticeFocus::Copy));
+                x += copy.w + 20.0;
+            }
+            InstallHint::Page(url) => {
+                let label = "Download page";
+                let page_w = 28.0 + 34.0 + gfx.measure(label, label_style) + 28.0;
+                let page = Rect::new(x, cy, page_w, 48.0);
+                self.draw_notice_button(gfx, page, NoticeFocus::Page, label);
+                choose_exe::download_icon(gfx, page.x + 28.0, cy + 24.0, MUTED);
+                hits.push((page, NoticeFocus::Page));
+                x += page.w + 20.0;
+
+                let url_style = TextStyle::new(16, Weight::Medium, MUTED);
+                gfx.text(x, cy + 31.0, url, url_style, Align::Left);
+                x += gfx.measure(url, url_style) + 40.0;
+            }
+        }
+
+        let choose_label = "Choose .exe";
+        let choose_w = 28.0 + gfx.measure(choose_label, label_style) + 28.0;
+        let choose = Rect::new(x, cy, choose_w, 48.0);
+        self.draw_notice_button(gfx, choose, NoticeFocus::Choose, choose_label);
+        hits.push((choose, NoticeFocus::Choose));
+        x += choose.w + 20.0;
+
+        let check_label = self.notice_label(NoticeFocus::Check, "Check again");
+        let check_w = 28.0 + gfx.measure("Check again", label_style) + 28.0;
+        let check = Rect::new(x, cy, check_w, 48.0);
+        self.draw_notice_button(gfx, check, NoticeFocus::Check, check_label);
+        hits.push((check, NoticeFocus::Check));
+
+        hits
     }
 
     /// A notice button's current label: transient feedback while it hasn't expired, else
@@ -475,14 +631,29 @@ impl Screen for GameGrid {
         self.sync_notice(ctx);
         match input {
             Input::Action(Action::Back) => return Transition::Pop,
-            Input::Action(Action::Confirm) if self.notice_focus.is_some() => self.activate_notice(ctx),
+            Input::Action(Action::Confirm) if self.notice_focus.is_some() => {
+                return self.activate_notice(ctx);
+            }
+            // Y is Check again while the Windows notice has focus, whichever button that is
+            // (FR-WIN-4, FR-WIN-5).
+            Input::Action(Action::Options) if self.windows && self.notice_focus.is_some() => {
+                self.check_again(ctx);
+            }
             Input::Action(Action::Sort) if self.extra.is_some() && self.notice_focus.is_none() => {
                 self.cycle_sort(ctx)
             }
             Input::Action(dir) if dir.is_direction() => {
                 self.feedback = None;
                 if self.notice_shown {
-                    let (nf, gf) = step_focus(self.notice_focus, self.focus, dir, self.games.len(), COLS);
+                    let (nf, gf) = if self.windows {
+                        let emulator = self
+                            .missing_emulator(ctx)
+                            .expect("the notice is shown only while an emulator is missing");
+                        let stops = self.notice_stops(emulator);
+                        step_notice_focus(self.notice_focus, self.focus, dir, self.games.len(), COLS, &stops)
+                    } else {
+                        step_focus(self.notice_focus, self.focus, dir, self.games.len(), COLS)
+                    };
                     self.notice_focus = nf;
                     self.focus = gf;
                 } else {
@@ -497,7 +668,7 @@ impl Screen for GameGrid {
             }
             Input::Pointer(Pointer::Click { x, y }) if self.notice_button_at(x, y).is_some() => {
                 self.notice_focus = self.notice_button_at(x, y);
-                self.activate_notice(ctx);
+                return self.activate_notice(ctx);
             }
             Input::Pointer(Pointer::Move { x, y }) if self.notice_button_at(x, y).is_some() => {
                 self.notice_focus = self.notice_button_at(x, y);
@@ -551,14 +722,14 @@ impl Screen for GameGrid {
             Align::Left,
         );
         self.sort_hit = None;
-        self.notice_hits = None;
+        self.notice_hits.clear();
         if let Some(emulator) = self.missing_emulator(ctx) {
             let system = self
                 .extra
                 .as_ref()
                 .expect("the notice only shows on a Console Page")
                 .system;
-            self.notice_hits = Some(self.draw_notice(gfx, emulator, system));
+            self.notice_hits = self.draw_notice(gfx, emulator, system);
         }
         // An empty Console Page shows no header line, sort chip or grid: sorting it would change
         // the global order with no visible effect.
@@ -643,6 +814,21 @@ impl Screen for GameGrid {
 
     fn hints(&self) -> Vec<Hint> {
         match self.notice_focus {
+            // On Windows, Y is Check again on any of the notice's buttons (FR-WIN-4, FR-WIN-5).
+            Some(focus) if self.windows => {
+                let a = match focus {
+                    NoticeFocus::Copy => "Copy command",
+                    NoticeFocus::Page => "Download page",
+                    NoticeFocus::Choose => "Choose .exe",
+                    NoticeFocus::Check => "Check again",
+                };
+                let mut hints = vec![Hint::new(&[Action::Confirm], a)];
+                if focus != NoticeFocus::Check {
+                    hints.push(Hint::new(&[Action::Options], "Check again"));
+                }
+                hints.push(Hint::new(&[Action::Back], "Back"));
+                hints
+            }
             Some(NoticeFocus::Copy) => vec![
                 Hint::new(&[Action::Confirm], "Copy command"),
                 Hint::new(&[Action::Back], "Back"),
@@ -651,6 +837,7 @@ impl Screen for GameGrid {
                 Hint::new(&[Action::Confirm], "Check again"),
                 Hint::new(&[Action::Back], "Back"),
             ],
+            Some(_) => unreachable!("Page and Choose only occur on Windows"),
             None => {
                 let mut hints = Vec::new();
                 if !self.games.is_empty() {
@@ -678,9 +865,16 @@ mod tests {
         systems::by_id("snes").unwrap()
     }
 
-    /// PS2: an External System, with PCSX2 as its Standalone Emulator.
+    /// PS2: an External System, with PCSX2 as its Standalone Emulator, which has a winget
+    /// package (FR-WIN-5).
     fn ps2() -> &'static System {
         systems::by_id("ps2").unwrap()
+    }
+
+    /// GameCube: an External System, with Dolphin as its Standalone Emulator, which has no
+    /// winget package: only a download page (FR-WIN-5).
+    fn gc() -> &'static System {
+        systems::by_id("gc").unwrap()
     }
 
     fn row(id: i64) -> GameRow {
@@ -998,8 +1192,25 @@ mod tests {
     fn missing_pcsx2_page() -> (Ctx, GameGrid) {
         let mut ctx = Ctx::empty();
         ctx.emulators = Emulators::from_installed(Vec::<String>::new());
-        let grid =
+        let mut grid =
             GameGrid::new("PlayStation 2", ps2_source()).sortable(Colour::hex(0), "hint".into(), ps2());
+        // Pins Linux's notice (mockup 09) regardless of the host this test runs on.
+        grid.windows = false;
+        (ctx, grid)
+    }
+
+    fn empty_source() -> Source {
+        Box::new(|_| Ok(Vec::new()))
+    }
+
+    /// A Windows Console Page (FR-WIN-4, FR-WIN-5) for `system`, whose Standalone Emulator isn't
+    /// installed, with the Windows notice turned on so the test drives it from Linux.
+    fn missing_windows_page(system: &'static System) -> (Ctx, GameGrid) {
+        let mut ctx = Ctx::empty();
+        ctx.emulators = Emulators::from_installed(Vec::<String>::new());
+        let mut grid =
+            GameGrid::new(system.name, empty_source()).sortable(Colour::hex(0), "hint".into(), system);
+        grid.windows = true;
         (ctx, grid)
     }
 
@@ -1069,7 +1280,10 @@ mod tests {
         ctx.library.sync_system("ps2", &[found_ps2(0)], 0).unwrap();
         grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
         let check = Rect::new(100.0, 100.0, 50.0, 50.0);
-        grid.notice_hits = Some((Rect::new(0.0, 100.0, 50.0, 50.0), check)); // as last drawn
+        grid.notice_hits = vec![
+            (Rect::new(0.0, 100.0, 50.0, 50.0), NoticeFocus::Copy),
+            (check, NoticeFocus::Check),
+        ]; // as last drawn
         ctx.detect_emulators = Box::new(|| Emulators::from_installed(["net.pcsx2.PCSX2"]));
 
         grid.handle(Input::Action(Action::Right), &mut ctx); // focus Check again
@@ -1112,6 +1326,99 @@ mod tests {
         assert_eq!(
             ctx.clipboard_request.as_deref(),
             Some("flatpak install flathub net.pcsx2.PCSX2")
+        );
+    }
+
+    #[test]
+    fn the_windows_notice_shows_the_winget_command_and_copy_copies_it() {
+        let (mut ctx, mut grid) = missing_windows_page(ps2());
+        grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+        assert!(grid.notice_shown);
+        assert_eq!(
+            grid.notice_focus,
+            Some(NoticeFocus::Copy),
+            "PCSX2 has a winget package"
+        );
+
+        grid.handle(Input::Action(Action::Confirm), &mut ctx);
+
+        assert_eq!(
+            ctx.clipboard_request.as_deref(),
+            Some("winget install -e --id PCSX2Team.PCSX2")
+        );
+    }
+
+    #[test]
+    fn the_windows_notice_s_download_page_button_requests_the_page() {
+        let (mut ctx, mut grid) = missing_windows_page(gc());
+        grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+        assert_eq!(
+            grid.notice_focus,
+            Some(NoticeFocus::Page),
+            "Dolphin has no winget package"
+        );
+
+        grid.handle(Input::Action(Action::Confirm), &mut ctx);
+
+        assert_eq!(
+            ctx.open_url_request.as_deref(),
+            Some("https://dolphin-emu.org/download/")
+        );
+    }
+
+    #[test]
+    fn choose_exe_pushes_the_browser_and_a_pick_saves_and_clears_the_notice() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("PCSX2/pcsx2-qt.exe");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"").unwrap();
+        let config = dir.path().join("config.toml");
+
+        let (mut ctx, mut grid) = missing_windows_page(ps2());
+        ctx.config_path = config.clone();
+        ctx.detect_emulators = Box::new(move || {
+            let chosen = crate::config::load_emulator_exes(&config).unwrap();
+            Emulators::locate_all(&chosen, &crate::emulators::Places::default())
+        });
+        grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+        let asked = choose_exe::tests::picking(&mut ctx, exe.clone());
+
+        grid.handle(Input::Action(Action::Right), &mut ctx); // focus Choose .exe
+        assert_eq!(grid.notice_focus, Some(NoticeFocus::Choose));
+        let opened = grid.handle(Input::Action(Action::Confirm), &mut ctx);
+        choose_exe::tests::answer(opened, &mut ctx, Action::Confirm);
+
+        assert_eq!(*asked.borrow(), vec![("pcsx2", None, false)]);
+        // Before the next draw or input, the choice has already saved and re-detected.
+        grid.handle(Input::Pointer(Pointer::Move { x: -1.0, y: -1.0 }), &mut ctx);
+        assert!(!grid.notice_shown, "PCSX2 is now found at the chosen .exe");
+    }
+
+    #[test]
+    fn check_again_re_detects_on_windows_too() {
+        let (mut ctx, mut grid) = missing_windows_page(ps2());
+        grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+        ctx.detect_emulators = Box::new(|| Emulators::from_installed(["net.pcsx2.PCSX2"]));
+
+        grid.handle(Input::Action(Action::Right), &mut ctx); // focus Choose .exe
+        grid.handle(Input::Action(Action::Right), &mut ctx); // focus Check again
+        assert_eq!(grid.notice_focus, Some(NoticeFocus::Check));
+        grid.handle(Input::Action(Action::Confirm), &mut ctx);
+
+        assert!(!grid.notice_shown, "PCSX2 is now installed");
+    }
+
+    #[test]
+    fn y_checks_again_while_the_windows_notice_has_focus() {
+        let (mut ctx, mut grid) = missing_windows_page(ps2());
+        grid.handle(Input::Action(Action::Back), &mut ctx); // initial load, focus on Copy
+        ctx.detect_emulators = Box::new(|| Emulators::from_installed(["net.pcsx2.PCSX2"]));
+
+        grid.handle(Input::Action(Action::Options), &mut ctx);
+
+        assert!(
+            !grid.notice_shown,
+            "Y checked again and found it, without moving off Copy first"
         );
     }
 }

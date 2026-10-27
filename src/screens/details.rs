@@ -16,7 +16,7 @@ use super::options::OptionsMenu;
 use crate::artwork::Art;
 use crate::cores;
 use crate::ctx::Ctx;
-use crate::emulators::{self, Emulator};
+use crate::emulators::{self, Emulator, InstallHint};
 use crate::launch;
 use crate::library::db::GameRow;
 use crate::session::sdl::{local_time, now_local};
@@ -161,12 +161,19 @@ fn opens_in(system: &System) -> Option<String> {
     }
 }
 
-/// The line under the buttons when Play is off (FR-CAR-9).
+/// The line under the buttons when Play is off (FR-CAR-9): on Windows, when the emulator has no
+/// winget package, there's no install command to point at, only the Console Page's Choose .exe
+/// and download page (FR-WIN-5).
 fn missing_line(emulator: &Emulator, system: &System) -> String {
-    format!(
-        "{} isn't installed, so Play is off. The install command is on the {} Console Page.",
-        emulator.name, system.name
-    )
+    let promise = if cfg!(windows) && matches!(emulator.windows_install_hint(), InstallHint::Page(_)) {
+        format!(
+            "Choose its program, or get it, on the {} Console Page.",
+            system.name
+        )
+    } else {
+        format!("The install command is on the {} Console Page.", system.name)
+    };
+    format!("{} isn't installed, so Play is off. {promise}", emulator.name)
 }
 
 pub struct DetailsPage {
@@ -710,6 +717,20 @@ mod tests {
         assert_eq!(
             missing_line(page.missing.unwrap(), page.system.unwrap()),
             "Cemu isn't installed, so Play is off. The install command is on the Wii U Console Page."
+        );
+    }
+
+    /// On Windows, Dolphin has no winget package (FR-WIN-5), so the line can't promise an
+    /// "install command"; it points at the Console Page's Choose .exe and download page instead.
+    #[test]
+    #[cfg(windows)]
+    fn on_windows_a_download_page_only_emulator_gets_no_install_command_promise() {
+        let (_dir, mut ctx, game) = world("gc", "gc/Metroid.iso");
+        ctx.emulators = Emulators::from_installed(Vec::<String>::new());
+        let page = DetailsPage::new(game, &ctx);
+        assert_eq!(
+            missing_line(page.missing.unwrap(), page.system.unwrap()),
+            "Dolphin isn't installed, so Play is off. Choose its program, or get it, on the GameCube Console Page."
         );
     }
 
