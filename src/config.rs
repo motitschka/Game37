@@ -592,6 +592,68 @@ mod tests {
     }
 
     #[test]
+    fn save_emulator_exe_keeps_a_comment_an_unknown_key_and_games_root_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(
+            &dir,
+            "# a note\ngames_root = \"/old\"\nunknown_key = 42\n[emulators]\nunknown = \"z\"\n",
+        );
+        let exe = if cfg!(windows) {
+            PathBuf::from(r"C:\Emulators\Cemu.exe")
+        } else {
+            PathBuf::from("/opt/Cemu/Cemu.exe")
+        };
+        save_emulator_exe(&path, "cemu", Some(&exe)).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("# a note"), "{text}");
+        assert!(text.contains("unknown_key = 42"), "{text}");
+        assert!(text.contains("games_root"), "{text}");
+        assert_eq!(load_emulator_exes(&path).unwrap().get("cemu"), Some(&exe));
+        assert_eq!(
+            load_emulator_exes(&path).unwrap().get("unknown"),
+            Some(&PathBuf::from("z"))
+        );
+    }
+
+    #[test]
+    fn save_after_save_emulator_exe_keeps_the_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(&dir, "[emulators]\ncemu = \"/old/Cemu.exe\"\n");
+        let config = Config {
+            games_root: PathBuf::from(ELSEWHERE),
+        };
+        save(&path, &config).unwrap();
+
+        assert_eq!(
+            load_emulator_exes(&path).unwrap().get("cemu"),
+            Some(&PathBuf::from("/old/Cemu.exe"))
+        );
+        assert_eq!(load(&path).unwrap().unwrap(), config);
+    }
+
+    #[test]
+    fn clearing_an_emulator_exe_removes_only_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(
+            &dir,
+            "[emulators]\ncemu = \"/a/Cemu.exe\"\npcsx2 = \"/b/pcsx2-qt.exe\"\n",
+        );
+        save_emulator_exe(&path, "cemu", None).unwrap();
+
+        let exes = load_emulator_exes(&path).unwrap();
+        assert_eq!(exes.get("cemu"), None);
+        assert_eq!(exes.get("pcsx2"), Some(&PathBuf::from("/b/pcsx2-qt.exe")));
+    }
+
+    #[test]
+    fn no_emulators_table_means_no_chosen_exes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(&dir, "games_root = \"/old\"\n");
+        assert_eq!(load_emulator_exes(&path).unwrap(), HashMap::new());
+    }
+
+    #[test]
     fn parse_api_key_accepts_trims_and_refuses() {
         assert_eq!(parse_api_key("abc123").unwrap(), Some(ApiKey::new("abc123")));
         assert_eq!(parse_api_key("  abc123  ").unwrap(), Some(ApiKey::new("abc123")));

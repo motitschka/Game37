@@ -459,9 +459,13 @@ pub fn record(ctx: &mut Ctx, game_id: i64, ended_at: i64, elapsed: Duration) {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
     use super::*;
     use crate::ctx::Start;
-    use crate::emulators::{AZAHAR, CEMU, DOLPHIN, PCSX2, RPCS3, RYUBING, SHADPS4};
+    use crate::emulators::{AZAHAR, CEMU, DOLPHIN, Emulators, How, Location, PCSX2, RPCS3, RYUBING, SHADPS4};
     use crate::library::FoundGame;
     use crate::library::db::SortOrder;
     use crate::screens::{Home, Stub};
@@ -513,6 +517,43 @@ mod tests {
         let root = Path::new("/mnt/a:b\\c/Games");
         let argv = command(&PCSX2, root, Path::new("/x.iso"));
         assert_eq!(argv[2], OsString::from("--filesystem=/mnt/a\\:b\\\\c/Games:ro"));
+    }
+
+    #[test]
+    fn each_emulator_gets_its_exe_first_then_the_same_fullscreen_args() {
+        let g = "C:/Games/x/My Game.iso";
+        let cases: [(&Emulator, &[&str]); 7] = [
+            (
+                &DOLPHIN,
+                &["-b", "-C", "Dolphin.Display.Fullscreen=True", "-e", g],
+            ),
+            (&CEMU, &["-f", "-g", g]),
+            (&AZAHAR, &["-f", g]),
+            (&RYUBING, &[g, "--fullscreen"]),
+            (&PCSX2, &["-batch", "-fullscreen", g]),
+            (&RPCS3, &["--no-gui", "--fullscreen", g]),
+            (&SHADPS4, &["-g", g, "--fullscreen", "true"]),
+        ];
+        for (emulator, args) in cases {
+            let exe = format!("C:/Emulators/{}", emulator.exe_names[0]);
+            let argv: Vec<String> = exe_command(emulator, Path::new(&exe), Path::new(g))
+                .into_iter()
+                .map(|a| a.into_string().unwrap())
+                .collect();
+            let expect: Vec<String> = std::iter::once(exe.clone())
+                .chain(args.iter().map(|s| s.to_string()))
+                .collect();
+            assert_eq!(argv, expect, "{}", emulator.name);
+        }
+    }
+
+    #[test]
+    fn exe_dir_is_its_parent_folder_unless_it_is_a_bare_name() {
+        assert_eq!(
+            exe_dir(Path::new("C:/Emulators/RPCS3/rpcs3.exe")),
+            Some(PathBuf::from("C:/Emulators/RPCS3"))
+        );
+        assert_eq!(exe_dir(Path::new("rpcs3.exe")), None);
     }
 
     fn touch(path: &Path) {
@@ -980,6 +1021,73 @@ mod tests {
         let nds = game_of(&w, "nds");
         assert!(matches!(confirm_game(&nds, &mut w.ctx), Transition::None));
         assert_eq!(w.ctx.play.take().map(|p| p.game.system), Some("nds".to_owned()));
+    }
+
+    type Call = (Vec<OsString>, Option<PathBuf>);
+
+    /// Records every `spawn` call instead of running anything; its receivers never get an `Exited`.
+    #[derive(Clone, Default)]
+    struct Recording(Rc<RefCell<Vec<Call>>>);
+
+    impl Spawner for Recording {
+        fn spawn(
+            &mut self,
+            argv: &[OsString],
+            dir: Option<&Path>,
+            _log: &Path,
+        ) -> io::Result<Receiver<Exited>> {
+            self.0.borrow_mut().push((argv.to_vec(), dir.map(Path::to_owned)));
+            Ok(mpsc::channel().1)
+        }
+    }
+
+    /// `Launcher::start`'s argv[0] and working folder: on Windows, the located `.exe` and its own
+    /// folder (FR-WIN-6); on Linux, `flatpak` and no folder, since Flatpak resolves its own.
+    #[test]
+    fn start_passes_the_exe_and_its_folder_on_windows_and_flatpak_with_no_folder_on_linux() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = dir.path().join("Games");
+        touch(&ctx.games_root.join("ps2/Game.iso"));
+        let found = FoundGame {
+            system: "ps2",
+            rel_path: "ps2/Game.iso".into(),
+            title: "Game".into(),
+        };
+        ctx.library.sync_system("ps2", &[found], 0).unwrap();
+        let game = ctx.library.system_games("ps2", SortOrder::AZ).unwrap().remove(0);
+        let mut nav = Nav::with_tabs(vec![
+            ("Home", Box::new(Home::new())),
+            ("Consoles", Box::new(Stub::new("Consoles"))),
+        ]);
+        let recording = Recording::default();
+        let mut launcher = Launcher::new(Box::new(recording.clone()), dir.path().join("data/logs"));
+        launcher.home = None;
+
+        if cfg!(windows) {
+            let exe = dir.path().join("PCSX2/pcsx2-qt.exe");
+            touch(&exe);
+            ctx.emulators = Emulators::located(HashMap::from([(
+                "pcsx2",
+                Location {
+                    exe: exe.clone(),
+                    how: How::Chosen,
+                },
+            )]));
+            assert!(launcher.start(&game, &mut nav, &ctx));
+            let calls = recording.0.borrow();
+            assert_eq!(calls.len(), 1);
+            let (argv, found_dir) = &calls[0];
+            assert_eq!(argv[0], exe.as_os_str());
+            assert_eq!(found_dir.as_deref(), exe.parent());
+        } else {
+            assert!(launcher.start(&game, &mut nav, &ctx));
+            let calls = recording.0.borrow();
+            assert_eq!(calls.len(), 1);
+            let (argv, found_dir) = &calls[0];
+            assert_eq!(argv[0], OsString::from("flatpak"));
+            assert_eq!(*found_dir, None);
+        }
     }
 
     #[test]

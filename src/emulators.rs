@@ -534,7 +534,8 @@ mod registry {
     use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, ERROR_SUCCESS};
     use windows_sys::Win32::System::Registry::{
         HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY,
-        REG_SAM_FLAGS, RRF_RT_REG_SZ, RegCloseKey, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW,
+        REG_SAM_FLAGS, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ, RegCloseKey, RegEnumKeyExW, RegGetValueW,
+        RegOpenKeyExW,
     };
 
     use super::Uninstall;
@@ -603,7 +604,9 @@ mod registry {
         }
 
         /// The string value `value` of the subkey `subkey` (NUL-terminated), environment
-        /// variables expanded; `None` when it is missing, empty or not a string.
+        /// variables expanded; `None` when it is missing, empty or not a string. Accepts REG_SZ
+        /// and REG_EXPAND_SZ: without `RRF_NOEXPAND`, `RegGetValueW` expands a REG_EXPAND_SZ value
+        /// itself when its type is permitted, which `RRF_RT_REG_EXPAND_SZ` does here.
         fn string(&self, subkey: &[u16], value: &str) -> Option<String> {
             let value = wide(value);
             let mut buf = vec![0u16; 260];
@@ -615,7 +618,7 @@ mod registry {
                         self.0,
                         subkey.as_ptr(),
                         value.as_ptr(),
-                        RRF_RT_REG_SZ,
+                        RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ,
                         null_mut(),
                         buf.as_mut_ptr().cast(),
                         &mut bytes,

@@ -5,3 +5,9 @@
 # The folder that holds one folder per System, plus bios/, saves/ and states/.
 # Default: "~/Games"
 games_root = "~/Games"
+
+# Windows only: the .exe chosen for a Standalone Emulator Game37 couldn't find on its own
+# (FR-WIN-4), by the emulator's key. Settings -> Emulators sets these; edit by hand if you'd
+# rather not use it. Literal strings ('...'), so a backslash needs no escaping.
+# [emulators]
+# pcsx2 = 'C:\Program Files\PCSX2\pcsx2-qt.exe'
