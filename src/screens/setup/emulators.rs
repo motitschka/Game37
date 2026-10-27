@@ -153,17 +153,21 @@ fn external(model: &Model) -> impl Iterator<Item = (&'static System, &'static Em
 }
 
 /// The command that installs the ticked Systems' missing emulators, each once (GameCube and Wii
-/// share Dolphin) and in System Order; `None` when none are missing.
+/// share Dolphin) and in System Order; `None` when none are missing. On Windows, where some have
+/// only a download page, those pages when none has a winget command (until W2c's own step).
 fn install_command(model: &Model, installed: &emulators::Emulators) -> Option<String> {
-    let mut ids: Vec<&str> = Vec::new();
-    for (system, _) in external(model) {
-        if let Some(emulator) = installed.missing(system)
-            && !ids.contains(&emulator.flatpak_id)
-        {
-            ids.push(emulator.flatpak_id);
+    let missing: Vec<&Emulator> = external(model)
+        .filter_map(|(s, _)| installed.missing(s))
+        .collect();
+    emulators::install_all(&missing).or_else(|| {
+        let mut pages: Vec<String> = Vec::new();
+        for page in missing.iter().map(|e| e.install_command()) {
+            if !pages.contains(&page) {
+                pages.push(page);
+            }
         }
-    }
-    (!ids.is_empty()).then(|| format!("flatpak install flathub {}", ids.join(" ")))
+        (!pages.is_empty()).then(|| pages.join("  "))
+    })
 }
 
 /// Where the rows go for `n` ticked External Systems: the mockup's rows for up to three, shorter
@@ -410,6 +414,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // The Flatpak command is Linux's; emulators.rs pins the Windows hints.
     fn the_command_lists_each_missing_emulator_once_in_system_order() {
         let setup = ticking(&["nes", "gc", "wii", "3ds", "switch", "ps2"]);
         let installed = Emulators::from_installed(["org.azahar_emu.Azahar"]);
@@ -438,6 +443,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // The Flatpak command is Linux's; emulators.rs pins the Windows hints.
     fn copy_asks_for_the_command_on_the_clipboard() {
         let (mut ctx, _) = detecting(&["org.DolphinEmu.dolphin-emu"]);
         let mut setup = ticking(&["gc", "switch", "ps2"]);

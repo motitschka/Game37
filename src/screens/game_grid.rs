@@ -1102,6 +1102,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // The Flatpak command is Linux's; emulators.rs pins the Windows hints.
     fn copy_command_leaves_a_clipboard_request() {
         let (mut ctx, mut grid) = missing_pcsx2_page();
         grid.handle(Input::Action(Action::Back), &mut ctx); // initial load, focus on Copy

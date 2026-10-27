@@ -28,6 +28,8 @@ zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 [target.'cfg(windows)'.dependencies]
 sdl3 = { version = "0.20", features = ["ttf", "build-from-source"] }
 sdl3-ttf-sys = { version = "0.7", features = ["sdlttf-vendored"] }
+# The registry API, to find the Standalone Emulators' installers (FR-WIN-4).
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Registry"] }
 
 [build-dependencies]
 cc = "1"

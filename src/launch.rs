@@ -128,14 +128,35 @@ pub fn command(emulator: &Emulator, games_root: &Path, file: &Path) -> Vec<OsStr
     grant.push(escape_filesystem(games_root));
     grant.push(":ro");
     let mut argv = vec!["flatpak".into(), "run".into(), grant, emulator.flatpak_id.into()];
-    argv.extend(emulator.args.iter().map(|&a| {
+    argv.extend(args(emulator, file));
+    argv
+}
+
+/// The command that starts `file` in the emulator at `exe`, on Windows (FR-WIN-6): the executable
+/// and the same arguments as on Linux.
+pub fn exe_command(emulator: &Emulator, exe: &Path, file: &Path) -> Vec<OsString> {
+    let mut argv = vec![exe.as_os_str().to_owned()];
+    argv.extend(args(emulator, file));
+    argv
+}
+
+/// The folder the emulator at `exe` runs in on Windows: its own, where portable emulators (RPCS3)
+/// keep their data. `None` for a bare name, found on the `PATH`.
+pub fn exe_dir(exe: &Path) -> Option<PathBuf> {
+    exe.parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(Path::to_owned)
+}
+
+/// `emulator`'s arguments, [`PATH`] replaced by `file`.
+fn args<'a>(emulator: &'a Emulator, file: &'a Path) -> impl Iterator<Item = OsString> + 'a {
+    emulator.args.iter().map(move |&a| {
         if a == PATH {
             file.as_os_str().to_owned()
         } else {
             a.into()
         }
-    }));
-    argv
+    })
 }
 
 /// `path` escaped for a `--filesystem` value, which Flatpak ends at the first unescaped `:` and
@@ -152,8 +173,7 @@ fn escape_filesystem(path: &Path) -> OsString {
     OsString::from_vec(escaped)
 }
 
-/// See the unix `escape_filesystem`. Windows has no Flatpak; this only keeps `command` compiling
-/// until milestone W's W2 gives Windows its own command lines.
+/// See the unix `escape_filesystem`. Windows has no Flatpak, so it runs [`exe_command`] instead.
 #[cfg(windows)]
 fn escape_filesystem(path: &Path) -> OsString {
     let mut escaped = String::new();
@@ -235,15 +255,16 @@ pub struct Exited {
 
 /// Starts a process; the receiver gets its exit.
 pub trait Spawner {
-    fn spawn(&mut self, argv: &[OsString], log: &Path) -> io::Result<Receiver<Exited>>;
+    /// Runs `argv` in the folder `dir` (Game37's own when `None`), its output going to `log`.
+    fn spawn(&mut self, argv: &[OsString], dir: Option<&Path>, log: &Path) -> io::Result<Receiver<Exited>>;
 }
 
 /// Runs the real command.
 pub struct Processes;
 
 impl Spawner for Processes {
-    fn spawn(&mut self, argv: &[OsString], log: &Path) -> io::Result<Receiver<Exited>> {
-        spawn_process(argv, log)
+    fn spawn(&mut self, argv: &[OsString], dir: Option<&Path>, log: &Path) -> io::Result<Receiver<Exited>> {
+        spawn_process(argv, dir, log)
     }
 }
 
@@ -252,16 +273,16 @@ impl Spawner for Processes {
 pub struct NeverExits(Vec<Sender<Exited>>);
 
 impl Spawner for NeverExits {
-    fn spawn(&mut self, _: &[OsString], _: &Path) -> io::Result<Receiver<Exited>> {
+    fn spawn(&mut self, _: &[OsString], _: Option<&Path>, _: &Path) -> io::Result<Receiver<Exited>> {
         let (tx, rx) = mpsc::channel();
         self.0.push(tx);
         Ok(rx)
     }
 }
 
-/// Spawns `argv` with stdout and stderr appended to `log` (or discarded if it can't be opened),
-/// and waits for it on a thread, so the UI thread never blocks.
-pub fn spawn_process(argv: &[OsString], log: &Path) -> io::Result<Receiver<Exited>> {
+/// Spawns `argv` in the folder `dir` (if given) with stdout and stderr appended to `log` (or
+/// discarded if it can't be opened), and waits for it on a thread, so the UI thread never blocks.
+pub fn spawn_process(argv: &[OsString], dir: Option<&Path>, log: &Path) -> io::Result<Receiver<Exited>> {
     let mut file = open_log(log);
     if let Some(f) = &mut file {
         let line: Vec<_> = argv.iter().map(|a| a.to_string_lossy()).collect();
@@ -273,6 +294,9 @@ pub fn spawn_process(argv: &[OsString], log: &Path) -> io::Result<Receiver<Exite
         .stdin(Stdio::null())
         .stdout(stdout.map_or_else(Stdio::null, Stdio::from))
         .stderr(file.map_or_else(Stdio::null, Stdio::from));
+    if let Some(dir) = dir {
+        cmd.current_dir(dir);
+    }
     // Its own process group, so a Ctrl+C in Game37's terminal doesn't also stop the emulator.
     #[cfg(unix)]
     cmd.process_group(0);
@@ -342,10 +366,24 @@ impl Launcher {
             self.home.as_deref(),
         )
         .and_then(|file| {
-            let argv = command(emulator, &ctx.games_root, &file);
-            self.spawner
-                .spawn(&argv, &log)
-                .map_err(|e| format!("flatpak couldn't be started: {e}."))
+            let (argv, dir) = if cfg!(windows) {
+                // Not located (screenshot mode, tests): the bare name, which Windows looks up on
+                // the `PATH`, where winget's links are.
+                let exe = ctx
+                    .emulators
+                    .location(emulator)
+                    .map_or_else(|| PathBuf::from(emulator.exe_names[0]), |l| l.exe.clone());
+                (exe_command(emulator, &exe, &file), exe_dir(&exe))
+            } else {
+                (command(emulator, &ctx.games_root, &file), None)
+            };
+            self.spawner.spawn(&argv, dir.as_deref(), &log).map_err(|e| {
+                let program = Path::new(&argv[0])
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                format!("{program} couldn't be started: {e}.")
+            })
         });
         match spawned {
             Ok(exits) => {
@@ -559,8 +597,8 @@ mod tests {
 
     #[cfg(unix)]
     impl Spawner for Shell {
-        fn spawn(&mut self, _: &[OsString], log: &Path) -> io::Result<Receiver<Exited>> {
-            spawn_process(&["sh".into(), "-c".into(), self.0.into()], log)
+        fn spawn(&mut self, _: &[OsString], _: Option<&Path>, log: &Path) -> io::Result<Receiver<Exited>> {
+            spawn_process(&["sh".into(), "-c".into(), self.0.into()], None, log)
         }
     }
 
@@ -568,14 +606,14 @@ mod tests {
     /// that can hold a space is quoted the way `cmd` reads it.
     #[cfg(windows)]
     impl Spawner for Shell {
-        fn spawn(&mut self, argv: &[OsString], log: &Path) -> io::Result<Receiver<Exited>> {
+        fn spawn(&mut self, argv: &[OsString], _: Option<&Path>, log: &Path) -> io::Result<Receiver<Exited>> {
             let game = argv.last().unwrap();
             let words = self
                 .0
                 .split(' ')
                 .map(|w| if w == "GAME" { game.clone() } else { w.into() });
             let argv: Vec<OsString> = ["cmd".into(), "/c".into()].into_iter().chain(words).collect();
-            spawn_process(&argv, log)
+            spawn_process(&argv, None, log)
         }
     }
 

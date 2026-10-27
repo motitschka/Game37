@@ -43,6 +43,8 @@ pub fn run(options: Options) -> Result<(), String> {
     let mut ctx = Ctx::empty();
     ctx.data_dir = data_dir;
     ctx.config_path = path;
+    let config_path = ctx.config_path.clone();
+    ctx.detect_emulators = Box::new(move || Emulators::detect(&config_path));
     let has_library = match &loaded {
         Ok(Some(config)) => {
             open_library(&mut ctx, config)?;
@@ -117,7 +119,7 @@ fn start_shot_library(ctx: &mut Ctx, with_artwork: bool) -> Result<(), String> {
 /// `secrets.toml`, and the watcher, which scans every System in the background and then follows the
 /// Games Root.
 fn start_live_library(ctx: &mut Ctx) -> LibraryWatcher {
-    ctx.emulators = Emulators::detect();
+    ctx.emulators = (ctx.detect_emulators)();
     ctx.artwork = artwork(&ctx.config_path, &ctx.data_dir);
     watch(ctx)
 }

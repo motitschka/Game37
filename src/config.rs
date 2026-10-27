@@ -3,6 +3,7 @@
 //!
 //! The Config is written by hand. Its existence means setup is done (FR-CFG-1).
 
+use std::collections::HashMap;
 use std::fmt;
 use std::io::Write;
 #[cfg(unix)]
@@ -210,6 +211,59 @@ fn portable_games_root(path: &Path) -> String {
 pub fn save(path: &Path, config: &Config) -> Result<(), ConfigError> {
     let mut doc = read_document(path)?;
     doc["games_root"] = toml_edit::value(portable_games_root(&config.games_root));
+    write_config(path, &doc)
+}
+
+/// The Config's `[emulators]` table: the `.exe` the player chose for each Standalone Emulator, by
+/// its `emulators::Emulator::key` (FR-WIN-4). Only Windows reads it. No file, no table or a value
+/// that isn't a string means nothing chosen there.
+pub fn load_emulator_exes(path: &Path) -> Result<HashMap<String, PathBuf>, ConfigError> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
+        Err(e) => return Err(ConfigError::Read(path.to_owned(), e)),
+    };
+    let table: toml::Table =
+        toml::from_str(&text).map_err(|e| ConfigError::Parse(path.to_owned(), e.message().to_owned()))?;
+    let Some(toml::Value::Table(emulators)) = table.get("emulators") else {
+        return Ok(HashMap::new());
+    };
+    Ok(emulators
+        .iter()
+        .filter_map(|(key, value)| Some((key.clone(), PathBuf::from(value.as_str()?))))
+        .collect())
+}
+
+/// Sets (`Some`) or clears (`None`) the `.exe` chosen for the Standalone Emulator `key` in the
+/// Config at `path`'s `[emulators]` table, keeping everything else in the file, like [`save`].
+pub fn save_emulator_exe(path: &Path, key: &str, exe: Option<&Path>) -> Result<(), ConfigError> {
+    let mut doc = read_document(path)?;
+    match exe {
+        Some(exe) => {
+            let exe = exe.to_str().ok_or_else(|| {
+                let e = std::io::Error::new(std::io::ErrorKind::InvalidData, "the path isn't valid Unicode");
+                ConfigError::Write(path.to_owned(), e)
+            })?;
+            if !doc.get("emulators").is_some_and(toml_edit::Item::is_table_like) {
+                doc["emulators"] = toml_edit::table();
+            }
+            doc["emulators"][key] = toml_edit::value(exe);
+        }
+        None => {
+            if let Some(table) = doc
+                .get_mut("emulators")
+                .and_then(toml_edit::Item::as_table_like_mut)
+            {
+                table.remove(key);
+            }
+        }
+    }
+    write_config(path, &doc)
+}
+
+/// Writes the edited Config `doc` to `path`, keeping the existing file's mode or 0644 for a new
+/// one (see [`save`]).
+fn write_config(path: &Path, doc: &DocumentMut) -> Result<(), ConfigError> {
     #[cfg(unix)]
     let mode = std::fs::metadata(path)
         .map(|m| m.permissions().mode() & 0o777)

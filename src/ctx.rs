@@ -1,6 +1,6 @@
 //! What screens share: the library database and where the Games Root is.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::artwork::Artwork;
 use crate::config::Config;
@@ -139,7 +139,8 @@ impl Ctx {
             button_style: ButtonStyle::default(),
             window_mode: WindowMode::default(),
             emulators: Emulators::all_installed(),
-            detect_emulators: Box::new(Emulators::detect),
+            // No Config yet: `app.rs` swaps in a detector that reads the Config it starts with.
+            detect_emulators: Box::new(|| Emulators::detect(Path::new(""))),
             clipboard_request: None,
             show_file_request: None,
             launch: None,
