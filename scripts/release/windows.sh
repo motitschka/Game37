@@ -5,7 +5,7 @@
 #   scripts/release/windows.sh build    game37.exe and the DLLs it needs, in target/release-check/windows/
 #   scripts/release/windows.sh test [filter]   the unit tests built for Windows, run under Wine
 #   scripts/release/windows.sh clippy   clippy for the Windows target, all targets, -D warnings
-#   scripts/release/windows.sh smoke    build, then one headless screenshot under Wine (windows-smoke.png)
+#   scripts/release/windows.sh smoke    build, then four headless screenshots under Wine (windows-*.png)
 #   scripts/release/windows.sh installer   build, then the NSIS installer and its .sha256 in pkg/
 #   scripts/release/windows.sh installer-check   that installer installed, run and uninstalled under Wine
 #
@@ -242,16 +242,43 @@ xvfb-run -a cargo test --locked --offline --target $target -- '"${2:-}"' 2>&1 | 
     smoke)
         in_container "$(build_script)"
         mkdir -p "$out/windows/fonts" && cp "$font" "$out/windows/fonts/"
-        # A Windows-style Config and data folder, made fresh in the cache, which Wine sees as Z:.
-        rm -rf "$cache/smoke" && mkdir -p "$cache/smoke/games" "$cache/smoke/data"
+        # A Windows-style Config and Games Root, made fresh in the cache, which Wine sees as Z:.
+        # "missing.toml" is never written, so a shot that names it gets First-run Setup.
+        rm -rf "$cache/smoke" && mkdir -p "$cache/smoke/games"
         printf '%s\n' "games_root = 'Z:\\cache\\smoke\\games'" >"$cache/smoke/config.toml"
-        # It takes seconds; the timeout is there so that a hang fails the check instead of waiting.
-        in_container 'cd /out && timeout -k 10 120 xvfb-run -a wine game37.exe --screenshot smoke.bmp \
-    --config "Z:\cache\smoke\config.toml" --data-dir "Z:\cache\smoke\data" --actions "" ||
-    { echo "the screenshot run failed or timed out ($?)" >&2 && exit 1; }'
+        # Each shot takes seconds; the timeout is there so that a hang fails the check instead of
+        # waiting. Each gets its own data dir, because the Carousel remembers its position in the
+        # library database (scripts/smoke-screens.sh), and `wineserver -w` after it, or the next
+        # run can fail with "Invalid window handle".
+        in_container 'cd /out
+shot() {
+    local name=$1 cfg=$2 actions=$3
+    shift 3
+    mkdir -p "/cache/smoke/data-$name"
+    timeout -k 10 120 xvfb-run -a wine game37.exe --screenshot "$name.bmp" \
+        --config "Z:\cache\smoke\$cfg" --data-dir "Z:\cache\smoke\data-$name" --actions "$actions" "$@" ||
+        { echo "the $name screenshot run failed or timed out ($?)" >&2 && exit 1; }
+    wineserver -w
+}
+shot smoke config.toml ""
+# First-run Setup step 2 (FR-WIN-4, FR-WIN-5): GameCube, Nintendo 3DS, Wii U and PlayStation 2
+# ticked, PCSX2 found and the rest not, as design/mockups/35-setup-emulators-windows.svg.
+shot setup-emulators missing.toml \
+    "down,confirm,right,down,confirm,up,right,right,confirm,right,confirm,settings" \
+    --missing-emulators gc,3ds,wiiu
+# The GameCube Console Page with Dolphin missing (FR-WIN-4, FR-WIN-5), as
+# design/mockups/36-console-page-emulator-missing-windows.svg.
+shot console-page-emulator-missing config.toml \
+    "nexttab,right,right,right,right,right,right,confirm" --missing-emulators gc
+# Settings -> Emulators, as design/mockups/37-settings-emulators.svg.
+shot settings-emulators config.toml "settings,down,down,down,right" \
+    --missing-emulators gc,wiiu,3ds,switch,ps3,ps4
+'
         rm -r "$out/windows/fonts"
-        mv "$out/windows/smoke.bmp" "$out/out/windows-smoke.bmp"
-        to_png "$out/out/windows-smoke.bmp"
+        for name in smoke setup-emulators console-page-emulator-missing settings-emulators; do
+            mv "$out/windows/$name.bmp" "$out/out/windows-$name.bmp"
+            to_png "$out/out/windows-$name.bmp"
+        done
         ;;
     installer)
         in_container "VERSION='$version' SETUP='$setup'

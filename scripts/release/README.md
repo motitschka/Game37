@@ -15,7 +15,7 @@ These scripts build and check the release files in clean Docker containers. They
 | `windows.sh build` | Cross-compiles `game37.exe` for Windows with MinGW-w64 (ADR 0015) and collects the DLLs it needs in `windows/`. |
 | `windows.sh test [filter]` | The unit tests built for Windows, run under Wine; `filter` is passed to the test binary. |
 | `windows.sh clippy` | Clippy for the Windows target, all targets, `-D warnings`. |
-| `windows.sh smoke` | `build`, then one headless screenshot under Wine (`windows-smoke.png`), with a two-minute timeout. Copies the host's Adwaita Sans next to the exe for the run. |
+| `windows.sh smoke` | `build`, then four headless screenshots under Wine, each with a two-minute timeout: Home (`windows-smoke.png`), First-run Setup's emulators step (`windows-setup-emulators.png`), the Console Page with an emulator missing (`windows-console-page-emulator-missing.png`) and Settings → Emulators (`windows-settings-emulators.png`). Copies the host's Adwaita Sans next to the exe for the run. |
 | `windows.sh installer` | `build`, then the NSIS installer from `installer/game37.nsi`: `pkg/game37-<version>-x86_64-windows-setup.exe` and its `.sha256`. It holds `game37.exe` (with the app icon and version info), the SDL DLLs, `fonts\` with Adwaita Sans and its licence (downloaded from GNOME's `adwaita-fonts` release, checked by SHA-256), `LICENSE` and `README.md`. |
 | `windows.sh installer-check` | That installer in a fresh Wine prefix, with a Config and a Games Root planted first: a silent install (`/S`), its files, Start menu shortcut and uninstall registry key; a screenshot with the installed `game37.exe` (`windows-installer-home.png`); a 20-second normal run, which writes `logs\game37.log` and `library.db`; a silent uninstall, after which the program folder, shortcut and key are gone and the Config, data and Games Root are unchanged. |
 
@@ -78,6 +78,9 @@ the icon from `data/game37.svg`, also with the host's toolchain (which needs the
 - `windows-test.log`: `test result: ok`. `windows-smoke.png` shows Home with readable text and the
   Games Root as a Windows path (`Z:\cache\smoke\games`). The smoke run uses SDL's software renderer,
   because SDL's offscreen video driver finds no EGL under Wine; its log says so.
+  `windows-setup-emulators.png`, `windows-console-page-emulator-missing.png` and
+  `windows-settings-emulators.png` show First-run Setup's emulators step, the Console Page's
+  missing-emulator notice and Settings → Emulators, each against its mockup in `design/mockups/`.
 - `windows-installer.log`: `Nullsoft Installer` in the `file` line. `windows-installer-check.log`: the
   installed files, the uninstall key's values, the (normally empty) `game37.log` and `OK` for each kept
   file. `windows-installer-home.png` shows Home in Adwaita Sans, from the installed `fonts\`.

@@ -426,7 +426,10 @@ mod tests {
         let emulators = options.screenshot.unwrap().missing_emulators;
         // PCSX2 (ps2) is installed here: its installer's folder, as the mockups show it.
         let location = emulators.location(&emulators::PCSX2).unwrap();
-        assert_eq!(location.exe, PathBuf::from(r"C:\Program Files\PCSX2\pcsx2-qt.exe"));
+        assert_eq!(
+            location.exe,
+            PathBuf::from(r"C:\Program Files\PCSX2\pcsx2-qt.exe")
+        );
         assert_eq!(location.how, emulators::How::Found);
         // Dolphin (gc) is named missing, so it has no location.
         assert_eq!(emulators.location(&emulators::DOLPHIN), None);
