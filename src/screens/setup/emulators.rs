@@ -1,7 +1,7 @@
 //! Step 2, "Install the emulators": the Standalone Emulator each ticked External System needs and
 //! whether it is installed, with the command that installs the missing ones, after
 //! `screen_setup_emulators` and `command_box` in `design/generate_mockups.py`. It is passed over
-//! when no External System is ticked.
+//! when no External System is ticked. Linux's: Windows has [`super::find_emulators`].
 
 use std::time::{Duration, Instant};
 
@@ -89,60 +89,73 @@ impl Install {
         Go::Stay
     }
 
-    /// The command box at `y`, its text wrapped to leave room for Copy and Check again beside it
-    /// within `width`. Returns its height.
+    /// The command box at `y`, as [`command_box`] draws it. Returns its height.
     fn draw_command(&mut self, gfx: &mut Gfx<'_>, y: f32, width: f32, command: &str) -> f32 {
-        let mono = TextStyle::new(18, Weight::Medium, TEXT);
-        let lines = gfx.wrap(
-            command,
-            mono,
-            width - 42.0 - 24.0 - 20.0 - COPY_W - 20.0 - CHECK_W,
-        );
-        let text_w = lines
-            .iter()
-            .map(|line| gfx.measure(line, mono))
-            .fold(0.0, f32::max);
-        let box_w = 42.0 + text_w + 24.0;
-        let box_h = BOX_H + (lines.len() - 1) as f32 * LINE_H;
-        gfx.fill_round_rect(
-            Rect::new(M, y, box_w, box_h),
-            10.0,
-            Colour::hex(0x000000).alpha(0.4),
-        );
-        let prompt = TextStyle::new(18, Weight::SemiBold, DIM);
-        gfx.text(M + 20.0, y + 31.0, "$", prompt, Align::Left);
-        for (i, line) in lines.iter().enumerate() {
-            gfx.text(M + 42.0, y + 31.0 + i as f32 * LINE_H, line, mono, Align::Left);
-        }
-
-        let label = TextStyle::new(18, Weight::SemiBold, TEXT);
-        let copy = Rect::new(M + box_w + 20.0, y, COPY_W, BOX_H);
-        self.draw_focus(gfx, copy, Focus::Copy);
-        gfx.fill_round_rect(copy, 10.0, SURFACE2);
-        // Two overlapping sheets.
-        gfx.stroke_round_rect(Rect::new(copy.x + 22.0, y + 13.0, 14.0, 17.0), 3.0, 2.0, TEXT);
-        let front = Rect::new(copy.x + 27.0, y + 18.0, 14.0, 17.0);
-        gfx.fill_round_rect(front, 3.0, SURFACE2);
-        gfx.stroke_round_rect(front, 3.0, 2.0, TEXT);
         let copied = self.copied.is_some_and(|at| at.elapsed() < FEEDBACK);
-        let copy_label = if copied { "Copied" } else { "Copy" };
-        gfx.text(copy.x + 56.0, y + 31.0, copy_label, label, Align::Left);
-
-        let check = Rect::new(copy.x + COPY_W + 20.0, y, CHECK_W, BOX_H);
-        self.draw_focus(gfx, check, Focus::Check);
-        gfx.stroke_round_rect(check, 10.0, 2.0, LINE);
-        refresh_icon(gfx, check.x + 28.0, y + 22.7);
-        gfx.text(check.x + 52.0, y + 31.0, "Check again", label, Align::Left);
-
+        let focus = (self.focus == Focus::Copy, self.focus == Focus::Check);
+        let (box_h, copy, check) = command_box(gfx, y, width, command, copied, focus);
         self.hits = vec![(copy, Focus::Copy), (check, Focus::Check)];
         box_h
     }
+}
 
-    fn draw_focus(&self, gfx: &mut Gfx<'_>, r: Rect, focus: Focus) {
-        if self.focus == focus {
+/// The command box at `y`, its text wrapped to leave room for Copy and Check again beside it
+/// within `width`, after `command_box`; `focus` is whether Copy and whether Check again has the
+/// focus. Returns its height and where Copy and Check again were drawn.
+pub(super) fn command_box(
+    gfx: &mut Gfx<'_>,
+    y: f32,
+    width: f32,
+    command: &str,
+    copied: bool,
+    focus: (bool, bool),
+) -> (f32, Rect, Rect) {
+    let mono = TextStyle::new(18, Weight::Medium, TEXT);
+    let lines = gfx.wrap(
+        command,
+        mono,
+        width - 42.0 - 24.0 - 20.0 - COPY_W - 20.0 - CHECK_W,
+    );
+    let text_w = lines
+        .iter()
+        .map(|line| gfx.measure(line, mono))
+        .fold(0.0, f32::max);
+    let box_w = 42.0 + text_w + 24.0;
+    let box_h = BOX_H + (lines.len() - 1) as f32 * LINE_H;
+    gfx.fill_round_rect(
+        Rect::new(M, y, box_w, box_h),
+        10.0,
+        Colour::hex(0x000000).alpha(0.4),
+    );
+    let prompt = TextStyle::new(18, Weight::SemiBold, DIM);
+    gfx.text(M + 20.0, y + 31.0, "$", prompt, Align::Left);
+    for (i, line) in lines.iter().enumerate() {
+        gfx.text(M + 42.0, y + 31.0 + i as f32 * LINE_H, line, mono, Align::Left);
+    }
+
+    let focus_ring = |gfx: &mut Gfx<'_>, r: Rect, on: bool| {
+        if on {
             gfx.stroke_round_rect(r.inset(-5.0), 15.0, 3.0, ACCENT);
         }
-    }
+    };
+    let label = TextStyle::new(18, Weight::SemiBold, TEXT);
+    let copy = Rect::new(M + box_w + 20.0, y, COPY_W, BOX_H);
+    focus_ring(gfx, copy, focus.0);
+    gfx.fill_round_rect(copy, 10.0, SURFACE2);
+    // Two overlapping sheets.
+    gfx.stroke_round_rect(Rect::new(copy.x + 22.0, y + 13.0, 14.0, 17.0), 3.0, 2.0, TEXT);
+    let front = Rect::new(copy.x + 27.0, y + 18.0, 14.0, 17.0);
+    gfx.fill_round_rect(front, 3.0, SURFACE2);
+    gfx.stroke_round_rect(front, 3.0, 2.0, TEXT);
+    let copy_label = if copied { "Copied" } else { "Copy" };
+    gfx.text(copy.x + 56.0, y + 31.0, copy_label, label, Align::Left);
+
+    let check = Rect::new(copy.x + COPY_W + 20.0, y, CHECK_W, BOX_H);
+    focus_ring(gfx, check, focus.1);
+    gfx.stroke_round_rect(check, 10.0, 2.0, LINE);
+    refresh_icon(gfx, check.x + 28.0, y + 22.7);
+    gfx.text(check.x + 52.0, y + 31.0, "Check again", label, Align::Left);
+    (box_h, copy, check)
 }
 
 /// The ticked External Systems with their Standalone Emulators, in System Order.
@@ -153,21 +166,13 @@ fn external(model: &Model) -> impl Iterator<Item = (&'static System, &'static Em
 }
 
 /// The command that installs the ticked Systems' missing emulators, each once (GameCube and Wii
-/// share Dolphin) and in System Order; `None` when none are missing. On Windows, where some have
-/// only a download page, those pages when none has a winget command (until W2c's own step).
+/// share Dolphin) and in System Order; `None` when none are missing. Windows has its own step,
+/// [`super::find_emulators`].
 fn install_command(model: &Model, installed: &emulators::Emulators) -> Option<String> {
     let missing: Vec<&Emulator> = external(model)
         .filter_map(|(s, _)| installed.missing(s))
         .collect();
-    emulators::install_all(&missing).or_else(|| {
-        let mut pages: Vec<String> = Vec::new();
-        for page in missing.iter().map(|e| e.install_command()) {
-            if !pages.contains(&page) {
-                pages.push(page);
-            }
-        }
-        (!pages.is_empty()).then(|| pages.join("  "))
-    })
+    emulators::install_all(&missing)
 }
 
 /// Where the rows go for `n` ticked External Systems: the mockup's rows for up to three, shorter
@@ -376,9 +381,10 @@ mod tests {
     use crate::systems::SYSTEMS;
     use crate::ui::nav::{Screen, Transition};
 
-    /// Setup on step 1 with `ids` ticked.
+    /// Setup on step 1 with `ids` ticked, and Linux's step 2 on any OS.
     fn ticking(ids: &[&str]) -> Setup {
         let mut setup = Setup::new(PathBuf::from("/g"));
+        setup.steps[1] = Box::new(Install::new());
         for (i, system) in SYSTEMS.iter().enumerate() {
             setup.model.ticked[i] = ids.contains(&system.id);
         }

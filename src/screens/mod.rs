@@ -2,6 +2,7 @@
 
 pub mod artwork_picker;
 mod carousel;
+pub mod choose_exe;
 pub mod confirm;
 pub mod controller_test;
 pub mod core_queue;

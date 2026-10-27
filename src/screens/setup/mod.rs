@@ -10,11 +10,15 @@
 
 mod cores;
 mod emulators;
+mod find_emulators;
 pub(super) mod folders;
 mod key;
 mod systems;
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use crate::config::{self, Config, ConfigError};
 use crate::ctx::Ctx;
@@ -44,6 +48,10 @@ pub struct Model {
     games_root: PathBuf,
     /// The folders "Create folders" made or found already there, under this Games Root.
     made: Vec<PathBuf>,
+    /// The `.exe` chosen for each Standalone Emulator on Windows, by key (FR-WIN-4). Finish
+    /// writes them to the Config once it has written the Config itself: until then they live
+    /// here, shared with the `.exe` browser's callback.
+    chosen: Rc<RefCell<HashMap<&'static str, PathBuf>>>,
 }
 
 impl Model {
@@ -52,6 +60,7 @@ impl Model {
             ticked: vec![false; SYSTEMS.len()],
             games_root,
             made: Vec::new(),
+            chosen: Rc::default(),
         }
     }
 
@@ -125,6 +134,20 @@ trait Step {
     fn busy(&self) -> bool {
         false
     }
+    /// A screen the last input opened over Setup, for Setup to push: the `.exe` browser.
+    fn take_screen(&mut self) -> Option<Box<dyn Screen>> {
+        None
+    }
+}
+
+/// Step 2: installing the emulators with Flatpak on Linux; on Windows finding them, or choosing
+/// their `.exe` (FR-WIN-4).
+fn emulators_step() -> Box<dyn Step> {
+    if cfg!(windows) {
+        Box::new(find_emulators::FindEmulators::new())
+    } else {
+        Box::new(emulators::Install::new())
+    }
 }
 
 pub struct Setup {
@@ -147,7 +170,7 @@ impl Setup {
             model: Model::new(games_root),
             steps: vec![
                 Box::new(systems::Systems::new()),
-                Box::new(emulators::Install::new()),
+                emulators_step(),
                 Box::new(folders::Folders::new()),
                 Box::new(cores::Cores::new()),
                 Box::new(key::Key::new()),
@@ -216,6 +239,16 @@ impl Setup {
         match config::save(&ctx.config_path, &config) {
             Ok(()) => {
                 self.error = None;
+                // Setup is done now the Config exists, so a choice that can't be written is only
+                // logged: the emulator then shows as missing, with Choose .exe on its notice.
+                let chosen = self.model.chosen.borrow();
+                let mut keys: Vec<&&str> = chosen.keys().collect();
+                keys.sort();
+                for key in keys {
+                    if let Err(e) = config::save_emulator_exe(&ctx.config_path, key, Some(&chosen[key])) {
+                        eprintln!("game37: can't save the {key} program: {e}");
+                    }
+                }
                 ctx.setup_finished = Some(config);
             }
             Err(ConfigError::Write(_, e)) => {
@@ -265,6 +298,9 @@ impl Screen for Setup {
             }
             _ => self.steps[self.at].handle(input, &mut self.model, ctx),
         };
+        if let Some(screen) = self.steps[self.at].take_screen() {
+            return Transition::Push(screen);
+        }
         self.go(go, ctx)
     }
 

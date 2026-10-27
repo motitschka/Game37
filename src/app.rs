@@ -379,6 +379,11 @@ fn interactive(
         if let Some(path) = ctx.show_file_request.take() {
             crate::file_manager::show(&path);
         }
+        if let Some(url) = ctx.open_url_request.take()
+            && let Err(e) = sdl3::url::open_url(&url)
+        {
+            eprintln!("game37: can't open {url}: {e}");
+        }
         if let Some(config) = ctx.setup_finished.take() {
             let started = finish_setup(&mut nav, &mut ctx, config, |ctx| Ok(start_live_library(ctx)))?;
             watcher = Some(started);
@@ -472,8 +477,9 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
                 break 'steps;
             }
             copy_clipboard_request(&mut ctx, &video);
-            // Screenshot mode never opens the file manager.
+            // Screenshot mode never opens the file manager or a web page.
             ctx.show_file_request = None;
+            ctx.open_url_request = None;
             if let Some(config) = ctx.setup_finished.take() {
                 finish_setup(&mut nav, &mut ctx, config, |ctx| {
                     start_shot_library(ctx, shot.artwork)

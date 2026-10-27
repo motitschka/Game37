@@ -178,7 +178,9 @@ impl Emulator {
         format!("flatpak install flathub {}", self.flatpak_id)
     }
 
-    fn windows_install_hint(&self) -> InstallHint {
+    /// What gets it on Windows, whatever this OS: for the Windows screens, which tests drive on
+    /// Linux too.
+    pub fn windows_install_hint(&self) -> InstallHint {
         match self.windows_install {
             WindowsInstall::Winget(id) => InstallHint::Command(winget_install_command(id)),
             WindowsInstall::Page(url) => InstallHint::Page(url),
@@ -214,7 +216,8 @@ fn flatpak_install_all(emulators: &[&Emulator]) -> Option<String> {
     (!ids.is_empty()).then(|| format!("flatpak install flathub {}", ids.join(" ")))
 }
 
-fn winget_install_all(emulators: &[&Emulator]) -> Option<String> {
+/// [`install_all`]'s Windows line, whatever this OS.
+pub fn winget_install_all(emulators: &[&Emulator]) -> Option<String> {
     let ids = unique(emulators.iter().filter_map(|e| e.winget_id()));
     let commands: Vec<String> = ids.into_iter().map(winget_install_command).collect();
     (!commands.is_empty()).then(|| commands.join("; "))
@@ -230,8 +233,18 @@ fn unique<'a>(items: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
     seen
 }
 
+/// The External Systems `emulator` plays, in System Order: "GameCube, Wii" for Dolphin.
+pub fn systems_of(emulator: &Emulator) -> String {
+    let names: Vec<&str> = crate::systems::SYSTEMS
+        .iter()
+        .filter(|s| for_system(s) == Some(emulator))
+        .map(|s| s.name)
+        .collect();
+    names.join(", ")
+}
+
 /// Every Standalone Emulator once, in System Order.
-fn all() -> Vec<&'static Emulator> {
+pub fn all() -> Vec<&'static Emulator> {
     let mut all: Vec<&'static Emulator> = Vec::new();
     for emulator in crate::systems::SYSTEMS.iter().filter_map(for_system) {
         if !all.contains(&emulator) {
@@ -343,6 +356,28 @@ impl Emulators {
             .filter_map(|e| Some((e.key, locate(e, chosen.get(e.key).map(PathBuf::as_path), places)?)))
             .collect();
         Emulators::located(locations)
+    }
+
+    /// These emulators with the `.exe` files in `chosen` (by key) counting as chosen, each whose file
+    /// is there, as [`locate`] would: for First-run Setup, which keeps its choices in memory until
+    /// Finish writes them to the Config.
+    pub fn with_chosen(mut self, chosen: &HashMap<&'static str, PathBuf>) -> Emulators {
+        for (&key, exe) in chosen.iter().filter(|(_, exe)| exe.is_file()) {
+            if let Some(installed) = &mut self.installed {
+                installed.insert(key);
+            }
+            let location = Location {
+                exe: exe.clone(),
+                how: How::Chosen,
+            };
+            self.locations.insert(key, location);
+        }
+        self
+    }
+
+    /// Whether `emulator` is installed.
+    pub fn has(&self, emulator: &Emulator) -> bool {
+        self.installed.as_ref().is_none_or(|i| i.contains(emulator.key))
     }
 
     /// The System's emulator if it is an External System whose emulator isn't installed.
@@ -862,6 +897,45 @@ mod tests {
             "RPCS3 has no installer folder"
         );
         assert_eq!(emulators.location(&RPCS3), None);
+    }
+
+    #[test]
+    fn with_chosen_adds_the_chosen_exes_that_are_there_over_what_was_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let cemu = touch(&dir.path().join("Cemu/Cemu.exe"));
+        let found = touch(&dir.path().join("Program Files/PCSX2/pcsx2-qt.exe"));
+        let chosen_pcsx2 = touch(&dir.path().join("mine/pcsx2-qt.exe"));
+        let places = Places {
+            program_files: vec![dir.path().join("Program Files")],
+            ..Places::default()
+        };
+        let detected = Emulators::locate_all(&HashMap::new(), &places);
+        assert_eq!(detected.location(&PCSX2).map(|l| &l.exe), Some(&found));
+        let chosen = HashMap::from([
+            ("cemu", cemu.clone()),
+            ("pcsx2", chosen_pcsx2.clone()),
+            ("rpcs3", dir.path().join("gone/rpcs3.exe")),
+        ]);
+        let emulators = detected.with_chosen(&chosen);
+        assert_eq!(emulators.missing(by_id("wiiu").unwrap()), None);
+        let chosen_at = |exe: PathBuf| Location {
+            exe,
+            how: How::Chosen,
+        };
+        assert_eq!(emulators.location(&CEMU), Some(&chosen_at(cemu)));
+        assert_eq!(emulators.location(&PCSX2), Some(&chosen_at(chosen_pcsx2)));
+        assert_eq!(
+            emulators.missing(by_id("ps3").unwrap()),
+            Some(&RPCS3),
+            "its file is gone"
+        );
+        assert_eq!(emulators.missing(by_id("gc").unwrap()), Some(&DOLPHIN));
+    }
+
+    #[test]
+    fn systems_of_lists_an_emulator_s_systems_in_system_order() {
+        assert_eq!(systems_of(&DOLPHIN), "GameCube, Wii");
+        assert_eq!(systems_of(&PCSX2), "PlayStation 2");
     }
 
     #[test]

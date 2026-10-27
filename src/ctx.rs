@@ -5,13 +5,15 @@ use std::path::{Path, PathBuf};
 use crate::artwork::Artwork;
 use crate::config::Config;
 use crate::cores::{CoreInfo, Download};
-use crate::emulators::Emulators;
+use crate::emulators::{Emulator, Emulators};
 use crate::library::db::{DbError, GameRow, Library};
 use crate::library::scan;
+use crate::screens::exe_browser::ExeBrowser;
 use crate::session::input::PadState;
 use crate::systems::SYSTEMS;
 use crate::ui::gfx::WindowMode;
 use crate::ui::input::{ButtonStyle, InputKind};
+use crate::ui::nav::Screen;
 
 /// A request to play a Game of an Embedded System from `start`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +62,11 @@ pub struct Controller {
     pub pad: PadState,
 }
 
+/// What Choose .exe does with the `.exe` the player picked.
+pub type OnChoose = Box<dyn FnOnce(&mut Ctx, PathBuf)>;
+/// See [`Ctx::choose_exe`].
+pub type ChooseExe = dyn Fn(&'static Emulator, Option<PathBuf>, bool, OnChoose) -> Box<dyn Screen>;
+
 pub struct Ctx {
     pub library: Library,
     pub games_root: PathBuf,
@@ -86,9 +93,16 @@ pub struct Ctx {
     /// How Check again re-detects installed emulators (FR-CAR-9): `Emulators::detect` in
     /// production; screenshot mode and tests swap it so they never run `flatpak`.
     pub detect_emulators: Box<dyn Fn() -> Emulators>,
+    /// Opens the `.exe` browser for Choose .exe (FR-WIN-4) for an emulator, from a start folder,
+    /// in First-run Setup or not: [`ExeBrowser`] in production; tests swap in a screen that picks
+    /// a file at once, so no test browses this computer's folders.
+    pub choose_exe: Box<ChooseExe>,
     /// Text a screen wants put on the system clipboard (FR-CAR-9): the screen layer has no SDL
     /// handle, so it leaves the request here for the app's event loop to carry out.
     pub clipboard_request: Option<String>,
+    /// A web page a screen wants opened in the browser (FR-WIN-5: an emulator's download page);
+    /// `app.rs` takes it and opens it with SDL, so no screen or test opens one.
+    pub open_url_request: Option<String>,
     /// A Game's file or folder a screen wants shown in the file manager (US-16); `app.rs` takes it
     /// and carries it out, so no screen or test starts a process.
     pub show_file_request: Option<PathBuf>,
@@ -141,7 +155,18 @@ impl Ctx {
             emulators: Emulators::all_installed(),
             // No Config yet: `app.rs` swaps in a detector that reads the Config it starts with.
             detect_emulators: Box::new(|| Emulators::detect(Path::new(""))),
+            choose_exe: Box::new(|emulator, start, in_setup, on_choose| {
+                let expected = emulator.exe_names[0];
+                Box::new(ExeBrowser::new(
+                    emulator.name,
+                    expected,
+                    start,
+                    in_setup,
+                    on_choose,
+                ))
+            }),
             clipboard_request: None,
+            open_url_request: None,
             show_file_request: None,
             launch: None,
             play: None,
