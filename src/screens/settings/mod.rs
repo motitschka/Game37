@@ -10,6 +10,7 @@ pub(super) mod bios;
 mod controls;
 mod cores;
 mod display;
+mod emulators;
 mod games_root;
 mod hidden;
 mod library;
@@ -59,6 +60,9 @@ pub struct Row {
     /// Whether `value` is a cycled choice, drawn "‹ value ›" with accent arrows instead of a plain
     /// right-aligned value; its hint is "← →" Change rather than a Confirm verb.
     pub choice: bool,
+    /// A hint shown beside Confirm's and Back's while this row is focused, for an action besides
+    /// Confirm that only some rows have (e.g. Emulators' Options "Forget" on a chosen row).
+    pub extra_hint: Option<Hint>,
 }
 
 impl Row {
@@ -73,6 +77,7 @@ impl Row {
             verb: "Open",
             inert: false,
             choice: false,
+            extra_hint: None,
         }
     }
 
@@ -115,6 +120,14 @@ impl Row {
         Row {
             value: Some(value.into()),
             choice: true,
+            ..self
+        }
+    }
+
+    /// Adds a hint for another action this row takes besides Confirm (see [`Row::extra_hint`]).
+    pub fn extra_hint(self, hint: Hint) -> Row {
+        Row {
+            extra_hint: Some(hint),
             ..self
         }
     }
@@ -178,15 +191,33 @@ impl Default for Settings {
 
 impl Settings {
     pub fn new() -> Settings {
-        Settings::with_sections(vec![
+        Settings::with_sections(Self::section_list(cfg!(windows)))
+    }
+
+    /// Like [`Self::new`], but always with the Emulators section (FR-WIN-4), which is otherwise
+    /// Windows-only: for tests that exercise it on any OS.
+    #[cfg(test)]
+    pub(crate) fn new_with_emulators() -> Settings {
+        Settings::with_sections(Self::section_list(true))
+    }
+
+    /// The sections in order, with Emulators between BIOS and Cores when `with_emulators`.
+    fn section_list(with_emulators: bool) -> Vec<Box<dyn Section>> {
+        let mut sections: Vec<Box<dyn Section>> = vec![
             Box::new(library::Library::default()),
             Box::new(artwork::Artwork),
             Box::new(bios::Bios::default()),
-            Box::new(cores::Cores::default()),
+        ];
+        if with_emulators {
+            sections.push(Box::new(emulators::Emulators::default()));
+        }
+        sections.extend([
+            Box::new(cores::Cores::default()) as Box<dyn Section>,
             Box::new(controls::Controls),
             Box::new(display::Display),
             Box::new(about::About),
-        ])
+        ]);
+        sections
     }
 
     fn with_sections(sections: Vec<Box<dyn Section>>) -> Settings {
@@ -428,10 +459,15 @@ impl Screen for Settings {
             Focus::Sections => (!self.rows.is_empty()).then_some("Open"),
             Focus::Rows => focused.filter(|r| !r.inert).map(|r| r.verb),
         };
-        match verb {
-            Some(verb) => vec![Hint::new(&[Action::Confirm], verb), back],
-            None => vec![back],
+        let mut hints = match verb {
+            Some(verb) => vec![Hint::new(&[Action::Confirm], verb)],
+            None => Vec::new(),
+        };
+        if let Some(extra) = focused.and_then(|r| r.extra_hint.clone()) {
+            hints.push(extra);
         }
+        hints.push(back);
+        hints
     }
 
     fn entry(&self) -> Option<Entry> {
@@ -506,13 +542,32 @@ mod tests {
     fn the_sections_are_in_order_and_the_screen_is_the_settings_entry() {
         let s = Settings::new();
         let names: Vec<_> = s.sections.iter().map(|s| s.name()).collect();
+        let mut expected = vec!["Library", "Artwork", "BIOS"];
+        if cfg!(windows) {
+            expected.push("Emulators");
+        }
+        expected.extend(["Cores", "Controls", "Display", "About"]);
+        assert_eq!(names, expected);
+        assert_eq!((s.title(), s.entry()), ("Settings", Some(Entry::Settings)));
+    }
+
+    #[test]
+    fn emulators_is_windows_only_but_can_be_built_on_any_os_for_tests() {
+        let s = Settings::new_with_emulators();
+        let names: Vec<_> = s.sections.iter().map(|s| s.name()).collect();
         assert_eq!(
             names,
             [
-                "Library", "Artwork", "BIOS", "Cores", "Controls", "Display", "About"
+                "Library",
+                "Artwork",
+                "BIOS",
+                "Emulators",
+                "Cores",
+                "Controls",
+                "Display",
+                "About"
             ]
         );
-        assert_eq!((s.title(), s.entry()), ("Settings", Some(Entry::Settings)));
     }
 
     #[test]
@@ -568,7 +623,8 @@ mod tests {
         }
         assert_eq!(s.hints(), [Hint::new(&[Action::Back], "Back")]);
         let mut real = Settings::new();
-        for _ in 0..6 {
+        // More than enough Downs either way: moving the focus clamps at the last section.
+        for _ in 0..real.sections.len() {
             act(&mut real, ctx, Action::Down);
         }
         act(&mut real, ctx, Action::Right);
