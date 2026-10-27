@@ -2,10 +2,12 @@
 //! `org.freedesktop.FileManager1.ShowItems` D-Bus method, which opens its folder with it selected.
 //! Without a file manager on D-Bus, opens the containing folder with `xdg-open`.
 
+#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+#[cfg(unix)]
 /// `path` as a `file://` URI, every byte but unreserved ones and `/` percent-encoded.
 pub fn file_uri(path: &Path) -> String {
     let mut uri = String::from("file://");
@@ -30,6 +32,7 @@ fn run(cmd: &mut Command) -> bool {
 
 /// Shows `path` in the file manager on a thread of its own, so the UI never waits, and waits
 /// for each child there, so none is left a zombie.
+#[cfg(unix)]
 pub fn show(path: &Path) {
     let path = path.to_owned();
     std::thread::spawn(move || {
@@ -53,7 +56,21 @@ pub fn show(path: &Path) {
     });
 }
 
-#[cfg(test)]
+/// Shows `path` in Explorer with it selected (FR-WIN-7), on a thread of its own like the unix `show`.
+/// Explorer's exit status says nothing about whether it worked, so it isn't checked.
+#[cfg(windows)]
+pub fn show(path: &Path) {
+    use std::os::windows::process::CommandExt;
+    let mut select = std::ffi::OsString::from("/select,\"");
+    select.push(path);
+    select.push("\"");
+    let mut cmd = Command::new("explorer");
+    // `raw_arg`: Explorer parses its own command line, and wants the path quoted after the comma.
+    cmd.raw_arg(select);
+    std::thread::spawn(move || run(&mut cmd));
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

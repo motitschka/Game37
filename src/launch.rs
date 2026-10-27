@@ -8,7 +8,9 @@
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
+#[cfg(unix)]
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -138,6 +140,7 @@ pub fn command(emulator: &Emulator, games_root: &Path, file: &Path) -> Vec<OsStr
 
 /// `path` escaped for a `--filesystem` value, which Flatpak ends at the first unescaped `:` and
 /// in which `\` escapes the next character (`parse_filesystem_flags` in `flatpak-context.c`).
+#[cfg(unix)]
 fn escape_filesystem(path: &Path) -> OsString {
     let mut escaped = Vec::new();
     for &b in path.as_os_str().as_bytes() {
@@ -147,6 +150,20 @@ fn escape_filesystem(path: &Path) -> OsString {
         escaped.push(b);
     }
     OsString::from_vec(escaped)
+}
+
+/// See the unix `escape_filesystem`. Windows has no Flatpak; this only keeps `command` compiling
+/// until milestone W's W2 gives Windows its own command lines.
+#[cfg(windows)]
+fn escape_filesystem(path: &Path) -> OsString {
+    let mut escaped = String::new();
+    for c in path.to_string_lossy().chars() {
+        if c == '\\' || c == ':' {
+            escaped.push('\\');
+        }
+        escaped.push(c);
+    }
+    escaped.into()
 }
 
 /// The file to hand `emulator` for the Game at `game_path`: the path itself for a file Game, the
@@ -251,14 +268,15 @@ pub fn spawn_process(argv: &[OsString], log: &Path) -> io::Result<Receiver<Exite
         let _ = writeln!(f, "game37: {}", line.join(" "));
     }
     let stdout = file.as_ref().and_then(|f| f.try_clone().ok());
-    let mut child = Command::new(&argv[0])
-        .args(&argv[1..])
+    let mut cmd = Command::new(&argv[0]);
+    cmd.args(&argv[1..])
         .stdin(Stdio::null())
         .stdout(stdout.map_or_else(Stdio::null, Stdio::from))
-        .stderr(file.map_or_else(Stdio::null, Stdio::from))
-        // Its own process group, so a Ctrl+C in Game37's terminal doesn't also stop the emulator.
-        .process_group(0)
-        .spawn()?;
+        .stderr(file.map_or_else(Stdio::null, Stdio::from));
+    // Its own process group, so a Ctrl+C in Game37's terminal doesn't also stop the emulator.
+    #[cfg(unix)]
+    cmd.process_group(0);
+    let mut child = cmd.spawn()?;
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let code = child.wait().ok().and_then(|s| s.code());

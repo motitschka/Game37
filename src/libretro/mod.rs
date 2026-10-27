@@ -14,11 +14,13 @@ pub(crate) mod tests;
 use std::ffi::{CString, c_int};
 use std::fmt;
 use std::marker::PhantomData;
+#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use libloading::Library;
+#[cfg(unix)]
 use libloading::os::unix;
 
 use callbacks::State;
@@ -33,8 +35,10 @@ pub const MAX_PORTS: usize = 4;
 /// `RTLD_NOW | RTLD_LOCAL`, plus glibc's `RTLD_NODELETE`: a Core's code stays mapped after it is
 /// unloaded. Cores may leave threads behind (bsnes's OpenMP workers in libgomp) that crash the
 /// process once the code they run is unmapped. Loading the same Core again reuses the mapping, and
-/// libretro.h requires Cores to cope with that.
+/// libretro.h requires Cores to cope with that. Windows has no such flag: see `open_library`.
+#[cfg(unix)]
 const DLOPEN_FLAGS: c_int = unix::RTLD_NOW | unix::RTLD_LOCAL | RTLD_NODELETE;
+#[cfg(unix)]
 const RTLD_NODELETE: c_int = 0x1000;
 
 /// Set while a [`Core`] exists anywhere in the process.
@@ -308,8 +312,37 @@ pub struct Core {
     _not_send: PhantomData<*const ()>,
 }
 
+/// `path` as the C string a Core gets: its bytes on Linux, UTF-8 on Windows (what Cores expect
+/// there), so on Windows a path that isn't valid Unicode is refused.
 fn c_path(path: &Path) -> Result<CString, CoreError> {
-    CString::new(path.as_os_str().as_bytes()).map_err(|_| CoreError::BadPath(path.to_path_buf()))
+    #[cfg(unix)]
+    let bytes = Some(path.as_os_str().as_bytes());
+    #[cfg(windows)]
+    let bytes = path.to_str().map(str::as_bytes);
+    bytes
+        .and_then(|b| CString::new(b).ok())
+        .ok_or_else(|| CoreError::BadPath(path.to_path_buf()))
+}
+
+/// Opens the Core's library so that its code stays mapped after it is unloaded (`DLOPEN_FLAGS`). On
+/// Windows a second load that is never freed keeps the DLL's reference count above zero instead.
+///
+/// # Safety
+/// As for [`Library::new`]: opening the library runs its initialisers.
+#[cfg(unix)]
+unsafe fn open_library(path: &Path) -> Result<Library, libloading::Error> {
+    // SAFETY: as for this function.
+    unsafe { unix::Library::open(Some(path), DLOPEN_FLAGS) }.map(Library::from)
+}
+
+/// See the unix `open_library`.
+///
+/// # Safety
+/// As for [`Library::new`]: opening the library runs its initialisers.
+#[cfg(windows)]
+unsafe fn open_library(path: &Path) -> Result<Library, libloading::Error> {
+    // SAFETY: as for this function.
+    unsafe { Library::new(path).inspect(|_| std::mem::forget(Library::new(path))) }
 }
 
 impl Core {
@@ -332,9 +365,8 @@ impl Core {
         // SAFETY: loading a shared library runs its initialisers. A Core is a plain C library and
         // its initialisers only set up its own statics; this is the trust any frontend places in
         // the Core it was given.
-        let lib: Library = unsafe { unix::Library::open(Some(core_path), DLOPEN_FLAGS) }
-            .map_err(|e| CoreError::Open(core_path.to_path_buf(), e))?
-            .into();
+        let lib =
+            unsafe { open_library(core_path) }.map_err(|e| CoreError::Open(core_path.to_path_buf(), e))?;
         // SAFETY: the library is treated as a libretro Core, and `api` is stored next to `lib` in the
         // `Core`, which unloads `lib` only after its last call through `api`.
         let api = unsafe { Api::load(&lib) }.map_err(|s| CoreError::NotACore(core_path.to_path_buf(), s))?;

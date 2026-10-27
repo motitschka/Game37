@@ -9,6 +9,7 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -21,7 +22,22 @@ use tempfile::NamedTempFile;
 
 use crate::systems::System;
 
-/// A libretro Core: its display name, the `.so` file the build server publishes, and what it
+/// A Core's library file name, as the build server publishes it for this OS: `<stem>.so` on Linux,
+/// `<stem>.dll` on Windows (FR-WIN-3).
+#[cfg(unix)]
+macro_rules! library {
+    ($stem:literal) => {
+        concat!($stem, ".so")
+    };
+}
+#[cfg(windows)]
+macro_rules! library {
+    ($stem:literal) => {
+        concat!($stem, ".dll")
+    };
+}
+
+/// A libretro Core: its display name, the library file the build server publishes, and what it
 /// needs to run well (FR-EMB-1, FR-EMB-12, FR-DS-1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CoreInfo {
@@ -40,35 +56,35 @@ pub struct CoreInfo {
 
 pub static MESEN: CoreInfo = CoreInfo {
     name: "Mesen",
-    file: "mesen_libretro.so",
+    file: library!("mesen_libretro"),
     options: &[],
     required_bios: &[],
     system_in_data_dir: false,
 };
 pub static BSNES: CoreInfo = CoreInfo {
     name: "bsnes",
-    file: "bsnes_libretro.so",
+    file: library!("bsnes_libretro"),
     options: &[],
     required_bios: &[],
     system_in_data_dir: false,
 };
 pub static SAMEBOY: CoreInfo = CoreInfo {
     name: "SameBoy",
-    file: "sameboy_libretro.so",
+    file: library!("sameboy_libretro"),
     options: &[],
     required_bios: &[],
     system_in_data_dir: false,
 };
 pub static MGBA: CoreInfo = CoreInfo {
     name: "mGBA",
-    file: "mgba_libretro.so",
+    file: library!("mgba_libretro"),
     options: &[],
     required_bios: &[],
     system_in_data_dir: false,
 };
 pub static MUPEN64PLUS_NEXT: CoreInfo = CoreInfo {
     name: "Mupen64Plus-Next",
-    file: "mupen64plus_next_libretro.so",
+    file: library!("mupen64plus_next_libretro"),
     options: &[],
     required_bios: &[],
     system_in_data_dir: false,
@@ -117,7 +133,7 @@ fn n64_is_pal(header: &[u8; 64]) -> bool {
 /// `docs/research/m4-cores.md`).
 pub static BEETLE_PSX_HW: CoreInfo = CoreInfo {
     name: "Beetle PSX HW",
-    file: "mednafen_psx_hw_libretro.so",
+    file: library!("mednafen_psx_hw_libretro"),
     options: &[("beetle_psx_hw_renderer", "hardware_gl")],
     required_bios: &[
         "scph5500.bin",
@@ -133,7 +149,7 @@ pub static BEETLE_PSX_HW: CoreInfo = CoreInfo {
 /// pointer and joystick cursor both live, and a visible cursor for aiming it.
 pub static MELONDS_DS: CoreInfo = CoreInfo {
     name: "melonDS DS",
-    file: "melondsds_libretro.so",
+    file: library!("melondsds_libretro"),
     options: &[
         ("melonds_number_of_screen_layouts", "2"),
         ("melonds_screen_layout1", "hybrid-top"),
@@ -154,7 +170,7 @@ pub static MELONDS_DS: CoreInfo = CoreInfo {
 };
 pub static PPSSPP: CoreInfo = CoreInfo {
     name: "PPSSPP",
-    file: "ppsspp_libretro.so",
+    file: library!("ppsspp_libretro"),
     options: &[],
     required_bios: &[],
     system_in_data_dir: true,
@@ -163,7 +179,9 @@ pub static PPSSPP: CoreInfo = CoreInfo {
 /// Which OpenGL host a Core's context must be made on (see [`CoreInfo::gl`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GlKind {
-    /// GLX, on the X display: PPSSPP calls `glewInit()`, which fails on EGL.
+    /// GLX, on the X display: PPSSPP calls `glewInit()`, which fails on EGL. Linux only: on Windows
+    /// SDL makes every context with WGL (ADR 0015).
+    #[cfg(unix)]
     Glx,
     /// Beside the SDL renderer's own context, on its window.
     Sdl,
@@ -182,12 +200,19 @@ impl CoreInfo {
     }
 
     /// Which OpenGL host this Core's context must be made on.
+    #[cfg(unix)]
     pub fn gl(&self) -> GlKind {
         if std::ptr::eq(self, &PPSSPP) {
             GlKind::Glx
         } else {
             GlKind::Sdl
         }
+    }
+
+    /// Which OpenGL host this Core's context must be made on: SDL's, for every Core on Windows.
+    #[cfg(windows)]
+    pub fn gl(&self) -> GlKind {
+        GlKind::Sdl
     }
 
     /// Whether the left stick also presses the d-pad: for Systems without an analog stick. N64
@@ -267,12 +292,15 @@ pub fn found_bios(games_root: &Path, core: &CoreInfo) -> Option<String> {
         .min_by_key(|name| core.required_bios.iter().position(|n| *n == name.to_lowercase()))
 }
 
+/// The libretro build server's folder of nightly Cores for this OS (FR-WIN-3).
+#[cfg(unix)]
+const NIGHTLY: &str = "https://buildbot.libretro.com/nightly/linux/x86_64/latest";
+#[cfg(windows)]
+const NIGHTLY: &str = "https://buildbot.libretro.com/nightly/windows/x86_64/latest";
+
 /// The libretro build server's URL for a Core's nightly zip.
 pub fn url(core: &CoreInfo) -> String {
-    format!(
-        "https://buildbot.libretro.com/nightly/linux/x86_64/latest/{}.zip",
-        core.file
-    )
+    format!("{NIGHTLY}/{}.zip", core.file)
 }
 
 /// How far a [`Download`] has got.
@@ -451,8 +479,11 @@ impl Drop for Download {
     }
 }
 
-/// The ELF magic a valid Linux shared library starts with.
-const ELF_MAGIC: &[u8] = b"\x7fELF";
+/// The magic a valid shared library starts with: ELF on Linux, a DOS (`MZ`) header on Windows.
+#[cfg(unix)]
+const LIBRARY_MAGIC: &[u8] = b"\x7fELF";
+#[cfg(windows)]
+const LIBRARY_MAGIC: &[u8] = b"MZ";
 
 /// Read and extraction buffer size.
 const CHUNK: usize = 64 * 1024;
@@ -521,11 +552,12 @@ fn run(
     drop(zip_file);
 
     // Verify, make executable, and install with an atomic rename.
-    if !content.starts_with(ELF_MAGIC) {
+    if !content.starts_with(LIBRARY_MAGIC) {
         return Err(invalid_library(core));
     }
     let mut library = temp_file(&cores_dir, core, ".tmp").map_err(|e| save_failed(core, &e))?;
     library.write_all(&content).map_err(|e| save_failed(core, &e))?;
+    #[cfg(unix)]
     library
         .as_file()
         .set_permissions(fs::Permissions::from_mode(0o755))
@@ -827,7 +859,7 @@ pub(crate) mod testing {
 
     /// A valid zip for `core`: its file, holding a tiny fake ELF library.
     pub fn core_zip(core: &CoreInfo) -> Vec<u8> {
-        let mut content = ELF_MAGIC.to_vec();
+        let mut content = LIBRARY_MAGIC.to_vec();
         content.extend_from_slice(b"fake core");
         let mut buf = Vec::new();
         let mut writer = zip::ZipWriter::new(Cursor::new(&mut buf));
@@ -895,7 +927,7 @@ mod tests {
     }
 
     fn core_content() -> Vec<u8> {
-        let mut content = ELF_MAGIC.to_vec();
+        let mut content = LIBRARY_MAGIC.to_vec();
         content.extend_from_slice(b"rest of a fake core");
         content
     }
@@ -1098,6 +1130,24 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
+    fn every_core_uses_the_sdl_host_on_windows() {
+        for core in [
+            &MESEN,
+            &BSNES,
+            &SAMEBOY,
+            &MGBA,
+            &MUPEN64PLUS_NEXT,
+            &BEETLE_PSX_HW,
+            &MELONDS_DS,
+            &PPSSPP,
+        ] {
+            assert_eq!(core.gl(), GlKind::Sdl, "{}", core.name);
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn only_ppsspp_needs_the_glx_host() {
         assert_eq!(PPSSPP.gl(), GlKind::Glx);
         for core in [
@@ -1249,10 +1299,20 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn url_points_at_the_nightly_zip() {
         assert_eq!(
             url(&MESEN),
             "https://buildbot.libretro.com/nightly/linux/x86_64/latest/mesen_libretro.so.zip"
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn url_points_at_the_windows_nightly_zip() {
+        assert_eq!(
+            url(&MESEN),
+            "https://buildbot.libretro.com/nightly/windows/x86_64/latest/mesen_libretro.dll.zip"
         );
     }
 
@@ -1362,8 +1422,11 @@ mod tests {
         assert_eq!(path, installed_path(&data_dir, &SAMEBOY));
         assert!(is_installed(&data_dir, &SAMEBOY));
         assert_eq!(fs::read(&path).unwrap(), core_content());
-        let mode = fs::metadata(&path).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o755);
+        #[cfg(unix)]
+        {
+            let mode = fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o755);
+        }
         assert_eq!(leftovers(&data_dir), Vec::<PathBuf>::new());
     }
 
@@ -1420,7 +1483,7 @@ mod tests {
     fn missing_entry_is_the_invalid_library_error() {
         let dir = tempfile::tempdir().unwrap();
         let data_dir = dir.path().to_owned();
-        let zip = zip_with("other_libretro.so", ELF_MAGIC);
+        let zip = zip_with("other_libretro.so", LIBRARY_MAGIC);
         let mut download = Download::spawn(&SAMEBOY, data_dir.clone(), fixed_reader_fetcher(zip));
 
         assert_eq!(wait_for_failure(&mut download), invalid_library(&SAMEBOY));
@@ -1431,7 +1494,7 @@ mod tests {
     fn a_path_traversal_entry_is_the_invalid_library_error() {
         let dir = tempfile::tempdir().unwrap();
         let data_dir = dir.path().to_owned();
-        let zip = zip_with(&format!("../{}", SAMEBOY.file), ELF_MAGIC);
+        let zip = zip_with(&format!("../{}", SAMEBOY.file), LIBRARY_MAGIC);
         let mut download = Download::spawn(&SAMEBOY, data_dir.clone(), fixed_reader_fetcher(zip));
 
         assert_eq!(wait_for_failure(&mut download), invalid_library(&SAMEBOY));
@@ -1548,7 +1611,7 @@ mod tests {
             core: 1024,
         };
         // A valid-looking library, just bigger than the cap.
-        let mut content = ELF_MAGIC.to_vec();
+        let mut content = LIBRARY_MAGIC.to_vec();
         content.resize(2048, 0);
         let zip = zip_with(SAMEBOY.file, &content);
         let mut download =
@@ -1719,7 +1782,7 @@ mod tests {
 
         assert!(is_installed(&data_dir, &SAMEBOY));
         let bytes = fs::read(&path).unwrap();
-        assert!(bytes.starts_with(ELF_MAGIC));
+        assert!(bytes.starts_with(LIBRARY_MAGIC));
         assert_eq!(leftovers(&data_dir), Vec::<PathBuf>::new());
     }
 }

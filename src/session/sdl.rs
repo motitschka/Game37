@@ -17,6 +17,7 @@ use sdl3::sys::video::SDL_GLContext;
 use sdl3::video::Window;
 
 use super::gl::SdlGl;
+#[cfg(unix)]
 use super::glx::GlxGl;
 use super::input::{self, HeldOver, Mouse, PadState, PauseTrigger};
 use super::saves::{self, Tracker};
@@ -503,11 +504,12 @@ impl Screen for Session {
 fn open_gl(
     core_info: &CoreInfo,
     frontend: Option<(Window, SDL_GLContext)>,
-    display: Option<&CStr>,
-    system_name: &str,
+    #[cfg_attr(windows, allow(unused_variables))] display: Option<&CStr>,
+    #[cfg_attr(windows, allow(unused_variables))] system_name: &str,
 ) -> Result<Option<Box<dyn GlHost>>, String> {
     match core_info.gl() {
         GlKind::Sdl => Ok(frontend.map(|(window, context)| Box::new(SdlGl::new(window, context)) as _)),
+        #[cfg(unix)]
         GlKind::Glx => GlxGl::open(display, frontend)
             .map(|host| Some(Box::new(host) as Box<dyn GlHost>))
             .map_err(|e| {
@@ -1287,6 +1289,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // GLX is Linux only.
     fn a_glx_core_with_no_x_display_fails_with_the_system_name_in_the_message() {
         match open_gl(&cores::PPSSPP, None, Some(c"/nonexistent/game37-test:0"), "PSP") {
             Err(message) => assert_eq!(message, "PSP games need X11 (XWayland), which isn't available."),
@@ -1299,6 +1302,7 @@ mod tests {
     /// CMFileManager's picture on the renderer. PPSSPP leaves its framebuffer's alpha at 0, so a
     /// frame drawn with its alpha would show nothing.
     #[test]
+    #[cfg(unix)] // PPSSPP runs on the GLX host, which is Linux only.
     #[ignore = "needs /home/matei/Game37/.testdata"]
     fn hw_ppsspp_session_shows_cmfilemanager_on_the_renderer() {
         use sdl3::render::create_renderer;

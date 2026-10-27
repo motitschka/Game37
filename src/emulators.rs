@@ -118,6 +118,7 @@ impl Emulators {
 
     /// Asks Flatpak which apps are installed (about 20 ms). If Flatpak itself can't be run, every
     /// emulator counts as missing, so the notices tell the player what to install.
+    #[cfg(unix)]
     pub fn detect() -> Emulators {
         let output = std::process::Command::new("flatpak")
             .args(["list", "--app", "--columns=application"])
@@ -140,6 +141,12 @@ impl Emulators {
         }
     }
 
+    /// Every emulator counts as missing on Windows for now: finding them there is milestone W's W2.
+    #[cfg(windows)]
+    pub fn detect() -> Emulators {
+        Emulators::from_installed(Vec::<String>::new())
+    }
+
     /// The System's emulator if it is an External System whose emulator isn't installed.
     pub fn missing(&self, system: &System) -> Option<&'static Emulator> {
         if system.kind != Kind::External {
@@ -154,6 +161,7 @@ impl Emulators {
 }
 
 /// App ids from `flatpak list --app --columns=application`, one per line.
+#[cfg_attr(windows, allow(dead_code))] // Only the unix `detect` asks Flatpak.
 fn parse_flatpak_list(text: &str) -> Vec<String> {
     text.lines()
         .map(str::trim)

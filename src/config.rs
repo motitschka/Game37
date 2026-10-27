@@ -5,6 +5,7 @@
 
 use std::fmt;
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -138,8 +139,15 @@ pub fn config_dir() -> PathBuf {
 }
 
 /// `$XDG_DATA_HOME/game37/`: Cores, the library database, cached Artwork (ADR 0005).
+#[cfg(unix)]
 pub fn data_dir() -> PathBuf {
     dirs::data_dir().expect("no home directory").join("game37")
+}
+
+/// `%LOCALAPPDATA%\game37\` on Windows (FR-WIN-2).
+#[cfg(windows)]
+pub fn data_dir() -> PathBuf {
+    dirs::data_local_dir().expect("no home directory").join("game37")
 }
 
 /// Loads the Config. `Ok(None)` means there is none, so First-run Setup is due.
@@ -193,9 +201,13 @@ fn portable_games_root(path: &Path) -> String {
 pub fn save(path: &Path, config: &Config) -> Result<(), ConfigError> {
     let mut doc = read_document(path)?;
     doc["games_root"] = toml_edit::value(portable_games_root(&config.games_root));
+    #[cfg(unix)]
     let mode = std::fs::metadata(path)
         .map(|m| m.permissions().mode() & 0o777)
         .unwrap_or(0o644);
+    // Windows has no modes: the Config's folder in the profile is the player's own.
+    #[cfg(windows)]
+    let mode = 0;
     write_atomic(path, doc.to_string().as_bytes(), Some(mode))
 }
 
@@ -234,10 +246,13 @@ fn write_atomic(path: &Path, bytes: &[u8], mode: Option<u32>) -> Result<(), Conf
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir).map_err(|e| ConfigError::Write(path.to_owned(), e))?;
+    #[cfg(windows)]
+    let _ = mode;
 
     let mut tmp = tempfile::NamedTempFile::new_in(dir).map_err(|e| ConfigError::Write(path.to_owned(), e))?;
     tmp.write_all(bytes)
         .map_err(|e| ConfigError::Write(path.to_owned(), e))?;
+    #[cfg(unix)]
     if let Some(mode) = mode {
         tmp.as_file()
             .set_permissions(std::fs::Permissions::from_mode(mode))
@@ -410,6 +425,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // File modes are Unix only.
     fn save_over_an_existing_0644_file_leaves_it_0644() {
         let dir = tempfile::tempdir().unwrap();
         let path = write(&dir, "games_root = \"/old\"\n");
@@ -422,6 +438,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // File modes are Unix only.
     fn save_keeps_a_config_s_own_mode() {
         let dir = tempfile::tempdir().unwrap();
         let path = write(&dir, "games_root = \"/old\"\n");
@@ -434,6 +451,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // File modes are Unix only.
     fn save_to_a_new_file_comes_out_0644() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
@@ -456,6 +474,7 @@ mod tests {
             load_api_key(&config_path).unwrap(),
             Some(ApiKey::new("firstkey111"))
         );
+        #[cfg(unix)]
         assert_eq!(mode(&secrets_path), 0o600);
 
         save_api_key(&config_path, Some(&ApiKey::new("secondkey222"))).unwrap();
@@ -466,12 +485,14 @@ mod tests {
         let text = std::fs::read_to_string(&secrets_path).unwrap();
         assert!(text.contains("# a note"), "{text}");
         assert!(text.contains("unknown_key = 42"), "{text}");
+        #[cfg(unix)]
         assert_eq!(mode(&secrets_path), 0o600);
 
         save_api_key(&config_path, None).unwrap();
         assert_eq!(load_api_key(&config_path).unwrap(), None);
         let text = std::fs::read_to_string(&secrets_path).unwrap();
         assert!(text.contains("unknown_key = 42"), "{text}");
+        #[cfg(unix)]
         assert_eq!(mode(&secrets_path), 0o600);
     }
 

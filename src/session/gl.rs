@@ -173,7 +173,8 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+// The Linux Cores and the GLX host these tests use are Linux only.
+#[cfg(all(test, unix))]
 mod real_core_tests {
     use std::collections::HashSet;
     use std::path::Path;

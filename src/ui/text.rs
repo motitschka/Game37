@@ -5,10 +5,16 @@
 //! instance (SemiBold, Bold, ...) when the face index carries it in its upper bits, and fontconfig
 //! reports exactly that index for a family and weight. So each weight is opened as fontconfig's
 //! (file, index) match, which also works for families shipped as one file per weight.
+//!
+//! Windows has no fontconfig: there the variable font comes in `fonts\` next to `game37.exe`,
+//! opened at the same named-instance indexes, and Segoe UI is the fallback.
 
 use std::collections::HashMap;
 use std::ffi::CString;
+#[cfg(windows)]
+use std::path::Path;
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::process::Command;
 
 use sdl3::surface::Surface;
@@ -39,6 +45,7 @@ impl Weight {
     ];
 
     /// The fontconfig weight name.
+    #[cfg(unix)]
     fn fc_name(self) -> &'static str {
         match self {
             Weight::Regular => "regular",
@@ -46,6 +53,29 @@ impl Weight {
             Weight::SemiBold => "semibold",
             Weight::Bold => "bold",
             Weight::ExtraBold => "extrabold",
+        }
+    }
+
+    /// The face index of this weight's named instance in `AdwaitaSans-Regular.ttf`, as fontconfig
+    /// reports it on Linux (Regular is the font's default instance).
+    #[cfg(windows)]
+    fn adwaita_index(self) -> i64 {
+        match self {
+            Weight::Regular => 0,
+            Weight::Medium => 5 << 16,
+            Weight::SemiBold => 6 << 16,
+            Weight::Bold => 7 << 16,
+            Weight::ExtraBold => 8 << 16,
+        }
+    }
+
+    /// The Segoe UI file in `%WINDIR%\Fonts` nearest this weight.
+    #[cfg(windows)]
+    fn segoe_file(self) -> &'static str {
+        match self {
+            Weight::Regular => "segoeui.ttf",
+            Weight::Medium | Weight::SemiBold => "seguisb.ttf",
+            Weight::Bold | Weight::ExtraBold => "segoeuib.ttf",
         }
     }
 }
@@ -58,6 +88,7 @@ struct FaceSource {
 }
 
 /// Runs `fc-match` for `pattern`, returning the matched (family, file, index).
+#[cfg(unix)]
 fn fc_match(pattern: &str) -> Option<(String, FaceSource)> {
     let out = Command::new("fc-match")
         .args(["-f", "%{family[0]}\t%{file}\t%{index}", pattern])
@@ -75,6 +106,7 @@ fn fc_match(pattern: &str) -> Option<(String, FaceSource)> {
 }
 
 /// Finds Adwaita Sans, falling back to the system's sans-serif font, at every weight.
+#[cfg(unix)]
 fn find_faces() -> Result<HashMap<Weight, FaceSource>, String> {
     let family = match fc_match("Adwaita Sans") {
         Some((family, _)) if family == "Adwaita Sans" => family,
@@ -94,6 +126,41 @@ fn find_faces() -> Result<HashMap<Weight, FaceSource>, String> {
         .map(|w| {
             let (_, source) = fc_match(&format!("{family}:{}", w.fc_name()))
                 .ok_or_else(|| format!("fc-match found no {} face of {family}", w.fc_name()))?;
+            Ok((w, source))
+        })
+        .collect()
+}
+
+/// Finds Adwaita Sans in `fonts\` next to `game37.exe`, falling back to Segoe UI, at every weight.
+#[cfg(windows)]
+fn find_faces() -> Result<HashMap<Weight, FaceSource>, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("Can't find game37.exe: {e}"))?;
+    let windir = std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into());
+    faces_in(
+        exe.parent().unwrap_or(Path::new(".")),
+        &Path::new(&windir).join("Fonts"),
+    )
+}
+
+/// `find_faces` for `game37.exe` in `exe_dir` and the system fonts in `system_fonts`.
+#[cfg(windows)]
+fn faces_in(exe_dir: &Path, system_fonts: &Path) -> Result<HashMap<Weight, FaceSource>, String> {
+    let adwaita = exe_dir.join("fonts").join("AdwaitaSans-Regular.ttf");
+    Weight::ALL
+        .into_iter()
+        .map(|w| {
+            let source = if adwaita.is_file() {
+                FaceSource {
+                    file: adwaita.clone(),
+                    index: w.adwaita_index(),
+                }
+            } else {
+                let file = system_fonts.join(w.segoe_file());
+                if !file.is_file() {
+                    return Err(format!("Game37 needs a font: {} isn't there.", adwaita.display()));
+                }
+                FaceSource { file, index: 0 }
+            };
             Ok((w, source))
         })
         .collect()
@@ -211,5 +278,32 @@ impl Fonts {
             self.faces.insert((weight, size), face);
         }
         Ok(&self.faces[&(weight, size)])
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_adwaita_sans_next_to_the_exe_comes_first_then_segoe_ui() {
+        let exe_dir = tempfile::tempdir().unwrap();
+        let system = tempfile::tempdir().unwrap();
+        assert!(faces_in(exe_dir.path(), system.path()).is_err(), "no font at all");
+
+        for file in ["segoeui.ttf", "seguisb.ttf", "segoeuib.ttf"] {
+            std::fs::write(system.path().join(file), b"").unwrap();
+        }
+        let faces = faces_in(exe_dir.path(), system.path()).unwrap();
+        assert_eq!(faces[&Weight::Bold].file, system.path().join("segoeuib.ttf"));
+        assert_eq!(faces[&Weight::Bold].index, 0);
+
+        std::fs::create_dir(exe_dir.path().join("fonts")).unwrap();
+        let adwaita = exe_dir.path().join("fonts").join("AdwaitaSans-Regular.ttf");
+        std::fs::write(&adwaita, b"").unwrap();
+        let faces = faces_in(exe_dir.path(), system.path()).unwrap();
+        assert_eq!(faces[&Weight::Regular].file, adwaita);
+        assert_eq!(faces[&Weight::Regular].index, 0);
+        assert_eq!(faces[&Weight::SemiBold].index, 6 << 16);
     }
 }

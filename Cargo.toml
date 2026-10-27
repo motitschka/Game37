@@ -23,5 +23,11 @@ ureq = "3.4.2"
 walkdir = "2"
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
+# Windows has no system SDL3, so SDL3 and SDL3_ttf (with its own FreeType and HarfBuzz) are built from
+# source there and shipped as DLLs next to game37.exe (ADR 0015). Linux keeps the system SDL3.
+[target.'cfg(windows)'.dependencies]
+sdl3 = { version = "0.20", features = ["ttf", "build-from-source"] }
+sdl3-ttf-sys = { version = "0.7", features = ["sdlttf-vendored"] }
+
 [build-dependencies]
 cc = "1"
