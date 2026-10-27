@@ -54,22 +54,15 @@ mod tests {
     use crate::ui::input::{Action, Input};
     use crate::ui::nav::{Hits, Nav};
 
-    /// Settings in a Nav over a root screen, with the focus on Display's first row.
+    /// Settings in a Nav over a root screen, with the focus on Display's first row. One more Down
+    /// on Windows, where Emulators sits between BIOS and Cores.
     fn nav() -> Nav {
         let mut nav = Nav::single(Box::new(crate::screens::Stub::new("Home")));
         nav.push(Box::new(Settings::new()));
-        act(
-            &mut nav,
-            &mut Ctx::empty(),
-            &[
-                Action::Down,
-                Action::Down,
-                Action::Down,
-                Action::Down,
-                Action::Down,
-                Action::Right,
-            ],
-        );
+        let downs = if cfg!(windows) { 6 } else { 5 };
+        let mut actions = vec![Action::Down; downs];
+        actions.push(Action::Right);
+        act(&mut nav, &mut Ctx::empty(), &actions);
         nav
     }
 

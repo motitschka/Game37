@@ -465,11 +465,11 @@ mod tests {
         let ctx = &mut ctx;
         install(ctx, &MESEN);
         let mut s = Settings::new();
-        act(
-            &mut s,
-            ctx,
-            &[Action::Down, Action::Down, Action::Down, Action::Right],
-        );
+        // One more Down on Windows, where Emulators sits between BIOS and Cores.
+        let downs = if cfg!(windows) { 4 } else { 3 };
+        let mut actions = vec![Action::Down; downs];
+        actions.push(Action::Right);
+        act(&mut s, ctx, &actions);
         assert_eq!((s.section(), s.focus(), s.row()), ("Cores", Focus::Rows, 0));
         let back = Hint::new(&[Action::Back], "Back");
         let a = |verb| vec![Hint::new(&[Action::Confirm], verb), back.clone()];

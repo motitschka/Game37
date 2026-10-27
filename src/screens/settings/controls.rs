@@ -62,21 +62,15 @@ mod tests {
     use crate::ui::nav::{Hint, Hits, Nav};
     use sdl3::gamepad::Button;
 
-    /// Settings in a Nav over a root screen, with the focus on Controls' first row.
+    /// Settings in a Nav over a root screen, with the focus on Controls' first row. One more Down
+    /// on Windows, where Emulators sits between BIOS and Cores.
     fn nav() -> Nav {
         let mut nav = Nav::single(Box::new(crate::screens::Stub::new("Home")));
         nav.push(Box::new(Settings::new()));
-        act(
-            &mut nav,
-            &mut Ctx::empty(),
-            &[
-                Action::Down,
-                Action::Down,
-                Action::Down,
-                Action::Down,
-                Action::Right,
-            ],
-        );
+        let downs = if cfg!(windows) { 5 } else { 4 };
+        let mut actions = vec![Action::Down; downs];
+        actions.push(Action::Right);
+        act(&mut nav, &mut Ctx::empty(), &actions);
         nav
     }
 
