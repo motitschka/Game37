@@ -33,11 +33,13 @@ EOF
 }
 
 # -mbig-obj: HarfBuzz's debug build has more sections than a plain COFF object file allows.
+# --init: bash runs a script's last command in its own place, and xvfb-run as PID 1 waits forever,
+# because Xvfb never tells PID 1 that it is ready.
 # in_container <script>: runs <script> with bash in the container, as the host user, with the source
 # in /tmp/build, the crates in /vendor, the toolchain in /rust, the cache in /cache and the results in /out.
 in_container() {
     source_tar "$out/src-windows.tar"
-    docker run --rm --user "$(id -u):$(id -g)" \
+    docker run --rm --init --user "$(id -u):$(id -g)" \
         -v "$out/src-windows.tar:/src.tar:ro" \
         -v "$toolchain:/rust:ro" \
         -v "$out/vendor:/vendor:ro" \
@@ -118,8 +120,10 @@ xvfb-run -a cargo test --locked --offline --target $target -- '"${2:-}"' 2>&1 | 
         # A Windows-style Config and data folder, made fresh in the cache, which Wine sees as Z:.
         rm -rf "$cache/smoke" && mkdir -p "$cache/smoke/games" "$cache/smoke/data"
         printf '%s\n' "games_root = 'Z:\\cache\\smoke\\games'" >"$cache/smoke/config.toml"
-        in_container 'cd /out && xvfb-run -a wine game37.exe --screenshot smoke.bmp \
-    --config "Z:\cache\smoke\config.toml" --data-dir "Z:\cache\smoke\data" --actions ""'
+        # It takes seconds; the timeout is there so that a hang fails the check instead of waiting.
+        in_container 'cd /out && timeout -k 10 120 xvfb-run -a wine game37.exe --screenshot smoke.bmp \
+    --config "Z:\cache\smoke\config.toml" --data-dir "Z:\cache\smoke\data" --actions "" ||
+    { echo "the screenshot run failed or timed out ($?)" >&2 && exit 1; }'
         rm -r "$out/windows/fonts"
         mv "$out/windows/smoke.bmp" "$out/out/windows-smoke.bmp"
         to_png "$out/out/windows-smoke.bmp"
