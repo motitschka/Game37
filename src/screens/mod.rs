@@ -7,6 +7,7 @@ pub mod controller_test;
 pub mod core_queue;
 pub mod details;
 pub mod download_core;
+pub mod exe_browser;
 pub mod game_grid;
 pub mod home;
 pub mod message;

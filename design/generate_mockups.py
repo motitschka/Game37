@@ -1002,13 +1002,14 @@ RW = W - M - RX
 TOP = 240  # first section and first row
 
 
-def settings_page(sv, section, section_focused=False):
+def settings_page(sv, section, section_focused=False, sections=None):
     """Settings with `section` open and the focus in its rows: the section stays marked in accent.
-    With `section_focused`, the focus is on the section itself, drawn as the Options Menu draws it."""
+    With `section_focused`, the focus is on the section itself, drawn as the Options Menu draws it.
+    `sections` overrides the sidebar list (used for the Windows-only Emulators section)."""
     background(sv)
     topbar(sv, crumb="Home")
     sv.add(text(M, 196, "Settings", 48, 800))
-    for i, name in enumerate(SECTIONS):
+    for i, name in enumerate(sections or SECTIONS):
         y = TOP + i * 76
         on = name == section
         if on and section_focused:
@@ -1604,6 +1605,195 @@ def screen_setup_key():
     sv.save()
 
 
+# ---------- Windows (milestone W2) ----------
+# The Windows `.exe` for each Standalone Emulator (docs/research/w2-windows-emulators.md).
+WIN_EXE = {"gc": "Dolphin.exe", "wii": "Dolphin.exe", "wiiu": "Cemu.exe", "3ds": "azahar.exe",
+           "switch": "Ryujinx.exe", "ps2": "pcsx2-qt.exe", "ps3": "rpcs3.exe", "ps4": "shadPS4.exe"}
+# The winget package id for the emulators that have one; the rest get a download page instead.
+WINGET = {"wiiu": "Cemu.Cemu", "3ds": "AzaharEmu.Azahar", "ps2": "PCSX2Team.PCSX2", "ps4": "shadps4-emu.shadPS4"}
+DOWNLOAD_PAGE = {"gc": "dolphin-emu.org/download", "wii": "dolphin-emu.org/download",
+                  "switch": "ryujinx.app", "ps3": "rpcs3.net/download"}
+
+
+def emu_row_windows(sv, x, y, w, sysid, found_path, focused=False):
+    """One emulator row of 35-setup-emulators-windows / 37-settings-emulators: name, Systems, and
+    either its found path or a Choose .exe button."""
+    h = 96
+    sv.add(rect(x, y, w, h, C["surface2"] if focused else C["surface"], rx=14, stroke=C["line"], sw=1))
+    if focused:
+        sv.add(rect(x, y + h / 2 - 20, 5, 40, C["accent"], rx=2))
+    emulator = EXTERNAL[sysid]
+    systems = ", ".join(SYS[s][1] for s in EXTERNAL if EXTERNAL[s] == emulator)
+    sv.add(text(x + 28, y + 40, emulator, 24, 700), text(x + 28, y + 70, systems, 17, 500, fill=C["muted"]))
+    if found_path:
+        r = x + w - 28
+        sv.add(text(r, y + 40, "Found", 18, 600, fill=C["ahead"], anchor="end"),
+               check_path(r - tw("Found", 18, 600) * 1.1 - 26, y + 26, C["ahead"]),
+               text(r, y + 70, found_path, 16, 500, fill=C["muted"], anchor="end", font=MONO))
+    else:
+        bw, bh, by = 210, 52, y + h / 2 - 26
+        bx = x + w - 28 - bw
+        if focused:
+            sv.add(rect(bx - 5, by - 5, bw + 10, bh + 10, "none", rx=15, stroke="#FFFFFF", sw=3))
+        sv.add(rect(bx, by, bw, bh, C["surface2"] if not focused else C["accent"], rx=10,
+                    stroke=C["line"] if not focused else None, sw=2 if not focused else 0),
+               text(bx + bw / 2, by + bh / 2 + 7, "Choose .exe", 19, 700, anchor="middle"))
+        sv.add(text(bx - 16, y + 40, "Not found", 18, 600, fill=WARN, anchor="end"))
+
+
+def screen_setup_emulators_windows():
+    sv = Svg("35-setup-emulators-windows", "First-run Setup: emulators (Windows)")
+    setup_frame(sv, 2, "Set up the emulators",
+                "These Systems run in their own emulator. Game37 looks for each one; pick its program "
+                "if it isn't found.")
+    rows = [("wiiu", None), ("3ds", None), ("ps2", r"C:\Program Files\PCSX2\pcsx2-qt.exe"), ("gc", None)]
+    for i, (sysid, found_path) in enumerate(rows):
+        emu_row_windows(sv, M, 284 + i * 108, SETUP_W, sysid, found_path, focused=(sysid == "wiiu"))
+    missing_winget = [sysid for sysid, found_path in rows if not found_path and sysid in WINGET]
+    missing_download = [sysid for sysid, found_path in rows if not found_path and sysid not in WINGET]
+    y = 284 + len(rows) * 108 + 24
+    sv.add(text(M, y, "PASTE INTO POWERSHELL OR TERMINAL FOR THE REST", 14, 700, fill=C["muted"], ls=1.5))
+    cmd = "; ".join(f"winget install -e --id {WINGET[s]}" for s in missing_winget)
+    command_box(sv, M, y + 20, cmd)
+    y += 100
+    for sysid in missing_download:
+        w = action_pill(sv, M, y, f"{EXTERNAL[sysid]}: download page", icon="⤓")
+        sv.add(text(M + w + 20, y + 40, DOWNLOAD_PAGE[sysid], 18, 500, fill=C["muted"], font=MONO))
+        y += 80
+    setup_buttons(sv, [("Back", "normal"), ("Continue", "primary")])
+    hintbar(sv, [(["A"], "Choose .exe"), (["Y"], "Check again"), (["+"], "Continue"), (["B"], "Back")])
+    sv.save()
+
+
+def screen_console_missing_emulator_windows():
+    sv = Svg("36-console-page-emulator-missing-windows", "Console Page (emulator missing, Windows)")
+    color = SYS["gc"][3]
+    background(sv, glow=color, glow_opacity=0.35)
+    topbar(sv, active="consoles")
+    GC_GAMES = [game(t, "gc") for t in
+                ["The Wind Waker", "Metroid Prime", "Super Mario Sunshine", "Pikmin 2"]]
+    sv.add(rect(M, 152, 8, 76, color, rx=4),
+           text(M + 30, 202, "GameCube", 52, 800),
+           text(M + 32, 236, f"{len(GC_GAMES)} games  ·  Plays in Dolphin", 20, 500, fill=C["muted"]))
+    chip_w = 330
+    cx = W - M - chip_w
+    sv.add(rect(cx, 168, chip_w, 52, C["surface"], rx=26, stroke=C["line"], sw=1))
+    glyph(sv, cx + 14, 194, "X")
+    sv.add(text(cx + 60, 201, "Sort:", 19, 500, fill=C["muted"]), text(cx + 112, 201, "Most played", 19, 700),
+           text(cx + chip_w - 22, 201, "▾", 18, 700, fill=C["muted"], anchor="end"))
+    by, bh = 268, 176
+    sv.add(rect(M, by, W - 2 * M, bh, WARN, rx=18, opacity=0.1),
+           rect(M, by, W - 2 * M, bh, "none", rx=18, stroke=WARN, sw=2, opacity=0.55),
+           circle(M + 52, by + 52, 24, WARN), text(M + 52, by + 62, "!", 28, 800, fill=C["bg"], anchor="middle"),
+           text(M + 100, by + 50, "Dolphin isn't installed", 26, 700),
+           text(M + 100, by + 82, "GameCube and Wii games need Dolphin to play. You can still browse, favorite, "
+                                  "rename and pick artwork. Play stays off until Dolphin is installed.", 18, 400,
+                fill=C["muted"]))
+    cy = by + 112
+    x = M + 100
+    w = action_pill(sv, x, cy, "Download page", icon="⤓")
+    sv.add(text(x + w + 20, cy + 40, DOWNLOAD_PAGE["gc"], 18, 500, fill=C["muted"], font=MONO))
+    x += w + 20 + tw(DOWNLOAD_PAGE["gc"], 18) * 1.1 + 40
+    w = action_pill(sv, x, cy, "Choose .exe", pad="A")
+    x += w + 16
+    action_pill(sv, x, cy, "Check again", pad="Y")
+    cols, top, pitch = 8, by + bh + 40, CH + 72
+    for i, g in enumerate(GC_GAMES):
+        r, c = divmod(i, cols)
+        gx, gy = M + c * (CW + GAP), top + r * pitch
+        cover(sv, gx, gy, CW, CH, g, show_sys=False)
+        sv.add(text(gx, gy + CH + 32, "Never played", 17, 500, fill=C["muted"]))
+    sv.add(rect(0, 900, W, 110, sv.lin([(0, C["bg"], 0), (1, C["bg"], 1)])))
+    hintbar(sv, [(["A"], "Choose .exe"), (["Y"], "Check again"), (["B"], "Back")])
+    sv.save()
+
+
+def screen_settings_emulators():
+    sv = Svg("37-settings-emulators", "Settings: Emulators (Windows)")
+    windows_sections = SECTIONS[:3] + ["Emulators"] + SECTIONS[3:]
+    settings_page(sv, "Emulators", sections=windows_sections)
+    rows = [("gc", None), ("wiiu", None), ("3ds", None), ("switch", None),
+            ("ps2", r"C:\Program Files\PCSX2\pcsx2-qt.exe"), ("ps3", None),
+            ("ps4", r"…\WinGet\Packages\shadps4-emu.shadPS4\shadPS4.exe")]
+    seen = set()
+    i = 0
+    for sysid, found_path in rows:
+        emulator = EXTERNAL[sysid]
+        if emulator in seen:
+            continue
+        seen.add(emulator)
+        systems = ", ".join(SYS[s][1] for s in EXTERNAL if EXTERNAL[s] == emulator)
+        y, h = TOP + i * 96, 84
+        r = settings_row(sv, y, h, emulator, sub=systems, focused=(sysid == "ps2"), more=True)
+        base = y + h / 2 + 7
+        if found_path:
+            sv.add(text(r - 150, base, found_path, 16, 500, fill=C["muted"], anchor="end", font=MONO))
+        else:
+            sv.add(text(r - 150, base, "Not found", 18, 600, fill=WARN, anchor="end"))
+        i += 1
+    hintbar(sv, [(["A"], "Choose .exe"), (["B"], "Back")])
+    sv.save()
+
+
+def folder_icon(sv, x, y, s=26):
+    """A small folder glyph, its top-left at (x, y)."""
+    sv.add(f'<path d="M{x},{y + s * 0.18} h{s * 0.38:.1f} l{s * 0.1:.1f},{s * 0.14:.1f} h{s * 0.52:.1f} '
+           f'v{s * 0.68:.1f} h-{s:.1f} z" fill="{C["muted"]}"/>')
+
+
+def exe_icon(sv, x, y, s=26):
+    """A small document-with-folded-corner glyph for a `.exe` file, its top-left at (x, y)."""
+    c = s * 0.22
+    sv.add(f'<path d="M{x},{y} h{s - c:.1f} l{c:.1f},{c:.1f} v{s - c:.1f} h-{s:.1f} z" fill="none" '
+           f'stroke="{C["accent"]}" stroke-width="2"/>',
+           f'<path d="M{x + s - c},{y} v{c:.1f} h{c:.1f}" fill="none" stroke="{C["accent"]}" stroke-width="2"/>')
+
+
+# This PC's left-column places and one folder's contents, for 38-exe-browser.
+PLACES = ["This PC", "C:", "D:", "Downloads", "Desktop", "Program Files",
+          "WinGet Packages"]
+FOLDER_ENTRIES = [("folder", "bin"), ("folder", "lang"), ("folder", "resources"),
+                   ("file", "pcsx2-qt.exe"), ("file", "updater.exe")]
+
+
+def screen_exe_browser():
+    sv = Svg("38-exe-browser", "Choose PCSX2's program (the .exe browser)")
+    background(sv)
+    topbar(sv, crumb="Setup")
+    sv.add(text(M, 196, "Choose PCSX2's program", 44, 800),
+           text(M, 232, "Usually pcsx2-qt.exe", 20, 500, fill=C["muted"]))
+    crumb = "This PC  ›  C:  ›  Program Files  ›  PCSX2"
+    sv.add(text(M, 280, crumb, 20, 500, fill=C["muted"], font=MONO))
+    top, bottom = 320, 970
+    sv.add(rect(M, top, 400, bottom - top, C["surface"], rx=14, stroke=C["line"], sw=1))
+    for i, place in enumerate(PLACES):
+        y = top + 20 + i * 56
+        on = place == "Program Files"
+        if on:
+            sv.add(rect(M + 12, y, 376, 48, C["surface2"], rx=12), rect(M + 12, y + 8, 5, 32, C["accent"], rx=2))
+        sv.add(text(M + 40, y + 31, place, 20, 700 if on else 500, fill=C["text"] if on else C["muted"]))
+    rx = M + 440
+    rw = W - M - rx
+    sv.add(rect(rx, top, rw, bottom - top, C["surface"], rx=14, stroke=C["line"], sw=1))
+    for i, (kind, name) in enumerate(FOLDER_ENTRIES):
+        y, h = top + 20 + i * 64, 56
+        focused = name == "pcsx2-qt.exe"
+        highlight = name == WIN_EXE["ps2"]
+        if focused:
+            sv.add(rect(rx + 12, y, rw - 24, h, C["surface2"], rx=12),
+                   rect(rx + 12, y + h / 2 - 20, 5, 40, C["accent"], rx=2))
+        if kind == "folder":
+            folder_icon(sv, rx + 40, y + 15)
+        else:
+            exe_icon(sv, rx + 40, y + 13)
+        sv.add(text(rx + 86, y + h / 2 + 7, name, 20, 700 if highlight else 500,
+                    fill=C["accent"] if highlight else C["text"]))
+        if kind == "folder":
+            sv.add(text(rx + rw - 32, y + h / 2 + 7, "›", 22, 600, fill=C["muted"], anchor="end"))
+    hintbar(sv, [(["A"], "Choose"), (["B"], "Up"), (["X"], "Cancel")])
+    sv.save()
+
+
 if __name__ == "__main__":
     for fn in [screen_home, screen_home_empty, screen_carousel, screen_console_page, screen_details,
                screen_options, screen_options_delete, screen_pause, screen_ds, screen_console_missing_emulator,
@@ -1613,6 +1803,7 @@ if __name__ == "__main__":
                screen_controller_test, screen_search, screen_search_controller, screen_search_results, screen_search_empty,
                screen_setup_systems, screen_setup_emulators, screen_setup_folders, screen_setup_cores,
                screen_setup_key, screen_settings_controls, screen_settings_about,
-               screen_pause_restart_confirm]:
+               screen_pause_restart_confirm, screen_setup_emulators_windows,
+               screen_console_missing_emulator_windows, screen_settings_emulators, screen_exe_browser]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))

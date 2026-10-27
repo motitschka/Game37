@@ -82,7 +82,7 @@ pub(super) fn reason(e: &io::Error) -> String {
 
 /// The end of `text` that fits in `max_w`, after "…" when some of its start is cut, so a long
 /// path keeps the folder it ends in.
-fn trim_start(text: &str, max_w: f32, mut measure: impl FnMut(&str) -> f32) -> String {
+pub(in crate::screens) fn trim_start(text: &str, max_w: f32, mut measure: impl FnMut(&str) -> f32) -> String {
     if measure(text) <= max_w {
         return text.to_owned();
     }

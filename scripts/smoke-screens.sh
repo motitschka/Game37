@@ -162,4 +162,16 @@ shot m6-settings-key "$root/cfg.toml" "settings,down,right,confirm,text:abcdef01
 # M6: Settings Library: the Games Root entry, prefilled with the current Games Root (not saved)
 shot m6-settings-games-root "$root/cfg.toml" "settings,right,confirm"
 
+# W2: the .exe browser (FR-WIN-4) over First-run Setup, started in a fake Program Files\PCSX2, with
+# the other places' folders it shows, all under the shot's own data dir (app.rs's open_exe_browser).
+# `shot` makes the data dir itself; this makes the tree inside it first, so it survives that.
+exeroot="$root/data-w2-exe-browser/exe-browser"
+mkdir -p "$exeroot/C:/Program Files/PCSX2/bin" "$exeroot/C:/Program Files/PCSX2/lang" \
+    "$exeroot/C:/Program Files/PCSX2/resources"
+: >"$exeroot/C:/Program Files/PCSX2/pcsx2-qt.exe"
+: >"$exeroot/C:/Program Files/PCSX2/updater.exe"
+mkdir -p "$exeroot/D:" "$exeroot/C:/Users/Player/Downloads" "$exeroot/C:/Users/Player/Desktop" \
+    "$exeroot/C:/Users/Player/AppData/Local/Microsoft/WinGet/Packages"
+shot w2-exe-browser "$root/missing.toml" "wait:1" --screen exe-browser
+
 echo "screenshots in $out"

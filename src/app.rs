@@ -23,6 +23,7 @@ use crate::launch::{Launcher, NeverExits, Processes};
 use crate::library::db::Library;
 use crate::library::watch::LibraryWatcher;
 use crate::screens;
+use crate::screens::exe_browser::{ExeBrowser, Place};
 use crate::session::input::{self, Mouse, Ports};
 use crate::session::sdl;
 use crate::ui::chrome::{self, TopBar};
@@ -57,8 +58,10 @@ pub fn run(options: Options) -> Result<(), String> {
             }
             // Setup's folders go under the data dir, never in the real ~/Games.
             let mut nav = screens::start(loaded, &ctx.data_dir.join("Games"), &ctx);
-            if shot.screen == Some(ShotScreen::ControllerTest) {
-                open_controller_test(&mut nav, &mut ctx);
+            match shot.screen {
+                Some(ShotScreen::ControllerTest) => open_controller_test(&mut nav, &mut ctx),
+                Some(ShotScreen::ExeBrowser) => open_exe_browser(&mut nav, &mut ctx, has_library),
+                None => {}
             }
             // Never starts a process: a launch shows the Playing screen for good.
             let launcher = Launcher::new(Box::new(NeverExits::default()), log_dir);
@@ -167,6 +170,32 @@ fn open_controller_test(nav: &mut Nav, ctx: &mut Ctx) {
         },
     ];
     ctx.last_controller = Some(0);
+}
+
+/// `--screen exe-browser`: the `.exe` browser (FR-WIN-4) for PCSX2, over First-run Setup if there's
+/// no library, starting in a fake Program Files\PCSX2 under the data dir, with a fake set of places.
+fn open_exe_browser(nav: &mut Nav, ctx: &mut Ctx, has_library: bool) {
+    let root = ctx.data_dir.join("exe-browser");
+    let places = vec![
+        Place::new("C:", root.join("C:")),
+        Place::new("D:", root.join("D:")),
+        Place::new("Downloads", root.join("C:/Users/Player/Downloads")),
+        Place::new("Desktop", root.join("C:/Users/Player/Desktop")),
+        Place::new("Program Files", root.join("C:/Program Files")),
+        Place::new(
+            "WinGet Packages",
+            root.join("C:/Users/Player/AppData/Local/Microsoft/WinGet/Packages"),
+        ),
+    ];
+    let browser = ExeBrowser::new(
+        "PCSX2",
+        "pcsx2-qt.exe",
+        Some(root.join("C:/Program Files/PCSX2")),
+        !has_library,
+        |_, _| {},
+    )
+    .with_places(places);
+    nav.push(Box::new(browser));
 }
 
 /// Artwork cached under `data_dir`, fetched with the key in `secrets.toml` next to the Config at
