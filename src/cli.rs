@@ -1,8 +1,9 @@
 //! Command-line options.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::emulators::{self, Emulators};
+use crate::emulators::{self, Emulator, Emulators, How, Location, WindowsInstall};
 use crate::systems::{self, Kind};
 use crate::ui::input::{Action, Input, Pointer, TextInput};
 
@@ -155,6 +156,11 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
 
 /// The `--missing-emulators` ids, resolved to the `Emulators` state they stand for: every
 /// emulator installed except those Systems'. An unknown or Embedded System id is an error.
+///
+/// The installed ones get a [`simulated_location`] (FR-WIN-4): screenshot mode has no real
+/// installs to detect Windows locations from, but Setup's `find_emulators` step and Settings →
+/// Emulators both show a Found row's location, so a shot of either needs one. Linux never reads
+/// a location, so this has no effect there.
 fn parse_missing_emulators(list: Option<&str>) -> Result<Emulators, String> {
     let Some(list) = list else {
         return Ok(Emulators::all_installed());
@@ -174,12 +180,35 @@ fn parse_missing_emulators(list: Option<&str>) -> Result<Emulators, String> {
         .filter_map(|s| emulators::for_system(s))
         .map(|e| e.flatpak_id)
         .collect();
-    let installed = systems::SYSTEMS
+    let locations: HashMap<&'static str, Location> = systems::SYSTEMS
         .iter()
         .filter_map(emulators::for_system)
         .filter(|e| !missing_ids.contains(&e.flatpak_id))
-        .map(|e| e.flatpak_id.to_owned());
-    Ok(Emulators::from_installed(installed))
+        .map(|e| (e.key, simulated_location(e)))
+        .collect();
+    Ok(Emulators::located(locations))
+}
+
+/// A plausible Windows install location for `emulator`, for `--missing-emulators`' simulated
+/// installed emulators, which have no real file to detect a location from: under `C:\Program
+/// Files\<its installer's folder>` for one that has one, else winget's package folder for one
+/// winget installs, matching what a real install looks like under `find_emulators` and Settings
+/// → Emulators (FR-WIN-4).
+fn simulated_location(emulator: &'static Emulator) -> Location {
+    let exe = emulator.exe_names.first().copied().unwrap_or(emulator.name);
+    let exe = match emulator.install_folders.first() {
+        Some(folder) => format!(r"C:\Program Files\{folder}\{exe}"),
+        None => match emulator.windows_install {
+            WindowsInstall::Winget(id) => {
+                format!(r"C:\Users\Player\AppData\Local\Microsoft\WinGet\Packages\{id}\{exe}")
+            }
+            WindowsInstall::Page(_) => format!(r"C:\Program Files\{}\{exe}", emulator.name),
+        },
+    };
+    Location {
+        exe: PathBuf::from(exe),
+        how: How::Found,
+    }
 }
 
 fn parse_steps(list: &str) -> Result<Vec<Step>, String> {
@@ -389,6 +418,18 @@ mod tests {
             None,
             "Dolphin isn't named"
         );
+    }
+
+    #[test]
+    fn missing_emulators_gives_installed_ones_a_windows_location() {
+        let options = parse(shot_args("--screenshot o.bmp --missing-emulators gc")).unwrap();
+        let emulators = options.screenshot.unwrap().missing_emulators;
+        // PCSX2 (ps2) is installed here: its installer's folder, as the mockups show it.
+        let location = emulators.location(&emulators::PCSX2).unwrap();
+        assert_eq!(location.exe, PathBuf::from(r"C:\Program Files\PCSX2\pcsx2-qt.exe"));
+        assert_eq!(location.how, emulators::How::Found);
+        // Dolphin (gc) is named missing, so it has no location.
+        assert_eq!(emulators.location(&emulators::DOLPHIN), None);
     }
 
     #[test]
