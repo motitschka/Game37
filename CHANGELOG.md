@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0-beta.2 (2026-10-26)
+## 0.1.0-beta.2 (2026-10-27)
 
 ### New
 - **Start from power-on** in the Options Menu: boots an Embedded Game without its Resume State. Your
@@ -16,6 +16,8 @@
 - When a Game ends, Game37 logs how fast it really ran, to help track down sound or speed problems.
 
 ### Fixed
+- After a Nintendo 64 Game had been played, DS Games and their music ran two to three times too fast
+  until Game37 was restarted: starting the N64 Game turned off vsync for the whole program.
 - After quitting a Nintendo 64 Game, Game37's own screen was drawn shrunk into a corner with its text as
   white boxes until it was restarted.
 - European (PAL) Nintendo 64 Games showed black bands above and below the picture; they now fill the
