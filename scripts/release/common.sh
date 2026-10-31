@@ -1,5 +1,7 @@
 # Sourced by the release scripts: paths, the version from Cargo.toml, each distro's Docker image and
-# the README's install commands. Everything the scripts write goes under $out (target/release-check/).
+# the README's install commands. Everything the scripts write goes under $out (target/release-check/):
+# the containers' bulk too (the build folder, package downloads, the Nix store), bind-mounted from
+# there, so Docker's own storage only holds the images and the packages installed in a container.
 
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$repo/Cargo.toml" | head -1)
@@ -12,6 +14,16 @@ image_of() {
     fedora) echo fedora:44 ;;
     debian) echo debian:13 ;;
     *) echo "unknown distro '$1'" >&2 && return 1 ;;
+    esac
+}
+
+# pkg_cache <distro>: where the distro's package manager keeps its downloads, to bind-mount from
+# $out/cache-<distro>.
+pkg_cache() {
+    case $1 in
+    arch) echo /var/cache/pacman/pkg ;;
+    ubuntu | debian) echo /var/cache/apt/archives ;;
+    fedora) echo /var/cache/libdnf5 ;;
     esac
 }
 

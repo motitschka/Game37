@@ -20,16 +20,20 @@ main() {
     echo "game37 $version from $(git -C "$repo" describe --always --dirty), $distro in $image"
     cargo vendor --quiet --locked --manifest-path "$repo/Cargo.toml" "$out/vendor" >/dev/null
     source_tar "$out/src-$distro.tar"
+    rm -rf "$out/work-$distro" && mkdir -p "$out/work-$distro" "$out/cache-$distro"
     docker run --rm \
         -v "$out/src-$distro.tar:/src.tar:ro" \
+        -v "$out/work-$distro:/build" \
+        -v "$out/cache-$distro:$(pkg_cache "$distro")" \
         -v "$toolchain:/rust:ro" \
         -v "$out/vendor:/vendor:ro" \
         -v "$out/out:/out" \
         -e PATH=/rust/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
         -e HOST_ID="$(id -u):$(id -g)" -e DISTRO="$distro" -e INSTALL="$install" \
+        -e CACHE="$(pkg_cache "$distro")" \
         "$image" bash -c '
 set -euo pipefail
-trap "chown -R \$HOST_ID /out" EXIT
+trap "chown -R \$HOST_ID /out /build \$CACHE" EXIT
 echo "+ $INSTALL"
 eval "$INSTALL" >/tmp/install.log 2>&1 || { tail -30 /tmp/install.log; exit 1; }
 grep "^PRETTY_NAME" /etc/os-release
@@ -46,6 +50,7 @@ target/release/game37 --screenshot "/out/$DISTRO.bmp" --config /tmp/cfg.toml --d
 cp target/release/game37 "/out/game37-$DISTRO"
 '
     rm "$out/src-$distro.tar"
+    rm -rf "$out/work-$distro"
     to_png "$out/out/$distro.bmp"
     case $distro in arch | ubuntu) package ;; esac
     echo "RESULT_OK $distro"

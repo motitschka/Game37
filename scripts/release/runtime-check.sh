@@ -19,14 +19,16 @@ name=game37-$version-x86_64-$distro.tar.gz
 
 main() {
     echo "$name in $image"
+    mkdir -p "$out/cache-$distro"
     docker run --rm \
         -v "$out/pkg:/pkg:ro" \
+        -v "$out/cache-$distro:$(pkg_cache "$distro")" \
         -v "$out/out:/out" \
         -e HOST_ID="$(id -u):$(id -g)" -e DISTRO="$distro" -e INSTALL="$install" \
-        -e NAME="$name" -e VERSION="$version" \
+        -e NAME="$name" -e VERSION="$version" -e CACHE="$(pkg_cache "$distro")" \
         "$image" bash -c '
 set -euo pipefail
-trap "chown -R \$HOST_ID /out" EXIT
+trap "chown -R \$HOST_ID /out \$CACHE" EXIT
 echo "+ $INSTALL"
 eval "$INSTALL" >/tmp/install.log 2>&1 || { tail -30 /tmp/install.log; exit 1; }
 grep "^PRETTY_NAME" /etc/os-release

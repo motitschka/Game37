@@ -59,12 +59,17 @@ Then upload the two tarballs and the two `.sha256` files from `pkg/` to the GitH
 
 ## Cleaning up
 
-The scripts remove their containers (`--rm`). What stays:
+The scripts remove their containers (`--rm`). The containers' bulk (the build folders, package
+downloads and the Nix store) lives under `target/release-check/`, on the disk that holds the worktree,
+so Docker's own storage only needs room for the images and one container's installed packages (a few
+GB). What stays:
 
 ```bash
 docker rmi archlinux:latest ubuntu:26.04 fedora:44 debian:13 nixos/nix:latest
-docker volume rm game37-release-check-nix
-rm -r target/release-check/vendor target/release-check/out/game37-*
+docker run --rm -v "$PWD/target/release-check:/o" nixos/nix:latest rm -rf /o/nix-store
+rm -r target/release-check/vendor target/release-check/cache-* target/release-check/out/game37-*
 ```
+
+The Nix store's files are owned by root and read-only, hence the container to remove them.
 
 Keep `pkg/` until the files are uploaded.

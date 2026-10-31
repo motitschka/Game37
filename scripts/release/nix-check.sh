@@ -6,7 +6,8 @@
 #   scripts/release/nix-check.sh
 #
 # Needs the test Cores and Games in .testdata/ of the main checkout (see CLAUDE.md). Keeps /nix in
-# the Docker volume game37-release-check-nix, so a second run is quick. Writes
+# target/release-check/nix-store, filled from the image on the first run, so a second run is quick
+# and the store doesn't fill Docker's own storage. Writes
 # target/release-check/out/nix.log, nix-<shot>.log and nix-<shot>.png; nix.log ends in
 # "RESULT_OK nix" when everything passed.
 set -euo pipefail
@@ -18,12 +19,16 @@ testdata=$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)/../
 main() {
     echo "game37 $version from $(git -C "$repo" describe --always --dirty), flake in nixos/nix:latest"
     source_tar "$out/src-nix.tar"
+    if [ ! -d "$out/nix-store/store" ]; then
+        mkdir -p "$out/nix-store"
+        docker run --rm -v "$out/nix-store:/target" nixos/nix:latest cp -a /nix/. /target/
+    fi
     # PPSSPP needs more than Docker's 64 MB /dev/shm.
     docker run --rm --shm-size=1g \
         -v "$out/src-nix.tar:/src.tar:ro" \
         -v "$(realpath "$testdata"):/testdata:ro" \
         -v "$out/out:/out" \
-        -v game37-release-check-nix:/nix \
+        -v "$out/nix-store:/nix" \
         -e HOST_ID="$(id -u):$(id -g)" \
         nixos/nix:latest bash -c '
 set -euo pipefail
