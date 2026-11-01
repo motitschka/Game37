@@ -5,6 +5,7 @@
 pub mod gl;
 pub mod glx;
 pub mod input;
+pub mod ps2_card;
 pub mod saves;
 pub mod sdl;
 pub mod states;
