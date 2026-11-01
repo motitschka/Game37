@@ -7,7 +7,8 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use super::ffi::{
-    self, Api, AudioSampleBatchFn, InputStateFn, RetroGameInfo, RetroSystemAvInfo, RetroSystemInfo,
+    self, Api, AudioSampleBatchFn, EnvironmentFn, InputStateFn, RetroGameInfo, RetroSystemAvInfo,
+    RetroSystemInfo,
 };
 use super::tests::serial;
 use super::{Button, Claim, Core, CoreDirs, InputState};
@@ -30,6 +31,8 @@ fn reset() {
     *lock(&INPUT_STATE) = None;
     lock(&ANSWERS).clear();
     lock(&CALLS).clear();
+    *lock(&ENVIRONMENT) = None;
+    *lock(&QUIRKS_BACK) = None;
 }
 
 fn note(call: String) {
@@ -51,6 +54,41 @@ unsafe extern "C" fn load_game_noted(_: *const RetroGameInfo) -> bool {
 }
 unsafe extern "C" fn run_noted() {
     note("run".into());
+}
+
+static ENVIRONMENT: Mutex<Option<EnvironmentFn>> = Mutex::new(None);
+/// The quirks the host wrote back to the fake Core.
+static QUIRKS_BACK: Mutex<Option<u64>> = Mutex::new(None);
+
+unsafe extern "C" fn set_environment(f: EnvironmentFn) {
+    *lock(&ENVIRONMENT) = Some(f);
+}
+/// `retro_init` of a Core that, like Dolphin and Azahar, can't save or restore its state before
+/// its first `retro_run`.
+unsafe extern "C" fn init_must_initialize() {
+    let Some(environment) = *lock(&ENVIRONMENT) else {
+        return;
+    };
+    let mut quirks = ffi::RETRO_SERIALIZATION_QUIRK_MUST_INITIALIZE;
+    // SAFETY: the host's environment callback, given the `uint64_t *` this command takes.
+    if unsafe { environment(ffi::ENV_SET_SERIALIZATION_QUIRKS, (&raw mut quirks).cast()) } {
+        *lock(&QUIRKS_BACK) = Some(quirks);
+    }
+}
+fn has_run() -> bool {
+    calls().iter().any(|c| c == "run")
+}
+unsafe extern "C" fn serialize_size_once_run() -> usize {
+    note("serialize_size".into());
+    if has_run() { 4 } else { 0 }
+}
+unsafe extern "C" fn serialize_once_run(_: *mut c_void, _: usize) -> bool {
+    note("serialize".into());
+    has_run()
+}
+unsafe extern "C" fn unserialize_once_run(_: *const c_void, _: usize) -> bool {
+    note("unserialize".into());
+    has_run()
 }
 unsafe extern "C" fn api_version() -> c_uint {
     ffi::RETRO_API_VERSION
@@ -114,7 +152,7 @@ unsafe extern "C" fn run_on_another_thread() {
 /// A fake Core that does nothing: the base each test changes some entry points of.
 fn api() -> Api {
     Api {
-        set_environment: set_any,
+        set_environment,
         set_video_refresh: set_any,
         set_audio_sample: set_any,
         set_audio_sample_batch,
@@ -187,4 +225,67 @@ fn every_port_gets_a_retropad_after_the_game_loads_and_before_the_first_frame() 
         "run".to_owned(),
     ];
     assert_eq!(calls(), expected);
+}
+
+#[test]
+fn a_core_that_must_run_first_runs_one_frame_before_its_state_is_restored() {
+    let _serial = serial();
+    reset();
+    let mut core = start(Api {
+        init: init_must_initialize,
+        run: run_noted,
+        unserialize: unserialize_once_run,
+        ..api()
+    });
+    lock(&CALLS).clear();
+    assert_eq!(
+        *lock(&QUIRKS_BACK),
+        Some(ffi::RETRO_SERIALIZATION_QUIRK_MUST_INITIALIZE),
+        "the host supports the quirk"
+    );
+    core.unserialize(b"save").expect("restored after the first frame");
+    assert_eq!(
+        core.frame(),
+        &super::Frame::default(),
+        "the first frame isn't shown"
+    );
+    core.unserialize(b"save").expect("restored again");
+    assert_eq!(
+        calls(),
+        ["run", "unserialize", "unserialize"],
+        "one first frame only"
+    );
+}
+
+#[test]
+fn a_core_that_must_run_first_runs_one_frame_before_its_state_is_saved() {
+    let _serial = serial();
+    reset();
+    let mut core = start(Api {
+        init: init_must_initialize,
+        run: run_noted,
+        serialize_size: serialize_size_once_run,
+        serialize: serialize_once_run,
+        ..api()
+    });
+    lock(&CALLS).clear();
+    assert_eq!(core.serialize().expect("saved after the first frame").len(), 4);
+    assert_eq!(calls(), ["run", "serialize_size", "serialize"]);
+}
+
+#[test]
+fn other_cores_restore_their_state_without_a_first_frame() {
+    let _serial = serial();
+    reset();
+    let mut core = start(Api {
+        run: run_noted,
+        unserialize: unserialize_once_run,
+        ..api()
+    });
+    lock(&CALLS).clear();
+    assert!(
+        core.unserialize(b"save").is_err(),
+        "this fake Core refuses before a frame"
+    );
+    assert_eq!(calls(), ["unserialize"], "no frame run for it");
 }

@@ -43,10 +43,19 @@ pub const ENV_SET_CONTROLLER_INFO: c_uint = 35;
 pub const ENV_SET_MEMORY_MAPS: c_uint = 36 | EXPERIMENTAL;
 pub const ENV_SET_GEOMETRY: c_uint = 37;
 pub const ENV_SET_SUPPORT_ACHIEVEMENTS: c_uint = 42 | EXPERIMENTAL;
+pub const ENV_SET_SERIALIZATION_QUIRKS: c_uint = 44;
 pub const ENV_SET_HW_SHARED_CONTEXT: c_uint = 44 | EXPERIMENTAL;
 pub const ENV_GET_AUDIO_VIDEO_ENABLE: c_uint = 47 | EXPERIMENTAL;
 pub const ENV_GET_INPUT_BITMASKS: c_uint = 51 | EXPERIMENTAL;
 pub const ENV_GET_PREFERRED_HW_RENDER: c_uint = 56;
+
+/// `RETRO_SERIALIZATION_QUIRK_*`, set by a Core in `SET_SERIALIZATION_QUIRKS`.
+pub const RETRO_SERIALIZATION_QUIRK_INCOMPLETE: u64 = 1 << 0;
+/// `retro_serialize_size`, `retro_serialize` and `retro_unserialize` fail until the Core has run.
+pub const RETRO_SERIALIZATION_QUIRK_MUST_INITIALIZE: u64 = 1 << 1;
+pub const RETRO_SERIALIZATION_QUIRK_CORE_VARIABLE_SIZE: u64 = 1 << 2;
+pub const RETRO_SERIALIZATION_QUIRK_ENDIAN_DEPENDENT: u64 = 1 << 5;
+pub const RETRO_SERIALIZATION_QUIRK_PLATFORM_DEPENDENT: u64 = 1 << 6;
 
 /// `enum retro_hw_context_type`: the two the host accepts.
 pub const RETRO_HW_CONTEXT_OPENGL: c_int = 1;

@@ -300,6 +300,8 @@ pub struct Core {
     video: Frame,
     /// The Core's OpenGL rendering, when it asked for it.
     hw: Option<Hw>,
+    /// `retro_run` has run at least once.
+    ran: bool,
     duped: bool,
     audio: Vec<i16>,
     game_path: CString,
@@ -382,6 +384,7 @@ impl Core {
             game_loaded: false,
             video: Frame::default(),
             hw: None,
+            ran: false,
             duped: false,
             audio: Vec::new(),
             game_path: game_cpath,
@@ -463,6 +466,7 @@ impl Core {
             Some(hw) => hw.run(run),
             None => run(),
         }
+        self.ran = true;
         callbacks::with(|s| {
             self.duped = !s.fresh;
             if s.fresh {
@@ -504,8 +508,22 @@ impl Core {
         }
     }
 
+    /// Runs the first frame now when the Core can't save or restore its state before it
+    /// (`RETRO_SERIALIZATION_QUIRK_MUST_INITIALIZE`: Dolphin, Azahar), with no buttons held. Its
+    /// picture and sound are dropped: the player gets the restored state's instead.
+    fn initialise_for_states(&mut self) {
+        let must = ffi::RETRO_SERIALIZATION_QUIRK_MUST_INITIALIZE;
+        if self.ran || !callbacks::with(|s| s.serialization_quirks & must != 0).unwrap_or(false) {
+            return;
+        }
+        self.run_frame(&InputState::default());
+        (self.video, self.duped) = (Frame::default(), false);
+        self.audio.clear();
+    }
+
     /// The Core's state, for [`Core::unserialize`] later.
     pub fn serialize(&mut self) -> Result<Vec<u8>, CoreError> {
+        self.initialise_for_states();
         self.call(|api| {
             // SAFETY: the Core is loaded with a Game.
             let size = unsafe { (api.serialize_size)() };
@@ -523,6 +541,7 @@ impl Core {
     }
 
     pub fn unserialize(&mut self, state: &[u8]) -> Result<(), CoreError> {
+        self.initialise_for_states();
         // SAFETY: `state` is readable for its whole length during the call.
         let restored = self.call(|api| unsafe { (api.unserialize)(state.as_ptr().cast(), state.len()) });
         if restored {

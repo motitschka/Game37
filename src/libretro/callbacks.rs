@@ -43,6 +43,8 @@ pub(super) struct State {
     /// The Core drew its last frame into the FBO at this size; it is read back into `frame` after
     /// `retro_run`.
     pub hw_size: Option<(u32, u32)>,
+    /// The `RETRO_SERIALIZATION_QUIRK_*` flags the Core set, as it set them.
+    pub serialization_quirks: u64,
 }
 
 impl State {
@@ -59,6 +61,7 @@ impl State {
             gl_host: None,
             hw: None,
             hw_size: None,
+            serialization_quirks: 0,
         }
     }
 }
@@ -335,9 +338,31 @@ pub(super) unsafe fn dispatch(s: &mut State, cmd: c_uint, data: *mut c_void) -> 
         }
         // Options never change while a Game runs.
         ffi::ENV_GET_VARIABLE_UPDATE => unsafe { write_out(data, false) },
+        ffi::ENV_SET_SERIALIZATION_QUIRKS => {
+            // SAFETY: for this command `data` is a `uint64_t *`, read and written back.
+            let Some(quirks) = (unsafe { data.cast::<u64>().as_mut() }) else {
+                return false;
+            };
+            s.serialization_quirks = *quirks;
+            // The frontend clears the flags of the quirks it doesn't support.
+            *quirks &= SERIALIZATION_QUIRKS_SUPPORTED;
+            true
+        }
         _ => false,
     }
 }
+
+/// The serialization quirks Game37 copes with: states that can't be relied on frame by frame
+/// (there is no netplay or rewind), states only after a first frame (it runs one, see
+/// `Core::unserialize`), states whose size changes (it asks the size each time), and states tied
+/// to this machine (they never leave it). Not states for one session only: the Resume State is
+/// restored in a later one. Nor does it announce `FRONT_VARIABLE_SIZE`, so Cores keep making
+/// states as they did before this command was supported.
+const SERIALIZATION_QUIRKS_SUPPORTED: u64 = ffi::RETRO_SERIALIZATION_QUIRK_INCOMPLETE
+    | ffi::RETRO_SERIALIZATION_QUIRK_MUST_INITIALIZE
+    | ffi::RETRO_SERIALIZATION_QUIRK_CORE_VARIABLE_SIZE
+    | ffi::RETRO_SERIALIZATION_QUIRK_ENDIAN_DEPENDENT
+    | ffi::RETRO_SERIALIZATION_QUIRK_PLATFORM_DEPENDENT;
 
 /// `SET_VARIABLES`: records each option's default, replacing those recorded before.
 ///
@@ -597,6 +622,28 @@ mod tests {
             // SAFETY: these commands' data is never read.
             assert!(unsafe { dispatch(&mut s, cmd, ptr::null_mut()) }, "cmd {cmd}");
         }
+    }
+
+    #[test]
+    fn serialization_quirks_are_kept_and_those_not_supported_cleared() {
+        let mut s = state();
+        let single_session = 1 << 4;
+        let unknown = 1 << 40;
+        let must = ffi::RETRO_SERIALIZATION_QUIRK_MUST_INITIALIZE;
+        let incomplete = ffi::RETRO_SERIALIZATION_QUIRK_INCOMPLETE;
+        let mut quirks: u64 = must | incomplete | single_session | unknown;
+        assert!(env(&mut s, ffi::ENV_SET_SERIALIZATION_QUIRKS, &mut quirks));
+        assert_eq!(
+            s.serialization_quirks,
+            must | incomplete | single_session | unknown
+        );
+        assert_eq!(
+            quirks,
+            must | incomplete,
+            "the frontend clears what it doesn't support"
+        );
+        // SAFETY: null is what is being tested; it is never dereferenced.
+        assert!(!unsafe { dispatch(&mut s, ffi::ENV_SET_SERIALIZATION_QUIRKS, ptr::null_mut()) });
     }
 
     #[test]

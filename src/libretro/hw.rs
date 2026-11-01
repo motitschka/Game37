@@ -994,6 +994,7 @@ mod tests {
             game_loaded: true,
             video: Frame::default(),
             hw: Some(hw),
+            ran: false,
             duped: false,
             audio: Vec::new(),
             game_path: c"/game".into(),
