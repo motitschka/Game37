@@ -27,6 +27,8 @@ for every new screen.
 - Tests that need real Cores or test ROMs read them from `/home/matei/Game37/.testdata/` (gitignored, local
   only), are `#[ignore = "needs /home/matei/Game37/.testdata"]`, and run with `cargo test -- --ignored`.
   Only one Core may be loaded per process, so every such test holds `crate::libretro::tests::serial()`.
+- Tests named `needs_ps2_bios_…` need the owner's PS2 BIOS dump in `.testdata/bios/pcsx2/bios/`; until
+  it is there, run the ignored tests with `cargo test -- --ignored --skip needs_ps2_bios`.
 - libretro callbacks that a Core may call from its own threads (e.g. `get_current_framebuffer`) must not
   depend on the per-thread callback state; keep what they need in process-wide state.
 - Real-Core OpenGL tests check the picture as the renderer shows it, not only the read-back bytes.

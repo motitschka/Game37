@@ -411,24 +411,25 @@ mod tests {
 
     #[test]
     fn the_command_lists_each_missing_emulator_once_in_system_order() {
-        let setup = ticking(&["nes", "gc", "wii", "3ds", "switch", "ps2"]);
+        let setup = ticking(&["nes", "gc", "wii", "3ds", "switch", "ps2", "ps3"]);
         let installed = Emulators::from_installed(["org.azahar_emu.Azahar"]);
         assert_eq!(
             install_command(&setup.model, &installed).as_deref(),
             Some(
-                "flatpak install flathub org.DolphinEmu.dolphin-emu io.github.ryubing.Ryujinx net.pcsx2.PCSX2"
-            )
+                "flatpak install flathub org.DolphinEmu.dolphin-emu io.github.ryubing.Ryujinx net.rpcs3.RPCS3"
+            ),
+            "PS2 plays in Game37"
         );
     }
 
     #[test]
     fn with_nothing_missing_there_is_no_command() {
-        let setup = ticking(&["gc", "ps2"]);
-        let installed = Emulators::from_installed(["org.DolphinEmu.dolphin-emu", "net.pcsx2.PCSX2"]);
+        let setup = ticking(&["gc", "ps3"]);
+        let installed = Emulators::from_installed(["org.DolphinEmu.dolphin-emu", "net.rpcs3.RPCS3"]);
         assert_eq!(install_command(&setup.model, &installed), None);
 
-        let (mut ctx, _) = detecting(&["org.DolphinEmu.dolphin-emu", "net.pcsx2.PCSX2"]);
-        let mut setup = ticking(&["gc", "ps2"]);
+        let (mut ctx, _) = detecting(&["org.DolphinEmu.dolphin-emu", "net.rpcs3.RPCS3"]);
+        let mut setup = ticking(&["gc", "ps3"]);
         act(&mut setup, &mut ctx, Action::Settings);
         assert!(!setup.hints().iter().any(|h| h.text == "Check again"));
         assert!(setup.hints().iter().any(|h| h.text == "Continue"));
@@ -440,7 +441,7 @@ mod tests {
     #[test]
     fn copy_asks_for_the_command_on_the_clipboard() {
         let (mut ctx, _) = detecting(&["org.DolphinEmu.dolphin-emu"]);
-        let mut setup = ticking(&["gc", "switch", "ps2"]);
+        let mut setup = ticking(&["gc", "switch", "ps3"]);
         act(&mut setup, &mut ctx, Action::Settings);
         assert!(
             setup.hints().iter().any(|h| h.text == "Copy"),
@@ -449,18 +450,18 @@ mod tests {
         act(&mut setup, &mut ctx, Action::Confirm);
         assert_eq!(
             ctx.clipboard_request.as_deref(),
-            Some("flatpak install flathub io.github.ryubing.Ryujinx net.pcsx2.PCSX2")
+            Some("flatpak install flathub io.github.ryubing.Ryujinx net.rpcs3.RPCS3")
         );
         assert_eq!(setup.step(), 2);
     }
 
     #[test]
     fn entering_the_step_and_check_again_detect_the_emulators() {
-        let (mut ctx, calls) = detecting(&["net.pcsx2.PCSX2"]);
-        let mut setup = ticking(&["ps2", "ps3"]);
+        let (mut ctx, calls) = detecting(&["net.rpcs3.RPCS3"]);
+        let mut setup = ticking(&["ps3", "ps4"]);
         act(&mut setup, &mut ctx, Action::Settings);
         assert_eq!(calls.get(), 1);
-        assert_eq!(ctx.emulators, Emulators::from_installed(["net.pcsx2.PCSX2"]));
+        assert_eq!(ctx.emulators, Emulators::from_installed(["net.rpcs3.RPCS3"]));
         act(&mut setup, &mut ctx, Action::Options);
         assert_eq!(calls.get(), 2, "Y");
         act(&mut setup, &mut ctx, Action::Right);

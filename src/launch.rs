@@ -119,7 +119,7 @@ fn later_update(system: &System) -> String {
 }
 
 /// The command that starts `file` in `emulator`, granting it read access to the Games Root,
-/// which some emulator Flatpaks (PCSX2) can't otherwise see.
+/// which some emulator Flatpaks can't otherwise see.
 pub fn command(emulator: &Emulator, games_root: &Path, file: &Path) -> Vec<OsString> {
     let mut grant = OsString::from("--filesystem=");
     grant.push(escape_filesystem(games_root));
@@ -404,7 +404,7 @@ pub fn record(ctx: &mut Ctx, game_id: i64, ended_at: i64, elapsed: Duration) {
 mod tests {
     use super::*;
     use crate::ctx::Start;
-    use crate::emulators::{AZAHAR, CEMU, DOLPHIN, PCSX2, RPCS3, RYUBING, SHADPS4};
+    use crate::emulators::{AZAHAR, CEMU, DOLPHIN, RPCS3, RYUBING, SHADPS4};
     use crate::library::FoundGame;
     use crate::library::db::SortOrder;
     use crate::screens::{Home, Stub};
@@ -429,7 +429,7 @@ mod tests {
     #[test]
     fn each_emulator_gets_its_fullscreen_command() {
         let g = "/home/ann/Games/x/My Game.iso";
-        let cases: [(&Emulator, &[&str]); 7] = [
+        let cases: [(&Emulator, &[&str]); 6] = [
             (
                 &DOLPHIN,
                 &["-b", "-C", "Dolphin.Display.Fullscreen=True", "-e", g],
@@ -437,7 +437,6 @@ mod tests {
             (&CEMU, &["-f", "-g", g]),
             (&AZAHAR, &["-f", g]),
             (&RYUBING, &[g, "--fullscreen"]),
-            (&PCSX2, &["-batch", "-fullscreen", g]),
             (&RPCS3, &["--no-gui", "--fullscreen", g]),
             (&SHADPS4, &["-g", g, "--fullscreen", "true"]),
         ];
@@ -454,7 +453,7 @@ mod tests {
     #[test]
     fn the_games_root_grant_escapes_colons_and_backslashes() {
         let root = Path::new("/mnt/a:b\\c/Games");
-        let argv = command(&PCSX2, root, Path::new("/x.iso"));
+        let argv = command(&RPCS3, root, Path::new("/x.iso"));
         assert_eq!(argv[2], OsString::from("--filesystem=/mnt/a\\:b\\\\c/Games:ro"));
     }
 
@@ -516,7 +515,7 @@ mod tests {
         );
         let gone = dir.path().join("gone.iso");
         assert_eq!(
-            game_file(&PCSX2, &gone, Some(dir.path())),
+            game_file(&DOLPHIN, &gone, Some(dir.path())),
             Err("~/gone.iso isn't there any more.".to_owned())
         );
     }
@@ -839,6 +838,31 @@ mod tests {
         };
         assert_eq!(screen.title(), "PlayStation BIOS missing");
         assert!(w.ctx.play.is_none());
+    }
+
+    #[test]
+    fn confirm_on_ps2_with_no_bios_names_its_folder_and_with_one_starts_it() {
+        let mut w = world("exit 0");
+        w.ctx.data_dir = w._dir.path().join("data");
+        w.ctx.start_download = Box::new(|_, _| panic!("must not download a Core without a BIOS"));
+        let ps2 = game_of(&w, "ps2");
+        let Transition::Push(screen) = confirm_game(&ps2, &mut w.ctx) else {
+            panic!("expected the missing-BIOS message to be pushed");
+        };
+        assert_eq!(screen.title(), "PlayStation 2 BIOS missing");
+        assert!(w.ctx.play.is_none());
+
+        touch(&w.ctx.data_dir.join("cores/pcsx2_libretro.so"));
+        let bios = w.ctx.games_root.join("bios/pcsx2/bios/My PS2.bin");
+        touch(&bios);
+        File::options()
+            .write(true)
+            .open(&bios)
+            .unwrap()
+            .set_len(4 << 20)
+            .unwrap();
+        assert!(matches!(confirm_game(&ps2, &mut w.ctx), Transition::None));
+        assert_eq!(w.ctx.play.take(), Some(Play::resume(ps2)));
     }
 
     #[test]

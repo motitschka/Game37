@@ -276,6 +276,7 @@ mod tests {
             "mGBA",
             "melonDS DS",
             "Beetle PSX HW",
+            "LRPS2",
             "PPSSPP",
         ];
         assert_eq!(labels, expected);

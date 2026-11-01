@@ -196,6 +196,13 @@ impl Session {
         let system = systems::by_id(&game.system).ok_or_else(|| format!("No System {:?}", game.system))?;
         let core_info =
             cores::for_system(system).ok_or_else(|| format!("{} has no Core yet.", system.name))?;
+        // Launching checks this too, but a Core may only log a missing BIOS (LRPS2 does), so the
+        // BIOS taken away since then gets the same message (FR-EMB-12).
+        if let Some(rule) = core_info.bios
+            && rule.found(&ctx.games_root).is_none()
+        {
+            return Err(launch::missing_bios_message(&ctx.games_root, rule));
+        }
         let gl = open_gl(core_info, frontend, None, system.name)?;
         let fail = |e: &dyn Display| format!("{} couldn't start {}: {e}.", core_info.name, game.title);
         let root = &ctx.games_root;
@@ -1324,6 +1331,228 @@ mod tests {
             ),
             Ok(_) => panic!("the fake Core loads no Game"),
         }
+    }
+
+    /// A PS2 Game, `ps2/<file>`, on a Games Root.
+    fn ps2_game(file: &str) -> GameRow {
+        GameRow {
+            id: 1,
+            system: "ps2".into(),
+            rel_path: format!("ps2/{file}"),
+            title: "wLaunchELF".into(),
+            date_added: 0,
+            last_played: None,
+            playtime_secs: 0,
+            favorite: false,
+        }
+    }
+
+    /// Without its BIOS a PS2 session doesn't start, and says where the BIOS goes, before it
+    /// loads any Core: LRPS2 itself only logs that it found none (FR-EMB-12, FR-NEW-1).
+    #[test]
+    fn a_ps2_session_without_its_bios_names_the_bios_folder() {
+        let dir = TempDir::new().unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = dir.path().join("Games");
+        ctx.data_dir = dir.path().join("data");
+        fs::create_dir_all(cores::PS2_BIOS.dir(&ctx.games_root)).unwrap();
+        let play = Play::resume(ps2_game("Game.iso"));
+        match Session::start(&play, &ctx, None, None, None) {
+            Err(message) => assert_eq!(
+                message,
+                launch::missing_bios_message(&ctx.games_root, &cores::PS2_BIOS)
+            ),
+            Ok(_) => panic!("no PS2 session without a BIOS"),
+        }
+    }
+
+    /// The opengl renderer of a hidden offscreen window, as `app.rs` makes it. SDL must outlive
+    /// the canvas.
+    fn offscreen_renderer() -> (sdl3::Sdl, sdl3::render::Canvas<Window>) {
+        sdl3::hint::set("SDL_VIDEO_DRIVER", "offscreen");
+        let sdl = sdl3::init().unwrap();
+        let video = sdl.video().unwrap();
+        let window = video.window("hw", 1280, 720).hidden().build().unwrap();
+        let canvas = sdl3::render::create_renderer(window, Some(c"opengl")).unwrap();
+        (sdl, canvas)
+    }
+
+    /// A PS2 Games Root holding wLaunchELF, and a data dir with the test data's Cores.
+    fn ps2_world() -> (TempDir, TempDir, Ctx, &'static str) {
+        let elf = "wLaunchELF (Homebrew).elf";
+        let root = TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join("ps2")).unwrap();
+        fs::copy(
+            Path::new(TESTDATA).join("games/ps2").join(elf),
+            root.path().join("ps2").join(elf),
+        )
+        .unwrap();
+        let data = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(Path::new(TESTDATA).join("data/cores"), data.path().join("cores"))
+            .unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = root.path().to_path_buf();
+        ctx.data_dir = data.path().to_path_buf();
+        (root, data, ctx, elf)
+    }
+
+    /// The distinct colours of what `gfx` shows, read back from the renderer.
+    fn shown_colours(gfx: &mut Gfx<'_>, at: &Path) -> std::collections::HashSet<Vec<u8>> {
+        use sdl3::surface::Surface;
+        gfx.save_bmp(at).unwrap();
+        let shot = Surface::load_bmp(at).unwrap();
+        let pitch = shot.pitch() as usize;
+        let bytes = shot.pixel_format().bytes_per_pixel();
+        shot.with_lock(|pixels| {
+            pixels
+                .chunks(pitch)
+                .flat_map(|row| row[..shot.width() as usize * bytes].chunks(bytes))
+                .map(<[u8]>::to_vec)
+                .collect()
+        })
+    }
+
+    /// LRPS2 with no BIOS: a PS2 session says where the BIOS goes, and the real Core, made to
+    /// load anyway on the SDL OpenGL host with an empty BIOS folder, fails to load the Game
+    /// without taking Game37's process down. It says nothing to the player itself, so Game37's
+    /// message is the one shown.
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn hw_lrps2_without_a_bios_fails_to_start_with_the_ps2_bios_message() {
+        use crate::ui::text::Fonts;
+        use crate::ui::theme::Colour;
+
+        let _serial = serial();
+        let (root, data, ctx, elf) = ps2_world();
+        fs::create_dir_all(cores::PS2_BIOS.dir(root.path())).unwrap();
+        let (_sdl, canvas) = offscreen_renderer();
+        let creator = canvas.texture_creator();
+        let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
+
+        let play = Play::resume(ps2_game(elf));
+        match Session::start(&play, &ctx, gfx.gl_context(), None, Some(60.0)) {
+            Err(message) => assert_eq!(
+                message,
+                launch::missing_bios_message(root.path(), &cores::PS2_BIOS)
+            ),
+            Ok(_) => panic!("no PS2 session without a BIOS"),
+        }
+
+        let gl = open_gl(&cores::LRPS2, gfx.gl_context(), None, "PlayStation 2").unwrap();
+        assert!(gl.is_some(), "LRPS2 gets the SDL OpenGL host");
+        let dirs = CoreDirs {
+            system: cores::system_dir(&cores::LRPS2, data.path(), root.path()),
+            save: saves::save_dir(root.path(), "ps2"),
+        };
+        fs::create_dir_all(&dirs.save).unwrap();
+        let game = root.path().join("ps2").join(elf);
+        let options = cores::LRPS2.options_for(&game);
+        let core_path = cores::installed_path(data.path(), &cores::LRPS2);
+        match Core::load(&core_path, &game, dirs, &options, gl) {
+            Err(e) => eprintln!("LRPS2 without a BIOS: {e}; it said {:?}", e.core_message()),
+            Ok(_) => panic!("LRPS2 loaded a Game without a BIOS"),
+        }
+
+        // Game37 is still here, and its renderer still draws.
+        gfx.clear(Colour::hex(0x204060));
+        let colours = shown_colours(&mut gfx, &data.path().join("shot.bmp"));
+        assert_eq!(colours.len(), 1, "one fill colour: {colours:?}");
+    }
+
+    /// Draws `session`'s Game on a black screen; returns the distinct colours the renderer shows.
+    fn shown(
+        session: &mut Session,
+        gfx: &mut Gfx<'_>,
+        ctx: &Ctx,
+        at: &Path,
+    ) -> std::collections::HashSet<Vec<u8>> {
+        gfx.clear(crate::ui::theme::Colour::hex(0x000000));
+        session.draw(gfx, ctx);
+        shown_colours(gfx, at)
+    }
+
+    /// Runs `n` ticks of a 60 Hz display, with no input.
+    fn tick_n(session: &mut Session, gfx: &mut Gfx<'_>, n: usize) {
+        for _ in 0..n {
+            assert!(!session.tick(gfx, 1.0 / 60.0, &[], Mouse::default(), |_| false));
+        }
+    }
+
+    /// Several colours, not all black: a picture.
+    fn assert_a_picture(colours: &std::collections::HashSet<Vec<u8>>, when: &str) {
+        assert!(
+            colours.len() >= 4 && colours.iter().any(|c| c[..3].iter().any(|&b| b > 0)),
+            "{when}: the renderer shows no picture: {colours:?}"
+        );
+    }
+
+    /// The owner's PS2 BIOS (FR-NEW-1): wLaunchELF boots on LRPS2 through a PS2 session beside
+    /// the opengl renderer, and its picture shows on the renderer. Save State slot 1 saves and
+    /// loads, and after quitting, slot 1 and the Resume State restore in the next session.
+    /// Frames run with LRPS2's fastmem on (its SIGSEGV handler beside Rust's).
+    #[test]
+    #[ignore = "needs a PS2 BIOS dump in /home/matei/Game37/.testdata/bios/pcsx2/bios"]
+    fn needs_ps2_bios_lrps2_boots_wlaunchelf_on_the_renderer_and_states_round_trip() {
+        use crate::ui::text::Fonts;
+
+        let _serial = serial();
+        let (root, data, ctx, elf) = ps2_world();
+        fs::create_dir_all(root.path().join("bios")).unwrap();
+        std::os::unix::fs::symlink(
+            Path::new(TESTDATA).join("bios/pcsx2"),
+            root.path().join("bios/pcsx2"),
+        )
+        .unwrap();
+        assert!(
+            cores::PS2_BIOS.found(root.path()).is_some(),
+            "a PS2 BIOS dump of 4 to 8 MiB"
+        );
+        let (_sdl, canvas) = offscreen_renderer();
+        let creator = canvas.texture_creator();
+        let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
+        let shot = data.path().join("shot.bmp");
+        let game = ps2_game(elf);
+
+        let mut session = Session::start(
+            &Play::resume(game.clone()),
+            &ctx,
+            gfx.gl_context(),
+            None,
+            Some(60.0),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        tick_n(&mut session, &mut gfx, 1200);
+        assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "booted");
+
+        session.save_slot(1).unwrap_or_else(|e| panic!("save: {e}"));
+        tick_n(&mut session, &mut gfx, 120);
+        session.load_slot(1).unwrap_or_else(|e| panic!("load: {e}"));
+        tick_n(&mut session, &mut gfx, 60);
+        assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "loaded");
+        session.write_resume();
+        let resume = session.states.resume();
+        drop(session);
+        assert!(
+            fs::metadata(&resume).is_ok_and(|m| m.len() > 0),
+            "the Resume State"
+        );
+
+        let from_slot = Play {
+            game,
+            start: Start::Slot(1),
+        };
+        let mut session = Session::start(&from_slot, &ctx, gfx.gl_context(), None, Some(60.0))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(session.start_message, None, "slot 1 restored in a new session");
+        tick_n(&mut session, &mut gfx, 60);
+        assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "from slot 1");
+        let state = fs::read(&resume).unwrap();
+        session
+            .core
+            .unserialize(&state)
+            .unwrap_or_else(|e| panic!("resume: {e}"));
+        tick_n(&mut session, &mut gfx, 60);
+        assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "resumed");
     }
 
     #[test]

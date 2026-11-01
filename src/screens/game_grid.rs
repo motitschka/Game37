@@ -678,9 +678,9 @@ mod tests {
         systems::by_id("snes").unwrap()
     }
 
-    /// PS2: an External System, with PCSX2 as its Standalone Emulator.
-    fn ps2() -> &'static System {
-        systems::by_id("ps2").unwrap()
+    /// Switch: an External System, with Ryubing as its Standalone Emulator.
+    fn switch() -> &'static System {
+        systems::by_id("switch").unwrap()
     }
 
     fn row(id: i64) -> GameRow {
@@ -854,9 +854,9 @@ mod tests {
         let mut ctx = Ctx::empty();
         ctx.games_root = dir.path().to_owned();
         // An installed Standalone Emulator's Game, which Confirm used to launch directly.
-        ctx.library.sync_system("ps2", &[found_ps2(0)], 0).unwrap();
+        ctx.library.sync_system("switch", &[found_switch(0)], 0).unwrap();
         let mut grid =
-            GameGrid::new("PlayStation 2", ps2_source()).sortable(Colour::hex(0), "hint".into(), ps2());
+            GameGrid::new("Switch", switch_source()).sortable(Colour::hex(0), "hint".into(), switch());
         grid.handle(Input::Action(Action::Down), &mut ctx); // initial load
         assert_eq!(grid.hints()[0], Hint::new(&[Action::Confirm], "Details"));
 
@@ -982,30 +982,29 @@ mod tests {
         );
     }
 
-    fn ps2_source() -> Source {
-        Box::new(|library| library.system_games("ps2", SortOrder::AZ))
+    fn switch_source() -> Source {
+        Box::new(|library| library.system_games("switch", SortOrder::AZ))
     }
 
-    fn found_ps2(n: usize) -> FoundGame {
+    fn found_switch(n: usize) -> FoundGame {
         FoundGame {
-            system: "ps2",
-            rel_path: format!("ps2/b{n:03}.iso"),
+            system: "switch",
+            rel_path: format!("switch/b{n:03}.nsp"),
             title: format!("B{n:03}"),
         }
     }
 
     /// A Console Page for an External System whose Standalone Emulator isn't installed.
-    fn missing_pcsx2_page() -> (Ctx, GameGrid) {
+    fn missing_ryubing_page() -> (Ctx, GameGrid) {
         let mut ctx = Ctx::empty();
         ctx.emulators = Emulators::from_installed(Vec::<String>::new());
-        let grid =
-            GameGrid::new("PlayStation 2", ps2_source()).sortable(Colour::hex(0), "hint".into(), ps2());
+        let grid = GameGrid::new("Switch", switch_source()).sortable(Colour::hex(0), "hint".into(), switch());
         (ctx, grid)
     }
 
     #[test]
     fn the_notice_shows_for_an_external_system_missing_its_emulator_and_starts_on_copy_command() {
-        let (mut ctx, mut grid) = missing_pcsx2_page();
+        let (mut ctx, mut grid) = missing_ryubing_page();
         grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
         assert!(grid.notice_shown);
         assert_eq!(grid.notice_focus, Some(NoticeFocus::Copy));
@@ -1031,31 +1030,31 @@ mod tests {
 
     #[test]
     fn check_again_clears_the_notice_once_the_emulator_is_found() {
-        let (mut ctx, mut grid) = missing_pcsx2_page();
-        let found = [found_ps2(0), found_ps2(1)];
-        ctx.library.sync_system("ps2", &found, 0).unwrap();
+        let (mut ctx, mut grid) = missing_ryubing_page();
+        let found = [found_switch(0), found_switch(1)];
+        ctx.library.sync_system("switch", &found, 0).unwrap();
         grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
         assert!(grid.notice_shown);
-        ctx.detect_emulators = Box::new(|| Emulators::from_installed(["net.pcsx2.PCSX2"]));
+        ctx.detect_emulators = Box::new(|| Emulators::from_installed(["io.github.ryubing.Ryujinx"]));
 
         grid.handle(Input::Action(Action::Right), &mut ctx); // focus Check again
         grid.handle(Input::Action(Action::Confirm), &mut ctx);
 
-        assert!(!grid.notice_shown, "PCSX2 is now installed");
+        assert!(!grid.notice_shown, "Ryubing is now installed");
         assert_eq!(grid.notice_focus, None, "focus moves to the grid");
         assert_eq!(grid.focus, 0);
     }
 
     #[test]
     fn check_again_keeps_the_notice_when_still_missing() {
-        let (mut ctx, mut grid) = missing_pcsx2_page();
+        let (mut ctx, mut grid) = missing_ryubing_page();
         grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
         ctx.detect_emulators = Box::new(|| Emulators::from_installed(Vec::<String>::new()));
 
         grid.handle(Input::Action(Action::Right), &mut ctx); // focus Check again
         grid.handle(Input::Action(Action::Confirm), &mut ctx);
 
-        assert!(grid.notice_shown, "PCSX2 is still missing");
+        assert!(grid.notice_shown, "Ryubing is still missing");
         assert_eq!(
             grid.notice_focus,
             Some(NoticeFocus::Check),
@@ -1065,12 +1064,12 @@ mod tests {
 
     #[test]
     fn a_pointer_over_the_cleared_notices_buttons_focuses_nothing() {
-        let (mut ctx, mut grid) = missing_pcsx2_page();
-        ctx.library.sync_system("ps2", &[found_ps2(0)], 0).unwrap();
+        let (mut ctx, mut grid) = missing_ryubing_page();
+        ctx.library.sync_system("switch", &[found_switch(0)], 0).unwrap();
         grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
         let check = Rect::new(100.0, 100.0, 50.0, 50.0);
         grid.notice_hits = Some((Rect::new(0.0, 100.0, 50.0, 50.0), check)); // as last drawn
-        ctx.detect_emulators = Box::new(|| Emulators::from_installed(["net.pcsx2.PCSX2"]));
+        ctx.detect_emulators = Box::new(|| Emulators::from_installed(["io.github.ryubing.Ryujinx"]));
 
         grid.handle(Input::Action(Action::Right), &mut ctx); // focus Check again
         grid.handle(Input::Action(Action::Confirm), &mut ctx); // clears the notice
@@ -1089,8 +1088,8 @@ mod tests {
 
     #[test]
     fn check_again_in_screenshot_mode_keeps_the_simulated_state() {
-        let (mut ctx, mut grid) = missing_pcsx2_page();
-        // As `--missing-emulators ps2` does.
+        let (mut ctx, mut grid) = missing_ryubing_page();
+        // As `--missing-emulators switch` does.
         ctx.simulate_emulators(Emulators::from_installed(Vec::<String>::new()));
         grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
 
@@ -1103,14 +1102,14 @@ mod tests {
 
     #[test]
     fn copy_command_leaves_a_clipboard_request() {
-        let (mut ctx, mut grid) = missing_pcsx2_page();
+        let (mut ctx, mut grid) = missing_ryubing_page();
         grid.handle(Input::Action(Action::Back), &mut ctx); // initial load, focus on Copy
 
         grid.handle(Input::Action(Action::Confirm), &mut ctx);
 
         assert_eq!(
             ctx.clipboard_request.as_deref(),
-            Some("flatpak install flathub net.pcsx2.PCSX2")
+            Some("flatpak install flathub io.github.ryubing.Ryujinx")
         );
     }
 }

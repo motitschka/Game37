@@ -31,6 +31,8 @@ const BAR_W: f32 = 440.0;
 /// The bar's left edge in two columns, where it sits under the state.
 const BAR_X_TWO: f32 = 350.0;
 const NOTE_H: f32 = 64.0;
+/// From one of the note's lines to the next.
+const NOTE_LINE: f32 = 34.0;
 
 /// One ticked Embedded System's row.
 struct Row {
@@ -199,21 +201,31 @@ impl Cores {
         cores::for_system(self.rows[i].system).expect("a row's System is Embedded")
     }
 
-    /// The BIOS note under the rows, when a ticked System's Core needs one.
+    /// The BIOS note under the rows: a line for each ticked System whose Core needs a BIOS.
     fn draw_note(&self, gfx: &mut Gfx<'_>, model: &Model) {
-        let Some(text) = bios_note(model) else {
+        let lines = bios_note(model);
+        if lines.is_empty() {
             return;
-        };
+        }
         let y = CONTENT_Y + self.per_col() as f32 * PITCH + 20.0;
-        let r = Rect::new(M, y, SETUP_W, NOTE_H);
+        let h = NOTE_H + (lines.len() - 1) as f32 * NOTE_LINE;
+        let r = Rect::new(M, y, SETUP_W, h);
         gfx.fill_round_rect(r, 14.0, WARN.alpha(0.1));
         gfx.stroke_round_rect(r, 14.0, 2.0, WARN.alpha(0.55));
         gfx.fill_circle(M + 34.0, y + 32.0, 15.0, WARN);
         let bang = TextStyle::new(19, Weight::ExtraBold, BG);
         gfx.text(M + 34.0, y + 39.0, "!", bang, Align::Centre);
         let style = TextStyle::new(19, Weight::Medium, WARN);
-        let text = ellipsize(&text, SETUP_W - 64.0 - 28.0, |s| gfx.measure(s, style));
-        gfx.text(M + 64.0, y + 39.0, &text, style, Align::Left);
+        for (k, line) in lines.iter().enumerate() {
+            let text = ellipsize(line, SETUP_W - 64.0 - 28.0, |s| gfx.measure(s, style));
+            gfx.text(
+                M + 64.0,
+                y + 39.0 + k as f32 * NOTE_LINE,
+                &text,
+                style,
+                Align::Left,
+            );
+        }
     }
 }
 
@@ -239,12 +251,20 @@ fn state(job: Job, installed: bool) -> String {
     }
 }
 
-/// What the BIOS note says, if a ticked System's Core needs a BIOS.
-fn bios_note(model: &Model) -> Option<String> {
-    let (system, rule) = model
-        .ticked()
-        .find_map(|s| Some((s, cores::for_system(s)?.bios?)))?;
-    Some(note_text(system, rule, &model.games_root))
+/// What the BIOS note says: a line for each ticked System whose Core needs a BIOS, in System Order,
+/// once for each BIOS. Empty when none does.
+fn bios_note(model: &Model) -> Vec<String> {
+    let mut rules: Vec<&BiosRule> = Vec::new();
+    let mut lines = Vec::new();
+    for system in model.ticked() {
+        if let Some(rule) = cores::for_system(system).and_then(|core| core.bios)
+            && !rules.contains(&rule)
+        {
+            rules.push(rule);
+            lines.push(note_text(system, rule, &model.games_root));
+        }
+    }
+    lines
 }
 
 /// The BIOS note for `system`, whose Core needs `rule`'s BIOS: what to put where, in its words.
@@ -623,14 +643,29 @@ mod tests {
     }
 
     #[test]
-    fn the_bios_note_shows_only_with_playstation_ticked() {
+    fn the_bios_note_has_a_line_for_each_ticked_system_that_needs_a_bios() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(bios_note(&model(dir.path(), &["nes", "psp"])), None);
+        assert!(bios_note(&model(dir.path(), &["nes", "psp"])).is_empty());
         let bios = tilde(&dir.path().join("Games/bios"), dirs::home_dir().as_deref());
-        let note = format!(
+        let ps1 = format!(
             "PlayStation needs a BIOS file: put scph5500.bin, scph5501.bin or scph5502.bin in {bios}/."
         );
-        assert_eq!(bios_note(&model(dir.path(), &["nes", "ps1"])), Some(note));
+        let ps2 = format!(
+            "PlayStation 2 needs a BIOS file: put your own BIOS dump, any file name, in {bios}/pcsx2/bios/."
+        );
+        assert_eq!(
+            bios_note(&model(dir.path(), &["nes", "ps1"])),
+            std::slice::from_ref(&ps1)
+        );
+        assert_eq!(
+            bios_note(&model(dir.path(), &["ps2", "psp"])),
+            std::slice::from_ref(&ps2)
+        );
+        assert_eq!(
+            bios_note(&model(dir.path(), &["nes", "ps1", "ps2", "psp"])),
+            [ps1, ps2],
+            "PS1 and PS2 together, in System Order"
+        );
     }
 
     #[test]

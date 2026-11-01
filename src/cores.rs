@@ -104,8 +104,10 @@ pub static PS1_BIOS: BiosRule = BiosRule {
     },
 };
 
-/// PS2's BIOS (LRPS2, FR-NEW-1): the player's own dump, any file name, of 4 to 8 MiB, in
-/// `<Games Root>/bios/pcsx2/bios/`, where LRPS2 looks for it under its system directory.
+/// PS2's BIOS (LRPS2, FR-NEW-1): the player's own dump, any file name, in
+/// `<Games Root>/bios/pcsx2/bios/`, where LRPS2 looks for it under its system directory. The size
+/// bounds are LRPS2's own (`MIN_BIOS_SIZE`, `MAX_BIOS_SIZE` in its `BiosTools.cpp`: 4 and 8 MiB,
+/// both allowed); it then checks the file's contents itself, and only logs when none passes.
 pub static PS2_BIOS: BiosRule = BiosRule {
     folder: "pcsx2/bios",
     files: BiosFiles::Sized {
@@ -307,6 +309,22 @@ pub static PPSSPP: CoreInfo = CoreInfo {
     assets: Some(&PPSSPP_ASSETS),
     saves: InGameSaves::Shared,
 };
+/// LRPS2 (FR-NEW-1), with the values its own option list offers: OpenGL, as Game37 has no Vulkan
+/// host; twice the PS2's resolution; a memory card per Game, `<save dir>/<file stem>.ps2`; and the
+/// BIOS intro skipped.
+pub static LRPS2: CoreInfo = CoreInfo {
+    name: "LRPS2",
+    file: "pcsx2_libretro.so",
+    options: &[
+        ("pcsx2_renderer", "OpenGL"),
+        ("pcsx2_upscale_multiplier", "2x"),
+        ("pcsx2_shared_memory_cards", "disabled"),
+        ("pcsx2_fastboot", "enabled"),
+    ],
+    bios: Some(&PS2_BIOS),
+    assets: None,
+    saves: InGameSaves::PerGame { extension: "ps2" },
+};
 
 /// Which OpenGL host a Core's context must be made on (see [`CoreInfo::gl`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -338,10 +356,12 @@ impl CoreInfo {
         }
     }
 
-    /// Whether the left stick also presses the d-pad: for Systems without an analog stick. N64
-    /// and PSP have one, so their Cores read it as analog only.
+    /// Whether the left stick also presses the d-pad: for Systems without an analog stick. N64,
+    /// PSP and PS2 have one, so their Cores read it as analog only.
     pub fn stick_is_dpad(&self) -> bool {
-        !(std::ptr::eq(self, &MUPEN64PLUS_NEXT) || std::ptr::eq(self, &PPSSPP))
+        ![&MUPEN64PLUS_NEXT, &PPSSPP, &LRPS2]
+            .iter()
+            .any(|core| std::ptr::eq(self, *core))
     }
 }
 
@@ -356,6 +376,7 @@ pub fn for_system(system: &System) -> Option<&'static CoreInfo> {
         "n64" => Some(&MUPEN64PLUS_NEXT),
         "ps1" => Some(&BEETLE_PSX_HW),
         "nds" => Some(&MELONDS_DS),
+        "ps2" => Some(&LRPS2),
         "psp" => Some(&PPSSPP),
         _ => None,
     }
@@ -1161,6 +1182,7 @@ mod tests {
         assert_eq!(for_system(by_id("n64").unwrap()), Some(&MUPEN64PLUS_NEXT));
         assert_eq!(for_system(by_id("ps1").unwrap()), Some(&BEETLE_PSX_HW));
         assert_eq!(for_system(by_id("nds").unwrap()), Some(&MELONDS_DS));
+        assert_eq!(for_system(by_id("ps2").unwrap()), Some(&LRPS2));
         assert_eq!(for_system(by_id("psp").unwrap()), Some(&PPSSPP));
         for system in SYSTEMS
             .iter()
@@ -1171,9 +1193,10 @@ mod tests {
     }
 
     #[test]
-    fn only_n64_and_psp_read_the_left_stick_as_analog_only() {
+    fn only_n64_psp_and_ps2_read_the_left_stick_as_analog_only() {
         assert!(!MUPEN64PLUS_NEXT.stick_is_dpad());
         assert!(!PPSSPP.stick_is_dpad());
+        assert!(!LRPS2.stick_is_dpad());
         for core in [&MESEN, &BSNES, &SAMEBOY, &MGBA, &BEETLE_PSX_HW, &MELONDS_DS] {
             assert!(core.stick_is_dpad(), "{}", core.name);
         }
@@ -1264,6 +1287,7 @@ mod tests {
             &BEETLE_PSX_HW,
             &MELONDS_DS,
             &PPSSPP,
+            &LRPS2,
         ] {
             assert_eq!(core.options_for(&pal[0]), core.options, "{}", core.name);
         }
@@ -1280,6 +1304,7 @@ mod tests {
             &MUPEN64PLUS_NEXT,
             &BEETLE_PSX_HW,
             &MELONDS_DS,
+            &LRPS2,
         ] {
             assert_eq!(core.gl(), GlKind::Sdl, "{}", core.name);
         }
@@ -1303,6 +1328,28 @@ mod tests {
                 "scph7003.bin",
                 "scph5552.bin",
             ])
+        );
+    }
+
+    #[test]
+    fn lrps2_renders_with_opengl_keeps_a_memory_card_per_game_and_needs_the_ps2_bios() {
+        assert_eq!(
+            LRPS2.options,
+            &[
+                ("pcsx2_renderer", "OpenGL"),
+                ("pcsx2_upscale_multiplier", "2x"),
+                ("pcsx2_shared_memory_cards", "disabled"),
+                ("pcsx2_fastboot", "enabled"),
+            ]
+        );
+        assert_eq!(LRPS2.file, "pcsx2_libretro.so");
+        assert_eq!(LRPS2.bios, Some(&PS2_BIOS));
+        assert_eq!(LRPS2.saves, InGameSaves::PerGame { extension: "ps2" });
+        let (data_dir, root) = (Path::new("/data"), Path::new("/Games"));
+        assert_eq!(
+            PS2_BIOS.dir(root),
+            system_dir(&LRPS2, data_dir, root).join("pcsx2/bios"),
+            "where LRPS2 looks under its system directory"
         );
     }
 
@@ -1334,6 +1381,7 @@ mod tests {
             &MUPEN64PLUS_NEXT,
             &BEETLE_PSX_HW,
             &MELONDS_DS,
+            &LRPS2,
         ] {
             assert!(core.assets.is_none(), "{}", core.name);
         }
