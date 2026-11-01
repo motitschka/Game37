@@ -58,7 +58,9 @@ pub enum CoreError {
     /// The path contains a NUL byte and can't be handed to a Core.
     BadPath(PathBuf),
     ReadGame(PathBuf, std::io::Error),
-    LoadGame(PathBuf),
+    /// `retro_load_game` failed, with the last message the Core sent before, which usually says
+    /// why (FR-EMB-14).
+    LoadGame(PathBuf, Option<String>),
     Serialize,
     Unserialize,
     /// The Core asked for OpenGL rendering, and it couldn't be set up.
@@ -78,7 +80,10 @@ impl fmt::Display for CoreError {
             }
             CoreError::BadPath(path) => write!(f, "Can't pass {} to a Core", path.display()),
             CoreError::ReadGame(path, e) => write!(f, "Can't read {}: {e}", path.display()),
-            CoreError::LoadGame(path) => write!(f, "The Core couldn't load {}", path.display()),
+            CoreError::LoadGame(path, None) => write!(f, "The Core couldn't load {}", path.display()),
+            CoreError::LoadGame(path, Some(said)) => {
+                write!(f, "The Core couldn't load {}: {said}", path.display())
+            }
             CoreError::Serialize => write!(f, "The Core couldn't save its state"),
             CoreError::Unserialize => write!(f, "The Core couldn't restore the state"),
             CoreError::Gl(e) => write!(f, "Can't start OpenGL for the Core: {e}"),
@@ -87,6 +92,16 @@ impl fmt::Display for CoreError {
 }
 
 impl std::error::Error for CoreError {}
+
+impl CoreError {
+    /// What the Core itself said about the failure, when it said anything.
+    pub fn core_message(&self) -> Option<&str> {
+        match self {
+            CoreError::LoadGame(_, said) => said.as_deref(),
+            _ => None,
+        }
+    }
+}
 
 /// How the Core lays out the pixels of a video frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -324,6 +339,7 @@ impl Core {
         gl: Option<Box<dyn GlHost>>,
     ) -> Result<Core, CoreError> {
         let claim = Claim::take().ok_or(CoreError::AlreadyLoaded)?;
+        callbacks::clear_message();
         let game_cpath = c_path(game_path)?;
         let mut state = State::new(c_path(&dirs.system)?, c_path(&dirs.save)?);
         state.overrides = callbacks::option_overrides(options);
@@ -402,7 +418,10 @@ impl Core {
         // SAFETY: `info` points at the path and data owned by `core`, which keeps both until after
         // `retro_unload_game`; the heap buffers don't move when `core` does.
         if !unsafe { (core.api.load_game)(&info) } {
-            return Err(CoreError::LoadGame(game_path.to_path_buf()));
+            return Err(CoreError::LoadGame(
+                game_path.to_path_buf(),
+                callbacks::take_message(),
+            ));
         }
         core.game_loaded = true;
 

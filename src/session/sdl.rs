@@ -209,7 +209,13 @@ impl Session {
         let core_path = cores::installed_path(&ctx.data_dir, core_info);
         let game_path = root.join(&game.rel_path);
         let options = core_info.options_for(&game_path);
-        let mut core = Core::load(&core_path, &game_path, dirs, &options, gl).map_err(|e| fail(&e))?;
+        // When the Core says why (a missing BIOS, an encrypted dump), that is the reason shown
+        // (FR-EMB-14).
+        let mut core =
+            Core::load(&core_path, &game_path, dirs, &options, gl).map_err(|e| match e.core_message() {
+                Some(said) => format!("{} couldn't start {}.\n{said}", core_info.name, game.title),
+                None => fail(&e),
+            })?;
 
         let srm = saves::srm_path(root, system.id, Path::new(&game.rel_path));
         let save = core.save_ram().map(|ram| {
@@ -1279,6 +1285,45 @@ mod tests {
         let ram = core.save_ram().expect("mGBA's Test Suite Game has save RAM");
         assert!(saves::load(&srm, ram).unwrap());
         assert_eq!(ram, known.as_slice());
+    }
+
+    /// A Core that can't load a Game and says why: the player reads its words, not only that the
+    /// Game couldn't start (FR-EMB-14).
+    #[test]
+    fn a_core_that_says_why_it_cannot_start_a_game_is_quoted_to_the_player() {
+        let _serial = serial();
+        let dir = TempDir::new().unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = dir.path().join("Games");
+        ctx.data_dir = dir.path().join("data");
+        // The fake Core stands in for the NES's.
+        let core_path = cores::installed_path(&ctx.data_dir, &cores::MESEN);
+        fs::create_dir_all(core_path.parent().unwrap()).unwrap();
+        fs::rename(crate::libretro::tests::fake_core(dir.path()), &core_path).unwrap();
+        let game = GameRow {
+            id: 1,
+            system: "nes".into(),
+            rel_path: "nes/Game.nes".into(),
+            title: "Game".into(),
+            date_added: 0,
+            last_played: None,
+            playtime_secs: 0,
+            favorite: false,
+        };
+        let play = Play {
+            game,
+            start: Start::PowerOn,
+        };
+        match Session::start(&play, &ctx, None, None, None) {
+            Err(message) => assert_eq!(
+                message,
+                format!(
+                    "Mesen couldn't start Game.\n{}",
+                    crate::libretro::tests::FAKE_MESSAGE
+                )
+            ),
+            Ok(_) => panic!("the fake Core loads no Game"),
+        }
     }
 
     #[test]

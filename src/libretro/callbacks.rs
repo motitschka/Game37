@@ -10,11 +10,11 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_int, c_uint, c_void};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{PoisonError, RwLock};
+use std::sync::{Mutex, PoisonError, RwLock};
 
 use super::ffi::{
-    self, HwGetProcAddressFn, ProcAddress, RetroGameGeometry, RetroHwRenderCallback, RetroSystemAvInfo,
-    RetroVariable,
+    self, HwGetProcAddressFn, ProcAddress, RetroGameGeometry, RetroHwRenderCallback, RetroMessage,
+    RetroMessageExt, RetroSystemAvInfo, RetroVariable,
 };
 use super::hw::{GlHost, GlRequest, HwRequest};
 use super::{AvInfo, Frame, InputState, PixelFormat, Stick};
@@ -106,7 +106,133 @@ fn guarded<R>(default: R, f: impl FnOnce(&mut State) -> R) -> R {
 /// `data` is what libretro.h specifies for `cmd`: null, or valid for that command's type.
 pub(super) unsafe extern "C" fn environment(cmd: c_uint, data: *mut c_void) -> bool {
     // SAFETY: the Core passes `data` as libretro.h specifies for `cmd` (this function's contract).
-    guarded(false, |s| unsafe { dispatch(s, cmd, data) })
+    match panic::catch_unwind(AssertUnwindSafe(|| unsafe { message_command(cmd, data) })) {
+        Ok(Some(answer)) => answer,
+        // SAFETY: as above.
+        Ok(None) => guarded(false, |s| unsafe { dispatch(s, cmd, data) }),
+        Err(_) => false,
+    }
+}
+
+/// A message a Core sent (`SET_MESSAGE`, `SET_MESSAGE_EXT`): why it can't start a Game, or news
+/// for the player while it runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct CoreMessage {
+    pub text: String,
+    pub level: MessageLevel,
+    pub lasts: Lasts,
+    /// Meant only for the log, not for the player.
+    pub log_only: bool,
+}
+
+/// `enum retro_log_level`; `Info` for a `SET_MESSAGE`, which has none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MessageLevel {
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+/// How long the Core wants a message shown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Lasts {
+    Frames(u32),
+    Millis(u32),
+}
+
+/// The text of the last message the Core sent for the player. Not in the thread-local [`State`]: a
+/// Core may send messages from a thread of its own, or before its state is installed.
+static MESSAGE: Mutex<Option<String>> = Mutex::new(None);
+
+/// Forgets the last message, before a Core starts.
+pub(super) fn clear_message() {
+    MESSAGE.lock().unwrap_or_else(PoisonError::into_inner).take();
+}
+
+/// The text of the last message the Core sent for the player, if any; forgets it.
+pub(super) fn take_message() -> Option<String> {
+    MESSAGE.lock().unwrap_or_else(PoisonError::into_inner).take()
+}
+
+/// Answers the message commands, which need no [`State`]; `None` for any other command. Messages
+/// are logged and the last one for the player kept (see [`take_message`]); none is drawn.
+///
+/// # Safety
+/// `data` is null or valid for the type libretro.h gives `cmd`.
+unsafe fn message_command(cmd: c_uint, data: *mut c_void) -> Option<bool> {
+    match cmd {
+        // SAFETY: for this command `data` is an `unsigned *`.
+        ffi::ENV_GET_MESSAGE_INTERFACE_VERSION => Some(unsafe { write_out::<c_uint>(data, 1) }),
+        ffi::ENV_SET_MESSAGE | ffi::ENV_SET_MESSAGE_EXT => {
+            // SAFETY: this function's contract.
+            let Some(message) = (unsafe { parse_message(cmd, data) }) else {
+                return Some(false);
+            };
+            eprintln!("game37: Core message ({}): {}", message.describe(), message.text);
+            if !message.log_only && !message.text.is_empty() {
+                *MESSAGE.lock().unwrap_or_else(PoisonError::into_inner) = Some(message.text);
+            }
+            Some(true)
+        }
+        _ => None,
+    }
+}
+
+/// The message in `SET_MESSAGE`'s or `SET_MESSAGE_EXT`'s `data`; `None` when there is none, or
+/// for any other command.
+///
+/// # Safety
+/// `data` is null or valid for the type libretro.h gives `cmd`, its `msg` null or NUL-terminated.
+pub(super) unsafe fn parse_message(cmd: c_uint, data: *const c_void) -> Option<CoreMessage> {
+    let text = |msg: *const c_char| {
+        // SAFETY: non-null and NUL-terminated, by this function's contract.
+        (!msg.is_null()).then(|| unsafe { CStr::from_ptr(msg) }.to_string_lossy().trim().to_owned())
+    };
+    match cmd {
+        ffi::ENV_SET_MESSAGE => {
+            // SAFETY: for this command `data` is a `const struct retro_message *`.
+            let m = unsafe { data.cast::<RetroMessage>().as_ref() }?;
+            Some(CoreMessage {
+                text: text(m.msg)?,
+                level: MessageLevel::Info,
+                lasts: Lasts::Frames(m.frames),
+                log_only: false,
+            })
+        }
+        ffi::ENV_SET_MESSAGE_EXT => {
+            // SAFETY: for this command `data` is a `const struct retro_message_ext *`.
+            let m = unsafe { data.cast::<RetroMessageExt>().as_ref() }?;
+            Some(CoreMessage {
+                text: text(m.msg)?,
+                level: match m.level {
+                    ffi::RETRO_LOG_DEBUG => MessageLevel::Debug,
+                    ffi::RETRO_LOG_WARN => MessageLevel::Warn,
+                    ffi::RETRO_LOG_ERROR => MessageLevel::Error,
+                    _ => MessageLevel::Info,
+                },
+                lasts: Lasts::Millis(m.duration),
+                log_only: m.target == ffi::RETRO_MESSAGE_TARGET_LOG,
+            })
+        }
+        _ => None,
+    }
+}
+
+impl CoreMessage {
+    /// Its level and duration, for the log: `error, 3000 ms`.
+    fn describe(&self) -> String {
+        let level = match self.level {
+            MessageLevel::Debug => "debug",
+            MessageLevel::Info => "info",
+            MessageLevel::Warn => "warning",
+            MessageLevel::Error => "error",
+        };
+        match self.lasts {
+            Lasts::Frames(n) => format!("{level}, {n} frames"),
+            Lasts::Millis(n) => format!("{level}, {n} ms"),
+        }
+    }
 }
 
 /// `retro_video_refresh_t`. A null `data` repeats the last frame (`GET_CAN_DUPE`).
@@ -593,6 +719,122 @@ mod tests {
             assert!(!env(&mut s, cmd, &mut dummy), "cmd {cmd}");
         }
         assert_eq!(dummy, [0; 4]);
+    }
+
+    /// libretro.h's `RETRO_LOG_INFO`, which the host itself never needs.
+    const RETRO_LOG_INFO: c_int = 1;
+
+    fn ext(msg: &CStr, duration: c_uint, level: c_int, target: c_int) -> ffi::RetroMessageExt {
+        ffi::RetroMessageExt {
+            msg: msg.as_ptr(),
+            duration,
+            priority: 1,
+            level,
+            target,
+            kind: 0,
+            progress: -1,
+        }
+    }
+
+    #[test]
+    fn set_message_gives_its_text_and_frames() {
+        let m = RetroMessage {
+            msg: c" No BIOS found. ".as_ptr(),
+            frames: 180,
+        };
+        // SAFETY: `m` is a valid `retro_message` with a NUL-terminated text.
+        let parsed = unsafe { parse_message(ffi::ENV_SET_MESSAGE, (&raw const m).cast()) };
+        let want = CoreMessage {
+            text: "No BIOS found.".into(),
+            level: MessageLevel::Info,
+            lasts: Lasts::Frames(180),
+            log_only: false,
+        };
+        assert_eq!(parsed, Some(want));
+    }
+
+    #[test]
+    fn set_message_ext_gives_its_text_duration_level_and_target() {
+        for (level, want) in [
+            (ffi::RETRO_LOG_DEBUG, MessageLevel::Debug),
+            (RETRO_LOG_INFO, MessageLevel::Info),
+            (ffi::RETRO_LOG_WARN, MessageLevel::Warn),
+            (ffi::RETRO_LOG_ERROR, MessageLevel::Error),
+        ] {
+            let m = ext(c"Encrypted", 3000, level, 0);
+            // SAFETY: `m` is a valid `retro_message_ext` with a NUL-terminated text.
+            let parsed = unsafe { parse_message(ffi::ENV_SET_MESSAGE_EXT, (&raw const m).cast()) };
+            let want = CoreMessage {
+                text: "Encrypted".into(),
+                level: want,
+                lasts: Lasts::Millis(3000),
+                log_only: false,
+            };
+            assert_eq!(parsed, Some(want));
+        }
+        for (target, log_only) in [(0, false), (1, false), (ffi::RETRO_MESSAGE_TARGET_LOG, true)] {
+            let m = ext(c"x", 1, RETRO_LOG_INFO, target);
+            // SAFETY: as above.
+            let parsed = unsafe { parse_message(ffi::ENV_SET_MESSAGE_EXT, (&raw const m).cast()) };
+            assert_eq!(parsed.map(|p| p.log_only), Some(log_only), "target {target}");
+        }
+    }
+
+    #[test]
+    fn a_message_without_data_or_text_is_none() {
+        let m = RetroMessage {
+            msg: ptr::null(),
+            frames: 1,
+        };
+        // SAFETY: null data, and a `retro_message` with a null text.
+        unsafe {
+            assert_eq!(parse_message(ffi::ENV_SET_MESSAGE, ptr::null()), None);
+            assert_eq!(parse_message(ffi::ENV_SET_MESSAGE_EXT, ptr::null()), None);
+            assert_eq!(parse_message(ffi::ENV_SET_MESSAGE, (&raw const m).cast()), None);
+        }
+    }
+
+    #[test]
+    fn the_message_interface_is_version_1_on_any_thread() {
+        let mut version: c_uint = 0;
+        // No state is installed on this thread.
+        // SAFETY: `version` is a valid `unsigned`.
+        let answer =
+            unsafe { environment(ffi::ENV_GET_MESSAGE_INTERFACE_VERSION, (&raw mut version).cast()) };
+        assert!(answer);
+        assert_eq!(version, 1);
+    }
+
+    #[test]
+    fn the_last_message_for_the_player_is_kept_from_any_thread() {
+        // The kept message is process-wide, like a loaded Core.
+        let _serial = crate::libretro::tests::serial();
+        clear_message();
+        let send = |cmd: c_uint, data: *const c_void| {
+            let data = data as usize;
+            // SAFETY: `data` is a valid message for `cmd`, alive until the thread is joined.
+            std::thread::spawn(move || unsafe { environment(cmd, data as *mut c_void) })
+                .join()
+                .unwrap()
+        };
+        let first = RetroMessage {
+            msg: c"Missing BIOS".as_ptr(),
+            frames: 60,
+        };
+        assert!(send(ffi::ENV_SET_MESSAGE, (&raw const first).cast()));
+        let log_only = ext(
+            c"Only for the log",
+            0,
+            RETRO_LOG_INFO,
+            ffi::RETRO_MESSAGE_TARGET_LOG,
+        );
+        assert!(send(ffi::ENV_SET_MESSAGE_EXT, (&raw const log_only).cast()));
+        assert_eq!(take_message().as_deref(), Some("Missing BIOS"));
+        assert_eq!(take_message(), None, "taken");
+
+        let error = ext(c"Encrypted dump", 5000, ffi::RETRO_LOG_ERROR, 0);
+        assert!(send(ffi::ENV_SET_MESSAGE_EXT, (&raw const error).cast()));
+        assert_eq!(take_message().as_deref(), Some("Encrypted dump"));
     }
 
     #[test]
