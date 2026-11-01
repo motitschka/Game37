@@ -1,10 +1,11 @@
 //! What screens share: the library database and where the Games Root is.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::artwork::Artwork;
 use crate::config::Config;
-use crate::cores::{CoreAssets, CoreInfo, Download, ScreenLayout};
+use crate::cores::{self, CoreAssets, CoreInfo, Download, ScreenLayout};
 use crate::emulators::Emulators;
 use crate::library::db::{DbError, GameRow, Library};
 use crate::library::scan;
@@ -81,6 +82,10 @@ pub struct Ctx {
     /// Whether the window opens fullscreen; `app.rs` loads it from the library at start, and a
     /// change takes effect at the next start.
     pub window_mode: WindowMode,
+    /// How each two-screen System shows its screens, by System id; `app.rs` loads them from the
+    /// library at start ([`Ctx::load_screen_layouts`]), and a change is saved as it is made. A
+    /// System not in it has Large and small.
+    screen_layouts: HashMap<&'static str, ScreenLayout>,
     /// Which Standalone Emulators are installed, as last checked.
     pub emulators: Emulators,
     /// How Check again re-detects installed emulators (FR-CAR-9): `Emulators::detect` in
@@ -138,6 +143,7 @@ impl Ctx {
             input_kind: InputKind::Controller,
             button_style: ButtonStyle::default(),
             window_mode: WindowMode::default(),
+            screen_layouts: HashMap::new(),
             emulators: Emulators::all_installed(),
             detect_emulators: Box::new(Emulators::detect),
             clipboard_request: None,
@@ -186,18 +192,29 @@ impl Ctx {
         }
     }
 
-    /// How `system` shows its two screens (FR-DS-1, FR-NEW-2), as saved; Large and small if it
-    /// can't be read.
+    /// Reads how each two-screen System shows its screens from the library, once, as Settings
+    /// shows them every frame; Large and small for one that can't be read.
+    pub fn load_screen_layouts(&mut self) {
+        self.screen_layouts.clear();
+        for system in SYSTEMS.iter().filter(|s| cores::screen_layouts(s).is_some()) {
+            match self.library.screen_layout(system.id) {
+                Ok(layout) => {
+                    self.screen_layouts.insert(system.id, layout);
+                }
+                Err(e) => eprintln!("game37: can't read the {} layout: {e}", system.short),
+            }
+        }
+    }
+
+    /// How `system` shows its two screens (FR-DS-1, FR-NEW-2), as loaded or last set.
     pub fn screen_layout(&self, system: &System) -> ScreenLayout {
-        self.library.screen_layout(system.id).unwrap_or_else(|e| {
-            eprintln!("game37: can't read the {} layout: {e}", system.short);
-            ScreenLayout::default()
-        })
+        self.screen_layouts.get(system.id).copied().unwrap_or_default()
     }
 
     /// Switches how `system` shows its two screens and saves it; it applies from the next Game
     /// of that System started.
     pub fn set_screen_layout(&mut self, system: &System, layout: ScreenLayout) {
+        self.screen_layouts.insert(system.id, layout);
         if let Err(e) = self.library.set_screen_layout(system.id, layout) {
             eprintln!("game37: can't save the {} layout: {e}", system.short);
         }
@@ -246,5 +263,41 @@ mod tests {
         assert_eq!(ctx.library.window_mode().unwrap(), WindowMode::AlwaysWindowed);
         ctx.remember_fullscreen(true);
         assert!(ctx.library.last_fullscreen().unwrap());
+    }
+
+    /// Settings shows the layouts every frame: they are read from the library once, not per
+    /// frame, and a change is kept and saved.
+    #[test]
+    fn screen_layouts_are_loaded_once_and_written_through() {
+        let nds = crate::systems::by_id("nds").unwrap();
+        let three_ds = crate::systems::by_id("3ds").unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.library
+            .set_screen_layout("3ds", ScreenLayout::OneScreen)
+            .unwrap();
+        assert_eq!(
+            ctx.screen_layout(three_ds),
+            ScreenLayout::LargeAndSmall,
+            "not loaded yet"
+        );
+        ctx.load_screen_layouts();
+        assert_eq!(ctx.screen_layout(three_ds), ScreenLayout::OneScreen, "loaded");
+
+        ctx.library
+            .set_screen_layout("3ds", ScreenLayout::SideBySide)
+            .unwrap();
+        assert_eq!(
+            ctx.screen_layout(three_ds),
+            ScreenLayout::OneScreen,
+            "not read again"
+        );
+
+        ctx.set_screen_layout(nds, ScreenLayout::SideBySide);
+        assert_eq!(ctx.screen_layout(nds), ScreenLayout::SideBySide);
+        assert_eq!(
+            ctx.library.screen_layout("nds").unwrap(),
+            ScreenLayout::SideBySide,
+            "saved"
+        );
     }
 }

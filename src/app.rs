@@ -97,6 +97,7 @@ fn open_library(ctx: &mut Ctx, config: &Config) -> Result<(), String> {
         eprintln!("game37: can't read the window mode: {e}");
         WindowMode::default()
     });
+    ctx.load_screen_layouts();
     Ok(())
 }
 
