@@ -126,9 +126,11 @@ pub static SYSTEMS: [System; 17] = [
         short: "GAMECUBE",
         maker: Maker::Nintendo,
         year: 2002,
-        kind: Kind::External,
+        kind: Kind::Embedded,
         colour: 0x6A3FB5,
-        extensions: &["iso", "gcm", "rvz", "ciso", "gcz"],
+        // What Dolphin loads as a GameCube Game: disc images in each form it reads, and homebrew
+        // (.dol, .elf; FR-NEW-4). No .m3u until Game37 can swap discs.
+        extensions: &["iso", "gcm", "rvz", "ciso", "gcz", "dol", "elf"],
         folder_markers: &[],
     },
     System {
@@ -148,9 +150,11 @@ pub static SYSTEMS: [System; 17] = [
         short: "WII",
         maker: Maker::Nintendo,
         year: 2006,
-        kind: Kind::External,
+        kind: Kind::Embedded,
         colour: 0x1F9FD6,
-        extensions: &["iso", "wbfs", "rvz", "wia", "ciso", "gcz"],
+        // What Dolphin loads as a Wii Game: disc images in each form it reads, and homebrew (.dol,
+        // .elf; FR-NEW-4). No .m3u until Game37 can swap discs.
+        extensions: &["iso", "wbfs", "rvz", "wia", "ciso", "gcz", "dol", "elf"],
         folder_markers: &[],
     },
     System {
@@ -314,11 +318,27 @@ mod tests {
     }
 
     #[test]
-    fn eleven_embedded_six_external() {
-        assert_eq!(SYSTEMS.iter().filter(|s| s.kind == Kind::Embedded).count(), 11);
-        assert_eq!(SYSTEMS.iter().filter(|s| s.kind == Kind::External).count(), 6);
-        assert_eq!(by_id("ps2").unwrap().kind, Kind::Embedded);
-        assert_eq!(by_id("3ds").unwrap().kind, Kind::Embedded);
+    fn thirteen_embedded_and_only_wii_u_switch_ps3_and_ps4_external() {
+        assert_eq!(SYSTEMS.iter().filter(|s| s.kind == Kind::Embedded).count(), 13);
+        let external: Vec<_> = SYSTEMS
+            .iter()
+            .filter(|s| s.kind == Kind::External)
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(external, ["wiiu", "switch", "ps3", "ps4"]);
+    }
+
+    #[test]
+    fn gamecube_and_wii_take_what_dolphin_loads_but_no_disc_lists_yet() {
+        let gc = by_id("gc").unwrap();
+        for ext in ["iso", "gcm", "rvz", "ciso", "gcz", "dol", "elf"] {
+            assert!(gc.extensions.contains(&ext), "gc {ext}");
+        }
+        let wii = by_id("wii").unwrap();
+        for ext in ["iso", "wbfs", "rvz", "wia", "ciso", "gcz", "dol", "elf"] {
+            assert!(wii.extensions.contains(&ext), "wii {ext}");
+        }
+        assert!(!gc.extensions.contains(&"m3u") && !wii.extensions.contains(&"m3u"));
     }
 
     #[test]

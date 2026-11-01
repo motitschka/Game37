@@ -11,7 +11,7 @@ use super::ffi::{
     RetroSystemInfo,
 };
 use super::tests::serial;
-use super::{Button, Claim, Core, CoreDirs, InputState};
+use super::{Button, Claim, Core, CoreDirs, CoreSetup, InputState};
 
 /// The callbacks the host handed the fake Core.
 static AUDIO_BATCH: Mutex<Option<AudioSampleBatchFn>> = Mutex::new(None);
@@ -198,7 +198,7 @@ fn start(api: Api) -> Core {
         save: "/nonexistent/saves".into(),
     };
     let claim = Claim::take().expect("no other Core is loaded");
-    Core::start(claim, api, None, Path::new("/nonexistent/game"), dirs, &[], None)
+    Core::start(claim, api, None, Path::new("/nonexistent/game"), dirs, CoreSetup::default(), None)
         .unwrap_or_else(|e| panic!("{e}"))
 }
 
@@ -258,7 +258,7 @@ fn a_message_sent_before_loading_is_not_given_as_why_loading_failed() {
         load_game: load_game_fails,
         ..api()
     };
-    let Err(e) = Core::start(claim, api, None, Path::new("/nonexistent/game"), dirs, &[], None) else {
+    let Err(e) = Core::start(claim, api, None, Path::new("/nonexistent/game"), dirs, CoreSetup::default(), None) else {
         panic!("the fake Core refuses every Game");
     };
     assert_eq!(e.core_message(), None, "{e}");
@@ -283,6 +283,34 @@ fn every_port_gets_a_retropad_after_the_game_loads_and_before_the_first_frame() 
         format!("port 3: device {joypad}"),
         "run".to_owned(),
     ];
+    assert_eq!(calls(), expected);
+}
+
+/// A Core's own controller (Dolphin's Wii Remote with a Nunchuk) goes in every port instead.
+#[test]
+fn every_port_gets_the_controller_the_core_is_set_up_with() {
+    let _serial = serial();
+    reset();
+    let dirs = CoreDirs {
+        system: "/nonexistent/system".into(),
+        save: "/nonexistent/saves".into(),
+    };
+    let claim = Claim::take().expect("no other Core is loaded");
+    let setup = CoreSetup {
+        device: super::PortDevice::retropad_subclass(2),
+        ..Default::default()
+    };
+    let api = Api {
+        load_game: load_game_noted,
+        ..api()
+    };
+    let _core = Core::start(claim, api, None, Path::new("/nonexistent/game"), dirs, setup, None)
+        .unwrap_or_else(|e| panic!("{e}"));
+    // RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 2), as libretro.h builds it.
+    let device = (3 << 8) | ffi::RETRO_DEVICE_JOYPAD;
+    let expected: Vec<String> = std::iter::once("load_game".to_owned())
+        .chain((0..4).map(|port| format!("port {port}: device {device}")))
+        .collect();
     assert_eq!(calls(), expected);
 }
 

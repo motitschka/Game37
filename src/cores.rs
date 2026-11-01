@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use tempfile::NamedTempFile;
 
-use crate::libretro::Button;
+use crate::libretro::{Button, PortDevice};
 use crate::systems::System;
 
 /// A libretro Core: its display name, the `.so` file the build server publishes, and what it
@@ -367,6 +367,33 @@ pub static AZAHAR: CoreInfo = CoreInfo {
     saves: InGameSaves::Shared,
     touch: Some(TouchScreen { swap: Button::L3 }),
 };
+/// Dolphin (FR-NEW-3), for GameCube and Wii, with the values its own option list offers: its one
+/// hardware renderer, which Game37 hosts with OpenGL; twice the original resolution; shaders
+/// compiled in the background with Dolphin's ubershaders drawing meanwhile, so a new effect
+/// doesn't stutter. Its CPU thread stays on its own (dual core): Game37 takes the audio and input
+/// it sends from there. Dolphin's system files come with it ([`DOLPHIN_ASSETS`]); the GameCube
+/// memory cards and the Wii's NAND are its own files under `<save dir>/User/`. On Wii the
+/// controller is a Wii Remote with a Nunchuk ([`CoreInfo::port_device`]).
+pub static DOLPHIN: CoreInfo = CoreInfo {
+    name: "Dolphin",
+    file: "dolphin_libretro.so",
+    options: &[
+        ("dolphin_renderer", "Hardware"),
+        ("dolphin_efb_scale", "2"),
+        ("dolphin_shader_compilation_mode", "2"),
+        ("dolphin_main_cpu_thread", "enabled"),
+    ],
+    bios: None,
+    assets: Some(&DOLPHIN_ASSETS),
+    saves: InGameSaves::Shared,
+    touch: None,
+};
+
+/// Dolphin's Wii Remote with a Nunchuk (`RETRO_DEVICE_WIIMOTE_NC` in its `Input.cpp`): what most
+/// Wii Games play with. The left stick is the Nunchuk's stick and the right stick points the
+/// Wii Remote at the screen; the face buttons are A, B, C and Z. Dolphin's plain RetroPad on Wii
+/// is a Wii Remote alone, whose left stick tilts it.
+pub const DOLPHIN_WII_REMOTE_AND_NUNCHUK: PortDevice = PortDevice::retropad_subclass(2);
 
 /// How a two-screen System shows its two screens (FR-DS-1, FR-NEW-2), chosen per System in
 /// Settings → Display. R3 swaps the screens in each (FR-DS-2).
@@ -545,9 +572,19 @@ impl CoreInfo {
     /// Whether the left stick also presses the d-pad: for Systems without an analog stick. N64,
     /// PSP, PS2 and 3DS have one, so their Cores read it as analog only.
     pub fn stick_is_dpad(&self) -> bool {
-        ![&MUPEN64PLUS_NEXT, &PPSSPP, &LRPS2, &AZAHAR]
+        ![&MUPEN64PLUS_NEXT, &PPSSPP, &LRPS2, &AZAHAR, &DOLPHIN]
             .iter()
             .any(|core| std::ptr::eq(self, *core))
+    }
+
+    /// The controller this Core is told sits in each port for `system`'s Games: a RetroPad, but on
+    /// Wii Dolphin's Wii Remote with a Nunchuk.
+    pub fn port_device(&self, system: &System) -> PortDevice {
+        if std::ptr::eq(self, &DOLPHIN) && system.id == "wii" {
+            DOLPHIN_WII_REMOTE_AND_NUNCHUK
+        } else {
+            PortDevice::RETROPAD
+        }
     }
 }
 
@@ -562,6 +599,7 @@ pub fn for_system(system: &System) -> Option<&'static CoreInfo> {
         "n64" => Some(&MUPEN64PLUS_NEXT),
         "ps1" => Some(&BEETLE_PSX_HW),
         "nds" => Some(&MELONDS_DS),
+        "gc" | "wii" => Some(&DOLPHIN),
         "3ds" => Some(&AZAHAR),
         "ps2" => Some(&LRPS2),
         "psp" => Some(&PPSSPP),

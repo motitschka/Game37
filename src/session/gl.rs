@@ -285,7 +285,7 @@ mod real_core_tests {
                 system: system.to_path_buf(),
                 save: dirs.path().join("saves"),
             },
-            &[],
+            Default::default(),
             Some(host),
         )
         .unwrap_or_else(|e| panic!("{e}"));

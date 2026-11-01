@@ -25,7 +25,7 @@ use super::timing::{self, AUDIO_MAX, PlayTimer, Scheduler};
 use crate::cores::{self, CoreInfo, GlKind, TouchScreen};
 use crate::ctx::{self, Ctx, Play, Start};
 use crate::launch::{self, FAILED_TITLE};
-use crate::libretro::{Core, CoreDirs, Frame, GlHost, Stick};
+use crate::libretro::{Core, CoreDirs, CoreSetup, Frame, GlHost, Stick};
 use crate::screens::message::Message;
 use crate::screens::pause::{PauseMenu, Request, SlotInfo};
 use crate::systems::{self, System};
@@ -257,9 +257,13 @@ impl Session {
         let core_path = cores::installed_path(&ctx.data_dir, core_info);
         let game_path = root.join(&game.rel_path);
         let options = core_options(ctx, system, core_info, &game_path);
+        let setup = CoreSetup {
+            options: &options,
+            device: core_info.port_device(system),
+        };
         // When the Core says why (a missing BIOS, an encrypted dump), that is the reason shown
         // (FR-EMB-14).
-        let mut core = Core::load(&core_path, &game_path, dirs, &options, gl).map_err(|e| {
+        let mut core = Core::load(&core_path, &game_path, dirs, setup, gl).map_err(|e| {
             StartError::generic(match e.core_message() {
                 Some(said) => format!("{} couldn't start {}.\n{said}", core_info.name, game.title),
                 None => fail(&e),
@@ -1322,7 +1326,7 @@ mod tests {
         fs::create_dir_all(&dirs.save).unwrap();
 
         let mut core =
-            Core::load(&core_path, &game_path, dirs.clone(), &[], None).unwrap_or_else(|e| panic!("{e}"));
+            Core::load(&core_path, &game_path, dirs.clone(), Default::default(), None).unwrap_or_else(|e| panic!("{e}"));
         let ram = core.save_ram().expect("mGBA's Test Suite Game has save RAM");
         let known: Vec<u8> = (0..ram.len()).map(|i| i as u8).collect();
         ram.copy_from_slice(&known);
@@ -1334,7 +1338,7 @@ mod tests {
         assert_eq!(srm.parent().unwrap(), saves::save_dir(root.path(), "gba"));
         drop(core);
 
-        let mut core = Core::load(&core_path, &game_path, dirs, &[], None).unwrap_or_else(|e| panic!("{e}"));
+        let mut core = Core::load(&core_path, &game_path, dirs, Default::default(), None).unwrap_or_else(|e| panic!("{e}"));
         let ram = core.save_ram().expect("mGBA's Test Suite Game has save RAM");
         assert!(saves::load(&srm, ram).unwrap());
         assert_eq!(ram, known.as_slice());
@@ -1532,7 +1536,11 @@ mod tests {
         let game = root.path().join("ps2").join(elf);
         let options = core_options(&ctx, systems::by_id("ps2").unwrap(), &cores::LRPS2, &game);
         let core_path = cores::installed_path(data.path(), &cores::LRPS2);
-        match Core::load(&core_path, &game, dirs, &options, gl) {
+        let setup = CoreSetup {
+            options: &options,
+            ..Default::default()
+        };
+        match Core::load(&core_path, &game, dirs, setup, gl) {
             Err(e) => eprintln!("LRPS2 without a BIOS: {e}; it said {:?}", e.core_message()),
             Ok(_) => panic!("LRPS2 loaded a Game without a BIOS"),
         }
@@ -1897,6 +1905,134 @@ mod tests {
                 assert!(e.message.contains("must be decrypted"), "{}", e.message);
             }
             Ok(_) => panic!("Azahar started an encrypted dump"),
+        }
+    }
+
+    /// A Games Root holding FCE Ultra GX for `system` (GameCube or Wii), and a data dir with the
+    /// test data's Cores and Dolphin's system files, as [`cores::DOLPHIN_ASSETS`] unpack them. Only
+    /// `Sys` is linked, so that whatever else Dolphin writes there stays in the temp dir.
+    fn dolphin_world(system: &str) -> (TempDir, TempDir, Ctx, GameRow) {
+        let file = "FCE Ultra GX (Homebrew).dol";
+        let root = TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join(system)).unwrap();
+        fs::copy(
+            Path::new(TESTDATA).join("games").join(system).join(file),
+            root.path().join(system).join(file),
+        )
+        .unwrap();
+        let data = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(Path::new(TESTDATA).join("data/cores"), data.path().join("cores"))
+            .unwrap();
+        let marker = cores::assets_marker(data.path(), &cores::DOLPHIN_ASSETS);
+        fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(Path::new(TESTDATA).join("data/system/dolphin-emu/Sys"), &marker)
+            .unwrap();
+        assert!(cores::is_installed(data.path(), &cores::DOLPHIN));
+        let mut ctx = Ctx::empty();
+        ctx.games_root = root.path().to_path_buf();
+        ctx.data_dir = data.path().to_path_buf();
+        let game = GameRow {
+            id: 1,
+            system: system.into(),
+            rel_path: format!("{system}/{file}"),
+            title: "FCE Ultra GX".into(),
+            date_added: 0,
+            last_played: None,
+            playtime_secs: 0,
+            favorite: false,
+        };
+        (root, data, ctx, game)
+    }
+
+    /// Runs `n` frames with `input` on `session`'s Core directly, as `tick` would; returns the
+    /// audio samples they brought.
+    fn frames_with(session: &mut Session, input: &crate::libretro::InputState, n: usize) -> Vec<i16> {
+        let mut audio = Vec::new();
+        for _ in 0..n {
+            audio.extend_from_slice(session.core.run_frame(input).audio);
+        }
+        audio
+    }
+
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn hw_dolphin_explore() {
+        use crate::ui::text::Fonts;
+
+        let _serial = serial();
+        for system in ["gc", "wii"] {
+            let (root, data, ctx, game) = dolphin_world(system);
+            let (_sdl, canvas) = offscreen_renderer();
+            let creator = canvas.texture_creator();
+            let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
+            let shot = data.path().join("shot.bmp");
+            let mut session =
+                Session::start(&Play::resume(game.clone()), &ctx, gfx.gl_context(), None, Some(60.0))
+                    .unwrap_or_else(|e| panic!("{e}"));
+            eprintln!("{system}: {:?}", session.core.av_info());
+            use crate::libretro::{Button, InputState, Stick};
+            let mut inputs: Vec<(&str, InputState)> = vec![("none", InputState::default())];
+            let mut i = InputState::default();
+            i.set(0, Button::Down, true);
+            inputs.push(("dpad down", i));
+            let mut i = InputState::default();
+            i.set_stick(0, Stick::Left, 0, 32767);
+            inputs.push(("left stick down", i));
+            let mut i = InputState::default();
+            i.set_stick(0, Stick::Right, 0, 20000);
+            inputs.push(("right stick down", i));
+            let mut i = InputState::default();
+            i.set(0, Button::A, true);
+            inputs.push(("A", i));
+            let mut i = InputState::default();
+            i.set_stick(0, Stick::Right, -32767, -32767);
+            inputs.push(("pointer away", i));
+            let mut i = InputState::default();
+            i.set_stick(0, Stick::Right, -32767, -32767);
+            i.set_stick(0, Stick::Left, 0, 32767);
+            inputs.push(("pointer away + left stick down", i));
+            let mut i = InputState::default();
+            i.set_stick(0, Stick::Right, -32767, -32767);
+            i.set(0, Button::Down, true);
+            inputs.push(("pointer away + dpad down", i));
+            let mut i = InputState::default();
+            i.set(0, Button::B, true);
+            inputs.push(("B", i));
+            tick_n(&mut session, &mut gfx, 300);
+            for (step, (name, input)) in inputs.iter().enumerate() {
+                let before = session.core.frame().clone();
+                frames_with(&mut session, input, 6);
+                let audio = frames_with(&mut session, &Default::default(), 60);
+                let loud = audio.iter().filter(|s| s.unsigned_abs() > 64).count();
+                let max = audio.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0);
+                let after = session.core.frame();
+                let diff = difference(&sampled(&before, (0, 0, 1280, 1056)), &sampled(after, (0, 0, 1280, 1056)));
+                let f = (session.core.frame().width, session.core.frame().height);
+                tick_n(&mut session, &mut gfx, 1);
+                let colours = shown(&mut session, &mut gfx, &ctx, &shot);
+                eprintln!(
+                    "{system} step {step} {name}: diff {diff:.2}, {} samples, {loud} loud, max {max}, frame {}x{}, {} colours shown",
+                    audio.len(),
+                    f.0,
+                    f.1,
+                    colours.len()
+                );
+                fs::copy(&shot, format!("/home/matei/Game37/.claude/worktrees/wf_a43fc304-930-2/target/scratch/{system}-{step}.bmp")).unwrap();
+                {
+                    let f = session.core.frame();
+                    let mut ppm = format!("P6 {} {} 255\n", f.width, f.height).into_bytes();
+                    for row in f.data.chunks(f.pitch) {
+                        for px in row[..f.width as usize * 4].chunks(4) {
+                            ppm.extend_from_slice(&[px[2], px[1], px[0]]);
+                        }
+                    }
+                    eprintln!("format {:?}", f.format);
+                    fs::write(format!("/home/matei/Game37/.claude/worktrees/wf_a43fc304-930-2/target/scratch/{system}-{step}.ppm"), ppm).unwrap();
+                }
+            }
+            drop(session); eprintln!("{}", fs::read_to_string(root.path().join(format!("saves/{system}/User/Logs/dolphin.log"))).unwrap_or_default());
+            let out = std::process::Command::new("find").arg(root.path()).arg(data.path()).arg("-maxdepth").arg("5").output().unwrap();
+            eprintln!("{}", String::from_utf8_lossy(&out.stdout));
         }
     }
 
