@@ -482,11 +482,11 @@ mod tests {
     #[test]
     fn the_step_is_passed_over_without_an_embedded_system() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(!Cores::new().applies(&model(dir.path(), &["gc", "switch"])));
-        assert!(Cores::new().applies(&model(dir.path(), &["gc", "nes"])));
+        assert!(!Cores::new().applies(&model(dir.path(), &["wiiu", "switch"])));
+        assert!(Cores::new().applies(&model(dir.path(), &["wiiu", "nes"])));
 
         let mut setup = Setup::new(dir.path().join("Games"));
-        setup.model = model(dir.path(), &["gc"]);
+        setup.model = model(dir.path(), &["wiiu"]);
         setup.at = 2;
         assert_eq!(setup.neighbour(true), Some(4), "from step 3 on to step 5");
     }
@@ -495,7 +495,7 @@ mod tests {
     fn entering_queues_only_the_missing_cores_each_once_one_at_a_time() {
         let (dir, mut ctx, started) = world();
         install(&ctx, &MESEN);
-        let (mut step, model) = entered(dir.path(), &["gba", "gbc", "nes", "gb", "gc"], &mut ctx);
+        let (mut step, model) = entered(dir.path(), &["gba", "gbc", "nes", "gb", "wiiu"], &mut ctx);
         let systems: Vec<_> = step.rows.iter().map(|r| r.system.name).collect();
         assert_eq!(
             systems,

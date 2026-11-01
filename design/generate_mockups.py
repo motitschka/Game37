@@ -362,8 +362,7 @@ def console_card(sv, cx, cy, size, sysid, opacity=1.0):
 
 WARN = "#FFB020"
 # The Standalone Emulator of each External System; every other System is Embedded.
-EMULATORS = {"gc": "Dolphin", "wii": "Dolphin", "wiiu": "Cemu", "switch": "Ryubing",
-             "ps3": "RPCS3", "ps4": "shadPS4"}
+EMULATORS = {"wiiu": "Cemu", "switch": "Ryubing", "ps3": "RPCS3", "ps4": "shadPS4"}
 
 
 def screen_carousel(focus="3ds", missing={"wiiu": "Cemu"}, games=12):
@@ -401,7 +400,7 @@ def screen_console_page():
     topbar(sv, active="consoles")
     sv.add(rect(M, 152, 8, 76, color, rx=4),
            text(M + 30, 202, "GameCube", 52, 800),
-           text(M + 32, 236, "38 games  ·  Plays in Dolphin", 20, 500, fill=C["muted"]))
+           text(M + 32, 236, "38 games  ·  Plays in Game37", 20, 500, fill=C["muted"]))
     chip_w = 330
     cx = W - M - chip_w
     sv.add(rect(cx, 168, chip_w, 52, C["surface"], rx=26, stroke=C["line"], sw=1))
@@ -536,7 +535,7 @@ def details_page(name, title, g, sysid, emulator, stats, path, favorite=False, m
 
 
 def screen_details():
-    details_page("05-details", "Details Page", GAMECUBE[0], "gc", "Dolphin",
+    details_page("05-details", "Details Page", GAMECUBE[0], "gc", "Game37 · Dolphin core",
                  [("PLAYTIME", "31h 05m"), ("LAST PLAYED", "Yesterday"), ("ADDED", "3 Oct 2026"), ("SIZE", "1.36 GB")],
                  "~/Games/gc/Metroid Prime (USA).rvz", favorite=True)
 
@@ -1187,11 +1186,12 @@ def screen_settings_bios():
 # Each Embedded System's Core, by the System Order of its first System, with its state in the mockup.
 CORES = [("Mesen", ["nes"], "Installed"), ("SameBoy", ["gb", "gbc"], "Installed"), ("bsnes", ["snes"], "Installed"),
          ("Mupen64Plus-Next", ["n64"], 45), ("mGBA", ["gba"], "Installed"),
-         ("melonDS DS", ["nds"], "Not downloaded"), ("Azahar", ["3ds"], "Not downloaded"),
+         ("Dolphin", ["gc", "wii"], "Not downloaded"), ("melonDS DS", ["nds"], "Not downloaded"),
+         ("Azahar", ["3ds"], "Not downloaded"),
          ("Beetle PSX HW", ["ps1"], "Failed"),
          ("LRPS2", ["ps2"], "Not downloaded"), ("PPSSPP", ["psp"], "Not downloaded")]
-# The Core rows' pitch and height: eleven fit between Update all and the hint bar.
-CORE_PITCH, CORE_H = 62, 58
+# The Core rows' pitch and height: twelve fit between Update all and the hint bar.
+CORE_PITCH, CORE_H = 58, 54
 
 
 def screen_settings_cores():
@@ -1513,9 +1513,8 @@ def screen_search_empty():
 SETUP_STEPS = 5
 SETUP_W = 1200  # width of the lists and boxes below the title, left-aligned at M
 # The Standalone Emulator each External System needs; every other System is Embedded.
-EXTERNAL = {"gc": "Dolphin", "wii": "Dolphin", "wiiu": "Cemu", "switch": "Ryubing",
-            "ps3": "RPCS3", "ps4": "shadPS4"}
-SETUP_TICKED = ["nes", "snes", "gba", "gc", "switch", "ps1", "ps2", "psp"]  # in System Order
+EXTERNAL = {"wiiu": "Cemu", "switch": "Ryubing", "ps3": "RPCS3", "ps4": "shadPS4"}
+SETUP_TICKED = ["nes", "snes", "gba", "wiiu", "switch", "ps1", "ps2", "psp"]  # in System Order
 
 
 def setup_frame(sv, step, title, explanation):
@@ -1622,7 +1621,7 @@ def command_box(sv, x, y, cmd, focus="Copy"):
 def screen_setup_emulators():
     sv = Svg("27-setup-emulators", "First-run Setup: emulators")
     setup_frame(sv, 2, "Install the emulators", "These Systems run in their own emulator, installed with Flatpak.")
-    rows = [("gc", "org.DolphinEmu.dolphin-emu", True), ("switch", "io.github.ryubing.Ryujinx", False),
+    rows = [("wiiu", "info.cemu.Cemu", True), ("switch", "io.github.ryubing.Ryujinx", False),
             ("ps3", "net.rpcs3.RPCS3", False)]
     for i, (sysid, app_id, installed) in enumerate(rows):
         x, y = M, 296 + i * 112

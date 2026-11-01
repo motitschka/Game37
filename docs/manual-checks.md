@@ -22,7 +22,7 @@ The story in brackets stays open on GitHub until its checks pass.
 
 ## 3. External emulators
 
-- [ ] Each of the 8 External Systems starts its emulator with a real Game (RPCS3 needs firmware,
+- [ ] Each of the 4 External Systems (Wii U, Switch, PS3, PS4) starts its emulator with a real Game (RPCS3 needs firmware,
       Ryubing `prod.keys`, shadPS4 its modules). (US-30)
 - [ ] When the emulator exits, GNOME brings Game37 back to the front and Playtime goes up. (US-30)
 - [ ] Removing an emulator's Flatpak shows the badge and notice; reinstalling it and pressing Check

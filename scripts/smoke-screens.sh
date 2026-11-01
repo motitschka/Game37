@@ -17,7 +17,7 @@ rm -rf "$out"
 mkdir -p "$out/root"
 root=$out/root
 cp -r "$testdata/games" "$root/games"
-for f in "gc/Metroid Prime (USA).iso" "wiiu/Xenoblade Chronicles X (Europe).wua" \
+for f in "wiiu/Xenoblade Chronicles X (Europe).wua" \
     "ps2/Persona 4 (USA).iso" "switch/Hello World.nro"; do
     mkdir -p "$root/games/$(dirname "$f")"
     : > "$root/games/$f"
@@ -59,7 +59,7 @@ shot m2-carousel-missing "$root/cfg.toml" "nexttab,left,left,left,left,left,left
 shot m2-notice "$root/cfg.toml" "nexttab,left,left,left,left,left,left,left,confirm" --missing-emulators wiiu
 shot m5-details-missing "$root/cfg.toml" \
     "nexttab,left,left,left,left,left,left,left,confirm,down,confirm,left" --missing-emulators wiiu
-shot m2-playing "$root/cfg.toml" "nexttab,right,right,right,right,right,right,confirm,confirm,confirm"
+shot m2-playing "$root/cfg.toml" "nexttab,left,left,left,left,left,left,left,confirm,confirm,confirm"
 # M3: each Embedded System running, Pause Menu with a saved slot
 shot m3-nes "$root/cfg.toml" "nexttab,confirm,confirm,confirm" --frames 180
 shot m3-gb "$root/cfg.toml" "nexttab,right,confirm,confirm,confirm" --frames 600
@@ -112,14 +112,14 @@ shot m5-rename "$root/cfg.toml" \
 # M6: top bar entries
 shot m6-search-open "$root/cfg.toml" "down,down,search"
 shot m6-settings-open "$root/cfg.toml" "settings"
-# First-run Setup step 2: GameCube, PlayStation 3 and Switch ticked, then every System
+# First-run Setup step 2: Wii U, Switch and PlayStation 3 ticked, then every System
 shot m6-setup-emulators "$root/missing.toml" \
-    "down,confirm,down,right,right,right,confirm,up,right,right,confirm,settings" --missing-emulators switch,ps3
-shot m6-setup-emulators-all "$root/missing.toml" "sort,settings" --missing-emulators wii,wiiu,switch,ps3,ps4
-# First-run Setup step 3: NES, GameCube, PlayStation 3 and Switch ticked, on through step 2, then
+    "down,right,right,right,right,confirm,right,confirm,down,left,confirm,settings" --missing-emulators switch,ps3
+shot m6-setup-emulators-all "$root/missing.toml" "sort,settings" --missing-emulators wiiu,switch,ps3,ps4
+# First-run Setup step 3: NES, Wii U, Switch and PlayStation 3 ticked, on through step 2, then
 # Create folders, under the Games Root that screenshot mode puts in the data dir
 shot m6-setup-folders "$root/missing.toml" \
-    "confirm,down,confirm,down,right,right,right,confirm,up,right,right,confirm,settings,settings,confirm" \
+    "confirm,down,right,right,right,right,confirm,right,confirm,down,left,confirm,settings,settings,confirm" \
     --missing-emulators switch,ps3
 # First-run Setup step 4: NES and PSP ticked, step 2 passed over, Create folders on step 3, then the
 # Cores, which the smoke data dirs already have, so nothing downloads

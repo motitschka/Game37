@@ -26,13 +26,6 @@ pub struct Emulator {
 /// Stands for the Game's file in [`Emulator::args`].
 pub const PATH: &str = "{path}";
 
-pub static DOLPHIN: Emulator = Emulator {
-    name: "Dolphin",
-    flatpak_id: "org.DolphinEmu.dolphin-emu",
-    args: &["-b", "-C", "Dolphin.Display.Fullscreen=True", "-e", PATH],
-    folder_file: &[],
-    stays_open: false,
-};
 pub static CEMU: Emulator = Emulator {
     name: "Cemu",
     flatpak_id: "info.cemu.Cemu",
@@ -65,7 +58,6 @@ pub static SHADPS4: Emulator = Emulator {
 /// The Standalone Emulator for an External System; `None` for Embedded Systems.
 pub fn for_system(system: &System) -> Option<&'static Emulator> {
     match system.id {
-        "gc" | "wii" => Some(&DOLPHIN),
         "wiiu" => Some(&CEMU),
         "switch" => Some(&RYUBING),
         "ps3" => Some(&RPCS3),
@@ -162,9 +154,20 @@ mod tests {
     }
 
     #[test]
-    fn gamecube_and_wii_share_dolphin() {
-        assert_eq!(for_system(by_id("gc").unwrap()), Some(&DOLPHIN));
-        assert_eq!(for_system(by_id("wii").unwrap()), Some(&DOLPHIN));
+    fn gamecube_and_wii_have_no_emulator() {
+        // Both play in Game37 with the Dolphin Core (ADR 0016).
+        assert_eq!(for_system(by_id("gc").unwrap()), None);
+        assert_eq!(for_system(by_id("wii").unwrap()), None);
+    }
+
+    #[test]
+    fn exactly_wii_u_switch_ps3_and_ps4_have_an_emulator() {
+        let external: Vec<_> = SYSTEMS
+            .iter()
+            .filter(|s| for_system(s).is_some())
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(external, ["wiiu", "switch", "ps3", "ps4"]);
     }
 
     #[test]
@@ -174,10 +177,10 @@ mod tests {
 
     #[test]
     fn a_missing_flatpak_marks_only_its_systems() {
-        let list = "org.DolphinEmu.dolphin-emu\nnet.shadps4.shadPS4\n\ninfo.cemu.Cemu\n";
+        let list = "net.shadps4.shadPS4\n\ninfo.cemu.Cemu\n";
         let emulators = Emulators::from_installed(parse_flatpak_list(list));
-        assert_eq!(emulators.missing(by_id("gc").unwrap()), None);
         assert_eq!(emulators.missing(by_id("wiiu").unwrap()), None);
+        assert_eq!(emulators.missing(by_id("ps4").unwrap()), None);
         assert_eq!(emulators.missing(by_id("ps3").unwrap()), Some(&RPCS3));
         assert_eq!(emulators.missing(by_id("switch").unwrap()), Some(&RYUBING));
     }
@@ -197,6 +200,13 @@ mod tests {
             None,
             "3DS plays in Game37 (ADR 0016)"
         );
+        for id in ["gc", "wii"] {
+            assert_eq!(
+                none.missing(by_id(id).unwrap()),
+                None,
+                "{id} plays in Game37 (ADR 0016)"
+            );
+        }
         assert_eq!(none.missing(by_id("ps3").unwrap()), Some(&RPCS3));
     }
 
