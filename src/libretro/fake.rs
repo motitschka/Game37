@@ -75,6 +75,21 @@ unsafe extern "C" fn init_must_initialize() {
         *lock(&QUIRKS_BACK) = Some(quirks);
     }
 }
+/// `retro_init` of a Core that greets the player before any Game is loaded.
+unsafe extern "C" fn init_with_a_banner() {
+    let Some(environment) = *lock(&ENVIRONMENT) else {
+        return;
+    };
+    let message = ffi::RetroMessage {
+        msg: c"Core started".as_ptr(),
+        frames: 60,
+    };
+    // SAFETY: the host's environment callback, given the `retro_message *` this command takes.
+    unsafe { environment(ffi::ENV_SET_MESSAGE, (&raw const message).cast_mut().cast()) };
+}
+unsafe extern "C" fn load_game_fails(_: *const RetroGameInfo) -> bool {
+    false
+}
 fn has_run() -> bool {
     calls().iter().any(|c| c == "run")
 }
@@ -203,6 +218,50 @@ fn a_core_reading_input_and_sending_audio_on_its_own_thread_gets_both_through() 
     input.set(0, Button::A, false);
     core.run_frame(&input);
     assert_eq!(*lock(&ANSWERS), [1, 0], "A let go");
+}
+
+/// Dolphin's CPU thread may send audio after one frame is collected and before the next starts:
+/// the next frame plays it rather than dropping it.
+#[test]
+fn audio_a_core_thread_sends_between_frames_comes_with_the_next_frame() {
+    let _serial = serial();
+    reset();
+    let mut core = start(api());
+    assert!(core.run_frame(&InputState::default()).audio.is_empty());
+    let audio_batch = lock(&AUDIO_BATCH).expect("the host's audio callback");
+    std::thread::spawn(move || {
+        let samples = [3i16, -3];
+        // SAFETY: the host's callback; `samples` holds 1 stereo frame.
+        unsafe { audio_batch(samples.as_ptr(), 1) };
+    })
+    .join()
+    .unwrap();
+    assert_eq!(core.run_frame(&InputState::default()).audio, [3, -3]);
+    assert!(
+        core.run_frame(&InputState::default()).audio.is_empty(),
+        "played once"
+    );
+}
+
+/// A message from before the Game started loading isn't the reason loading it failed.
+#[test]
+fn a_message_sent_before_loading_is_not_given_as_why_loading_failed() {
+    let _serial = serial();
+    reset();
+    let dirs = CoreDirs {
+        system: "/nonexistent/system".into(),
+        save: "/nonexistent/saves".into(),
+    };
+    let claim = Claim::take().expect("no other Core is loaded");
+    let api = Api {
+        init: init_with_a_banner,
+        load_game: load_game_fails,
+        ..api()
+    };
+    let Err(e) = Core::start(claim, api, None, Path::new("/nonexistent/game"), dirs, &[], None) else {
+        panic!("the fake Core refuses every Game");
+    };
+    assert_eq!(e.core_message(), None, "{e}");
 }
 
 #[test]

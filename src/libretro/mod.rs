@@ -372,7 +372,6 @@ impl Core {
         options: &[(&str, &str)],
         gl: Option<Box<dyn GlHost>>,
     ) -> Result<Core, CoreError> {
-        callbacks::clear_message();
         let game_cpath = c_path(game_path)?;
         let mut state = State::new(c_path(&dirs.system)?, c_path(&dirs.save)?);
         state.overrides = callbacks::option_overrides(options);
@@ -434,6 +433,8 @@ impl Core {
             size,
             meta: std::ptr::null(),
         };
+        // Only a message sent while loading the Game can say why loading it failed.
+        callbacks::clear_message();
         // SAFETY: `info` points at the path and data owned by `core`, which keeps both until after
         // `retro_unload_game`; the heap buffers don't move when `core` does.
         if !unsafe { (core.api.load_game)(&info) } {
@@ -474,10 +475,7 @@ impl Core {
 
     /// Runs the Core for one frame with `input` held.
     pub fn run_frame(&mut self, input: &InputState) -> FrameOutput<'_> {
-        callbacks::shared(|s| {
-            s.input = *input;
-            s.audio.clear();
-        });
+        callbacks::shared(|s| s.input = *input);
         // SAFETY: the Core is loaded with a Game and its callbacks' state is installed; a Core
         // rendering with OpenGL runs with its context current, and its frame is read back.
         let run = || unsafe { (self.api.run)() };
@@ -493,6 +491,9 @@ impl Core {
                 s.fresh = false;
             }
         });
+        // Everything sent since the last frame, including audio a Core sent from its own thread
+        // between frames (Dolphin's CPU thread); the shared buffer starts over empty.
+        self.audio.clear();
         callbacks::shared(|s| std::mem::swap(&mut self.audio, &mut s.audio));
         FrameOutput {
             video: &self.video,

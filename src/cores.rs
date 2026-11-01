@@ -46,7 +46,7 @@ pub enum InGameSaves {
     /// ([`crate::session::saves::srm_path`]).
     SaveMemory,
     /// It writes them itself, into files every Game of the System shares (PPSSPP's `SAVEDATA`
-    /// folder, a console's NAND): no Game has a save file of its own to delete.
+    /// folder, a System's NAND): no Game has a save file of its own to delete.
     Shared,
     /// It writes them itself, one file per Game: `<save dir>/<Game file stem>.<extension>`.
     PerGame { extension: &'static str },
