@@ -40,13 +40,6 @@ pub static CEMU: Emulator = Emulator {
     folder_file: &[&["code", "*.rpx"]],
     stays_open: false,
 };
-pub static AZAHAR: Emulator = Emulator {
-    name: "Azahar",
-    flatpak_id: "org.azahar_emu.Azahar",
-    args: &["-f", PATH],
-    folder_file: &[],
-    stays_open: true,
-};
 pub static RYUBING: Emulator = Emulator {
     name: "Ryubing",
     flatpak_id: "io.github.ryubing.Ryujinx",
@@ -74,7 +67,6 @@ pub fn for_system(system: &System) -> Option<&'static Emulator> {
     match system.id {
         "gc" | "wii" => Some(&DOLPHIN),
         "wiiu" => Some(&CEMU),
-        "3ds" => Some(&AZAHAR),
         "switch" => Some(&RYUBING),
         "ps3" => Some(&RPCS3),
         "ps4" => Some(&SHADPS4),
@@ -199,6 +191,11 @@ mod tests {
             none.missing(by_id("ps2").unwrap()),
             None,
             "PS2 plays in Game37 (ADR 0016)"
+        );
+        assert_eq!(
+            none.missing(by_id("3ds").unwrap()),
+            None,
+            "3DS plays in Game37 (ADR 0016)"
         );
         assert_eq!(none.missing(by_id("ps3").unwrap()), Some(&RPCS3));
     }

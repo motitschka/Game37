@@ -362,7 +362,7 @@ def console_card(sv, cx, cy, size, sysid, opacity=1.0):
 
 WARN = "#FFB020"
 # The Standalone Emulator of each External System; every other System is Embedded.
-EMULATORS = {"gc": "Dolphin", "wii": "Dolphin", "3ds": "Azahar", "wiiu": "Cemu", "switch": "Ryubing",
+EMULATORS = {"gc": "Dolphin", "wii": "Dolphin", "wiiu": "Cemu", "switch": "Ryubing",
              "ps3": "RPCS3", "ps4": "shadPS4"}
 
 
@@ -1187,8 +1187,11 @@ def screen_settings_bios():
 # Each Embedded System's Core, by the System Order of its first System, with its state in the mockup.
 CORES = [("Mesen", ["nes"], "Installed"), ("SameBoy", ["gb", "gbc"], "Installed"), ("bsnes", ["snes"], "Installed"),
          ("Mupen64Plus-Next", ["n64"], 45), ("mGBA", ["gba"], "Installed"),
-         ("melonDS DS", ["nds"], "Not downloaded"), ("Beetle PSX HW", ["ps1"], "Failed"),
+         ("melonDS DS", ["nds"], "Not downloaded"), ("Azahar", ["3ds"], "Not downloaded"),
+         ("Beetle PSX HW", ["ps1"], "Failed"),
          ("LRPS2", ["ps2"], "Not downloaded"), ("PPSSPP", ["psp"], "Not downloaded")]
+# The Core rows' pitch and height: eleven fit between Update all and the hint bar.
+CORE_PITCH, CORE_H = 62, 58
 
 
 def screen_settings_cores():
@@ -1197,7 +1200,7 @@ def screen_settings_cores():
     installed = sum(state == "Installed" for _, _, state in CORES)
     settings_row(sv, TOP, 64, "Update all", f"Redownloads the {installed} installed Cores")
     for i, (name, systems, state) in enumerate(CORES):
-        y, h = TOP + 78 + i * 78, 70
+        y, h = TOP + 72 + i * CORE_PITCH, CORE_H
         r = settings_row(sv, y, h, name, sub=", ".join(SYS[k][1] for k in systems), focused=state == "Failed")
         base = y + h / 2 + 7
         if state == "Failed":
@@ -1475,7 +1478,7 @@ def screen_search_empty():
 SETUP_STEPS = 5
 SETUP_W = 1200  # width of the lists and boxes below the title, left-aligned at M
 # The Standalone Emulator each External System needs; every other System is Embedded.
-EXTERNAL = {"gc": "Dolphin", "wii": "Dolphin", "3ds": "Azahar", "wiiu": "Cemu", "switch": "Ryubing",
+EXTERNAL = {"gc": "Dolphin", "wii": "Dolphin", "wiiu": "Cemu", "switch": "Ryubing",
             "ps3": "RPCS3", "ps4": "shadPS4"}
 SETUP_TICKED = ["nes", "snes", "gba", "gc", "switch", "ps1", "ps2", "psp"]  # in System Order
 

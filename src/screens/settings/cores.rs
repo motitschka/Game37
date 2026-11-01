@@ -17,9 +17,10 @@ use crate::ui::theme::{ACCENT, DIM, LINE, MUTED, SUCCESS, SURFACE, SURFACE2, TEX
 
 const UPDATE_ALL_H: f32 = 64.0;
 /// The first Core row's top, under Update all.
-const CORES_TOP: f32 = TOP + 78.0;
-const PITCH: f32 = 78.0;
-const ROW_H: f32 = 70.0;
+const CORES_TOP: f32 = TOP + 72.0;
+/// Eleven Core rows fit between Update all and the hint bar.
+const PITCH: f32 = 62.0;
+const ROW_H: f32 = 58.0;
 const BAR_W: f32 = 240.0;
 
 /// One Core's row.
@@ -263,6 +264,20 @@ mod tests {
     }
 
     #[test]
+    fn every_core_row_shows_above_the_hint_bar_with_room_for_one_more() {
+        let (_dir, ctx, _) = world();
+        let mut cores = Cores::default();
+        let rows = cores.rows(&ctx);
+        let last = cores.layout(&rows).last().unwrap().0;
+        // `chrome::hintbar` draws from y = 1010 down.
+        assert!(
+            last.y + last.h + PITCH <= 1010.0,
+            "{} Cores: {last:?}",
+            rows.len() - 1
+        );
+    }
+
+    #[test]
     fn update_all_then_each_core_once_ordered_by_its_first_system_with_its_systems() {
         let (_dir, ctx, _) = world();
         let mut cores = Cores::default();
@@ -275,6 +290,7 @@ mod tests {
             "Mupen64Plus-Next",
             "mGBA",
             "melonDS DS",
+            "Azahar",
             "Beetle PSX HW",
             "LRPS2",
             "PPSSPP",

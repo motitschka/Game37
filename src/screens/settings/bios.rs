@@ -194,11 +194,10 @@ mod tests {
         let dir = tilde(&bios, dirs::home_dir().as_deref());
         let missing = format!("Missing: put scph5500.bin, scph5501.bin or scph5502.bin in {dir}/");
         assert_eq!(value(&rows, "ps1"), missing);
-        for id in ["nes", "gb", "snes", "n64", "gbc", "gba", "nds", "psp"] {
+        for id in ["nes", "gb", "snes", "n64", "gbc", "gba", "nds", "3ds", "psp"] {
             assert_eq!(value(&rows, id), "No BIOS needed", "{id}");
         }
         assert_eq!(value(&rows, "gc"), "Handled by Dolphin");
-        assert_eq!(value(&rows, "3ds"), "Handled by Azahar");
         assert_eq!(
             value(&rows, "ps2"),
             format!("Missing: put your own BIOS dump, any file name, in {dir}/pcsx2/bios/")

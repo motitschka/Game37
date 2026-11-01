@@ -412,13 +412,13 @@ mod tests {
     #[test]
     fn the_command_lists_each_missing_emulator_once_in_system_order() {
         let setup = ticking(&["nes", "gc", "wii", "3ds", "switch", "ps2", "ps3"]);
-        let installed = Emulators::from_installed(["org.azahar_emu.Azahar"]);
+        let installed = Emulators::from_installed(["info.cemu.Cemu"]);
         assert_eq!(
             install_command(&setup.model, &installed).as_deref(),
             Some(
                 "flatpak install flathub org.DolphinEmu.dolphin-emu io.github.ryubing.Ryujinx net.rpcs3.RPCS3"
             ),
-            "PS2 plays in Game37"
+            "PS2 and 3DS play in Game37"
         );
     }
 

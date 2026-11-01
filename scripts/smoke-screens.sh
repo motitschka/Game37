@@ -107,7 +107,7 @@ shot m6-settings-open "$root/cfg.toml" "settings"
 # First-run Setup step 2: GameCube, PlayStation 3 and Switch ticked, then every System
 shot m6-setup-emulators "$root/missing.toml" \
     "down,confirm,down,right,right,right,confirm,up,right,right,confirm,settings" --missing-emulators switch,ps3
-shot m6-setup-emulators-all "$root/missing.toml" "sort,settings" --missing-emulators wii,3ds,wiiu,switch,ps3,ps4
+shot m6-setup-emulators-all "$root/missing.toml" "sort,settings" --missing-emulators wii,wiiu,switch,ps3,ps4
 # First-run Setup step 3: NES, GameCube, PlayStation 3 and Switch ticked, on through step 2, then
 # Create folders, under the Games Root that screenshot mode puts in the data dir
 shot m6-setup-folders "$root/missing.toml" \

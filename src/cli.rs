@@ -401,5 +401,7 @@ mod tests {
         assert!(err.contains("snes"), "{err}");
         let err = parse(shot_args("--screenshot o.bmp --missing-emulators ps2")).unwrap_err();
         assert!(err.contains("Embedded"), "PS2 plays in Game37: {err}");
+        let err = parse(shot_args("--screenshot o.bmp --missing-emulators 3ds")).unwrap_err();
+        assert!(err.contains("Embedded"), "3DS plays in Game37: {err}");
     }
 }

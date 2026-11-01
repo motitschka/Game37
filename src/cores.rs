@@ -36,6 +36,30 @@ pub struct CoreInfo {
     pub assets: Option<&'static CoreAssets>,
     /// How it keeps a Game's In-game Saves.
     pub saves: InGameSaves,
+    /// The touch screen of a two-screen System (DS, 3DS), or `None` for a System without one.
+    pub touch: Option<TouchScreen>,
+}
+
+/// A Core's touch screen, one of two screens it shows in one frame (FR-DS-1–3, FR-NEW-2): the
+/// mouse touches it through `RETRO_DEVICE_POINTER` over the whole frame, the mouse cursor shows,
+/// and Game37's swap control (R3, Tab) swaps which screen is large.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TouchScreen {
+    pub swap: ScreenSwap,
+}
+
+/// How Game37's swap control swaps a [`TouchScreen`] Core's screens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScreenSwap {
+    /// The Core swaps them itself on R3 (melonDS DS), so Tab holds R3.
+    R3,
+    /// The Core shows the screen this option names large, so each press of the swap control sets
+    /// it to the other of its two values while the Game runs (Azahar, whose R3 is the 3DS's HOME
+    /// button and so never reaches it). The first value is the one the Core starts with.
+    Option {
+        key: &'static str,
+        values: [&'static str; 2],
+    },
 }
 
 /// How a Core keeps a Game's In-game Saves, all under the save directory it is given,
@@ -194,6 +218,7 @@ pub static MESEN: CoreInfo = CoreInfo {
     bios: None,
     assets: None,
     saves: InGameSaves::SaveMemory,
+    touch: None,
 };
 pub static BSNES: CoreInfo = CoreInfo {
     name: "bsnes",
@@ -202,6 +227,7 @@ pub static BSNES: CoreInfo = CoreInfo {
     bios: None,
     assets: None,
     saves: InGameSaves::SaveMemory,
+    touch: None,
 };
 pub static SAMEBOY: CoreInfo = CoreInfo {
     name: "SameBoy",
@@ -210,6 +236,7 @@ pub static SAMEBOY: CoreInfo = CoreInfo {
     bios: None,
     assets: None,
     saves: InGameSaves::SaveMemory,
+    touch: None,
 };
 pub static MGBA: CoreInfo = CoreInfo {
     name: "mGBA",
@@ -218,6 +245,7 @@ pub static MGBA: CoreInfo = CoreInfo {
     bios: None,
     assets: None,
     saves: InGameSaves::SaveMemory,
+    touch: None,
 };
 pub static MUPEN64PLUS_NEXT: CoreInfo = CoreInfo {
     name: "Mupen64Plus-Next",
@@ -226,6 +254,7 @@ pub static MUPEN64PLUS_NEXT: CoreInfo = CoreInfo {
     bios: None,
     assets: None,
     saves: InGameSaves::SaveMemory,
+    touch: None,
 };
 
 /// Crops a European (PAL) N64 Game to its picture: such Games draw about 240 lines into the
@@ -276,6 +305,7 @@ pub static BEETLE_PSX_HW: CoreInfo = CoreInfo {
     bios: Some(&PS1_BIOS),
     assets: None,
     saves: InGameSaves::SaveMemory,
+    touch: None,
 };
 /// Options chosen for FR-DS-1–3: two hybrid layouts (one large screen, one small), the touch
 /// pointer and joystick cursor both live, and a visible cursor for aiming it.
@@ -300,6 +330,7 @@ pub static MELONDS_DS: CoreInfo = CoreInfo {
     bios: None,
     assets: None,
     saves: InGameSaves::SaveMemory,
+    touch: Some(TouchScreen { swap: ScreenSwap::R3 }),
 };
 pub static PPSSPP: CoreInfo = CoreInfo {
     name: "PPSSPP",
@@ -308,6 +339,7 @@ pub static PPSSPP: CoreInfo = CoreInfo {
     bios: None,
     assets: Some(&PPSSPP_ASSETS),
     saves: InGameSaves::Shared,
+    touch: None,
 };
 /// LRPS2 (FR-NEW-1), with the values its own option list offers: OpenGL, as Game37 has no Vulkan
 /// host; twice the PS2's resolution; a memory card per Game, `<save dir>/<file stem>.ps2`; and the
@@ -324,7 +356,39 @@ pub static LRPS2: CoreInfo = CoreInfo {
     bios: Some(&PS2_BIOS),
     assets: None,
     saves: InGameSaves::PerGame { extension: "ps2" },
+    touch: None,
 };
+/// Azahar (FR-NEW-2), with the values its own option list offers: OpenGL, never `Auto` or
+/// Vulkan (Vulkan crashes on AMD, Azahar issue #2742); saves under `<save dir>/Azahar/`; the right
+/// stick as the C-stick only, so Azahar draws no crosshair on the touch screen. The screens are
+/// laid out by [`AZAHAR_LAYOUT`]. Its Save States break on every Core update: a slot that can't
+/// load then says so.
+pub static AZAHAR: CoreInfo = CoreInfo {
+    name: "Azahar",
+    file: "azahar_libretro.so",
+    options: &[
+        ("citra_graphics_api", "OpenGL"),
+        ("citra_use_libretro_save_path", "LibRetro Default"),
+        ("citra_analog_function", "c_stick"),
+    ],
+    bios: None,
+    assets: None,
+    saves: InGameSaves::Shared,
+    touch: Some(TouchScreen {
+        swap: ScreenSwap::Option {
+            key: "citra_swap_screen",
+            values: ["Top", "Bottom"],
+        },
+    }),
+};
+
+/// How Azahar lays out the 3DS's two screens (FR-NEW-2): the top screen large and the touch
+/// screen small beside it, the large one three times the small one's size (mockup
+/// `40-3ds-layout-large-3`). The one place the layout is chosen.
+pub const AZAHAR_LAYOUT: &[(&str, &str)] = &[
+    ("citra_layout_option", "large_screen"),
+    ("citra_large_screen_proportion", "3.00"),
+];
 
 /// Which OpenGL host a Core's context must be made on (see [`CoreInfo::gl`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -337,10 +401,12 @@ pub enum GlKind {
 
 impl CoreInfo {
     /// The option values the Core runs the Game at `game` with: `options`, then those this Core
-    /// reads from the Game's file.
+    /// reads from the Game's file, or Azahar's screen layout.
     pub fn options_for(&self, game: &Path) -> Vec<(&'static str, &'static str)> {
         let own = if std::ptr::eq(self, &MUPEN64PLUS_NEXT) {
             n64_game_options(game)
+        } else if std::ptr::eq(self, &AZAHAR) {
+            AZAHAR_LAYOUT
         } else {
             &[]
         };
@@ -357,9 +423,9 @@ impl CoreInfo {
     }
 
     /// Whether the left stick also presses the d-pad: for Systems without an analog stick. N64,
-    /// PSP and PS2 have one, so their Cores read it as analog only.
+    /// PSP, PS2 and 3DS have one, so their Cores read it as analog only.
     pub fn stick_is_dpad(&self) -> bool {
-        ![&MUPEN64PLUS_NEXT, &PPSSPP, &LRPS2]
+        ![&MUPEN64PLUS_NEXT, &PPSSPP, &LRPS2, &AZAHAR]
             .iter()
             .any(|core| std::ptr::eq(self, *core))
     }
@@ -376,6 +442,7 @@ pub fn for_system(system: &System) -> Option<&'static CoreInfo> {
         "n64" => Some(&MUPEN64PLUS_NEXT),
         "ps1" => Some(&BEETLE_PSX_HW),
         "nds" => Some(&MELONDS_DS),
+        "3ds" => Some(&AZAHAR),
         "ps2" => Some(&LRPS2),
         "psp" => Some(&PPSSPP),
         _ => None,
@@ -1182,6 +1249,7 @@ mod tests {
         assert_eq!(for_system(by_id("n64").unwrap()), Some(&MUPEN64PLUS_NEXT));
         assert_eq!(for_system(by_id("ps1").unwrap()), Some(&BEETLE_PSX_HW));
         assert_eq!(for_system(by_id("nds").unwrap()), Some(&MELONDS_DS));
+        assert_eq!(for_system(by_id("3ds").unwrap()), Some(&AZAHAR));
         assert_eq!(for_system(by_id("ps2").unwrap()), Some(&LRPS2));
         assert_eq!(for_system(by_id("psp").unwrap()), Some(&PPSSPP));
         for system in SYSTEMS
@@ -1193,10 +1261,11 @@ mod tests {
     }
 
     #[test]
-    fn only_n64_psp_and_ps2_read_the_left_stick_as_analog_only() {
+    fn only_n64_psp_ps2_and_3ds_read_the_left_stick_as_analog_only() {
         assert!(!MUPEN64PLUS_NEXT.stick_is_dpad());
         assert!(!PPSSPP.stick_is_dpad());
         assert!(!LRPS2.stick_is_dpad());
+        assert!(!AZAHAR.stick_is_dpad());
         for core in [&MESEN, &BSNES, &SAMEBOY, &MGBA, &BEETLE_PSX_HW, &MELONDS_DS] {
             assert!(core.stick_is_dpad(), "{}", core.name);
         }
@@ -1291,6 +1360,11 @@ mod tests {
         ] {
             assert_eq!(core.options_for(&pal[0]), core.options, "{}", core.name);
         }
+        assert_eq!(
+            AZAHAR.options_for(&pal[0]),
+            [AZAHAR.options, AZAHAR_LAYOUT].concat(),
+            "Azahar's own options, then its layout"
+        );
     }
 
     #[test]
@@ -1305,6 +1379,7 @@ mod tests {
             &BEETLE_PSX_HW,
             &MELONDS_DS,
             &LRPS2,
+            &AZAHAR,
         ] {
             assert_eq!(core.gl(), GlKind::Sdl, "{}", core.name);
         }
@@ -1353,6 +1428,60 @@ mod tests {
         );
     }
 
+    /// The option values are the ones Azahar's own list offers (read from its `SET_VARIABLES`).
+    #[test]
+    fn azahar_renders_with_opengl_shares_its_saves_and_lays_out_large_and_small_at_3() {
+        assert_eq!(
+            AZAHAR.options,
+            &[
+                ("citra_graphics_api", "OpenGL"),
+                ("citra_use_libretro_save_path", "LibRetro Default"),
+                ("citra_analog_function", "c_stick"),
+            ]
+        );
+        assert_eq!(
+            AZAHAR_LAYOUT,
+            &[
+                ("citra_layout_option", "large_screen"),
+                ("citra_large_screen_proportion", "3.00"),
+            ]
+        );
+        assert_eq!(AZAHAR.file, "azahar_libretro.so");
+        assert_eq!((AZAHAR.bios, AZAHAR.assets), (None, None));
+        assert_eq!(
+            AZAHAR.saves,
+            InGameSaves::Shared,
+            "files under <save dir>/Azahar/"
+        );
+    }
+
+    #[test]
+    fn ds_and_3ds_have_a_touch_screen_whose_swap_their_cores_take_differently() {
+        assert_eq!(MELONDS_DS.touch, Some(TouchScreen { swap: ScreenSwap::R3 }));
+        assert_eq!(
+            AZAHAR.touch,
+            Some(TouchScreen {
+                swap: ScreenSwap::Option {
+                    key: "citra_swap_screen",
+                    values: ["Top", "Bottom"],
+                },
+            }),
+            "R3 is the 3DS's HOME button in Azahar"
+        );
+        for core in [
+            &MESEN,
+            &BSNES,
+            &SAMEBOY,
+            &MGBA,
+            &MUPEN64PLUS_NEXT,
+            &BEETLE_PSX_HW,
+            &PPSSPP,
+            &LRPS2,
+        ] {
+            assert_eq!(core.touch, None, "{}", core.name);
+        }
+    }
+
     #[test]
     fn melonds_ds_options_match_fr_ds_1_to_3() {
         assert_eq!(
@@ -1382,6 +1511,7 @@ mod tests {
             &BEETLE_PSX_HW,
             &MELONDS_DS,
             &LRPS2,
+            &AZAHAR,
         ] {
             assert!(core.assets.is_none(), "{}", core.name);
         }
@@ -1688,6 +1818,7 @@ mod tests {
         bios: Some(&PS2_BIOS),
         assets: Some(&DOLPHIN_ASSETS),
         saves: InGameSaves::SaveMemory,
+        touch: None,
     };
 
     #[test]

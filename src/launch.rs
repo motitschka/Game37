@@ -404,7 +404,7 @@ pub fn record(ctx: &mut Ctx, game_id: i64, ended_at: i64, elapsed: Duration) {
 mod tests {
     use super::*;
     use crate::ctx::Start;
-    use crate::emulators::{AZAHAR, CEMU, DOLPHIN, RPCS3, RYUBING, SHADPS4};
+    use crate::emulators::{CEMU, DOLPHIN, RPCS3, RYUBING, SHADPS4};
     use crate::library::FoundGame;
     use crate::library::db::SortOrder;
     use crate::screens::{Home, Stub};
@@ -429,13 +429,12 @@ mod tests {
     #[test]
     fn each_emulator_gets_its_fullscreen_command() {
         let g = "/home/ann/Games/x/My Game.iso";
-        let cases: [(&Emulator, &[&str]); 6] = [
+        let cases: [(&Emulator, &[&str]); 5] = [
             (
                 &DOLPHIN,
                 &["-b", "-C", "Dolphin.Display.Fullscreen=True", "-e", g],
             ),
             (&CEMU, &["-f", "-g", g]),
-            (&AZAHAR, &["-f", g]),
             (&RYUBING, &[g, "--fullscreen"]),
             (&RPCS3, &["--no-gui", "--fullscreen", g]),
             (&SHADPS4, &["-g", g, "--fullscreen", "true"]),

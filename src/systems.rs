@@ -159,10 +159,14 @@ pub static SYSTEMS: [System; 17] = [
         short: "3DS",
         maker: Maker::Nintendo,
         year: 2011,
-        kind: Kind::External,
+        kind: Kind::Embedded,
         colour: 0xC9302C,
-        // .cia is an installer for the emulator's own storage, so it is not listed (FR-LIB-5).
-        extensions: &["3ds", "cci", "cxi", "3dsx"],
+        // What Azahar loads as a Game: cartridge and executable dumps, their z-compressed forms,
+        // and homebrew (.3dsx, .elf, .axf; FR-NEW-4). .cia is an installer for the emulator's own
+        // storage, which Azahar can't load (FR-LIB-5).
+        extensions: &[
+            "3ds", "cci", "cxi", "3dsx", "app", "elf", "axf", "zcci", "zcxi", "z3dsx",
+        ],
         folder_markers: &[],
     },
     System {
@@ -310,10 +314,22 @@ mod tests {
     }
 
     #[test]
-    fn ten_embedded_seven_external() {
-        assert_eq!(SYSTEMS.iter().filter(|s| s.kind == Kind::Embedded).count(), 10);
-        assert_eq!(SYSTEMS.iter().filter(|s| s.kind == Kind::External).count(), 7);
+    fn eleven_embedded_six_external() {
+        assert_eq!(SYSTEMS.iter().filter(|s| s.kind == Kind::Embedded).count(), 11);
+        assert_eq!(SYSTEMS.iter().filter(|s| s.kind == Kind::External).count(), 6);
         assert_eq!(by_id("ps2").unwrap().kind, Kind::Embedded);
+        assert_eq!(by_id("3ds").unwrap().kind, Kind::Embedded);
+    }
+
+    #[test]
+    fn three_ds_takes_what_azahar_loads_as_games_but_no_installers() {
+        let three_ds = by_id("3ds").unwrap();
+        for ext in [
+            "3ds", "cci", "cxi", "3dsx", "app", "elf", "axf", "zcci", "zcxi", "z3dsx",
+        ] {
+            assert!(three_ds.extensions.contains(&ext), "{ext}");
+        }
+        assert!(!three_ds.extensions.contains(&"cia"), "Azahar can't load a .cia");
     }
 
     #[test]
