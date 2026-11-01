@@ -296,6 +296,79 @@ fn ds_touch_reaches_melonds_ds_and_r3_swaps_the_screens() {
     assert!(to_small < to_large, "R3 put the touch screen on the large one");
 }
 
+/// melonDS DS in each DS layout of Settings → Display, with the options a DS Game gets in it
+/// (FR-DS-1, FR-DS-2): Side by side shows both screens next to each other at the same size, one
+/// frame twice as wide as one screen and more; One screen shows the top screen alone, and R3 shows
+/// the touch screen instead. Run with `cargo test -- --ignored ds`.
+#[test]
+#[ignore = "needs /home/matei/Game37/.testdata"]
+fn each_ds_layout_shows_its_screens_and_r3_swaps_them() {
+    use super::Button;
+    use crate::cores::{MELONDS_DS, ScreenLayout};
+
+    let _serial = serial();
+    let data = Path::new(TESTDATA);
+    let game = data.join("games/nds/Homebrew Menu (World).nds");
+    let load = |layout| {
+        let dirs = TempDir::new().unwrap();
+        let mut options = MELONDS_DS.options_for(systems::by_id("nds").unwrap(), &game, layout);
+        // As in the test above: hbmenu boots without the SD card.
+        options.push(("melonds_homebrew_sdcard", "disabled"));
+        let core = Core::load(
+            &data.join("data/cores").join(MELONDS_DS.file),
+            &game,
+            CoreDirs {
+                system: dirs.path().join("system"),
+                save: dirs.path().join("saves"),
+            },
+            &options,
+            None,
+        )
+        .unwrap_or_else(|e| panic!("{layout:?}: {e}"));
+        (core, dirs)
+    };
+    let r3 = |core: &mut Core| {
+        let mut input = InputState::default();
+        input.set(0, Button::R3, true);
+        for _ in 0..5 {
+            core.run_frame(&input);
+        }
+        run(core, 30).0
+    };
+
+    let (mut core, _dirs) = load(ScreenLayout::SideBySide);
+    let (side, _) = run(&mut core, 120);
+    eprintln!("side by side: {}x{}", side.width, side.height);
+    assert_eq!((side.width, side.height), (512, 192), "two screens, side by side");
+    let (top, touch) = (ds_screen(&side, 0, 0, 1), ds_screen(&side, 256, 0, 1));
+    assert!(difference(&top, &touch) > 1.0, "hbmenu's two screens differ");
+    let swapped = r3(&mut core);
+    assert_eq!((swapped.width, swapped.height), (512, 192), "still side by side");
+    let left = ds_screen(&swapped, 0, 0, 1);
+    assert!(
+        difference(&left, &touch) < difference(&left, &top),
+        "R3 put the touch screen on the left"
+    );
+    drop(core);
+
+    let (mut core, _dirs) = load(ScreenLayout::OneScreen);
+    let (one, _) = run(&mut core, 120);
+    eprintln!("one screen: {}x{}", one.width, one.height);
+    assert_eq!((one.width, one.height), (256, 192), "one screen");
+    let shown = ds_screen(&one, 0, 0, 1);
+    assert!(
+        difference(&shown, &top) < difference(&shown, &touch),
+        "the top screen"
+    );
+    let swapped = r3(&mut core);
+    assert_eq!((swapped.width, swapped.height), (256, 192), "still one screen");
+    let shown = ds_screen(&swapped, 0, 0, 1);
+    assert!(
+        difference(&shown, &touch) < difference(&shown, &top),
+        "R3 shows the touch screen"
+    );
+}
+
 /// One DS screen's 256×192 RGB bytes, from a 1024×576 hybrid frame (in `Xrgb8888`) at `(x, y)`,
 /// every `step`th pixel.
 fn ds_screen(frame: &Frame, x: usize, y: usize, step: usize) -> Vec<u8> {
