@@ -199,7 +199,10 @@ mod tests {
         }
         assert_eq!(value(&rows, "gc"), "Handled by Dolphin");
         assert_eq!(value(&rows, "3ds"), "Handled by Azahar");
-        assert_eq!(value(&rows, "ps2"), "Handled by PCSX2");
+        assert_eq!(
+            value(&rows, "ps2"),
+            format!("Missing: put your own BIOS dump, any file name, in {dir}/pcsx2/bios/")
+        );
     }
 
     #[test]
@@ -207,6 +210,13 @@ mod tests {
         let (_dir, ctx) = world();
         fs::write(ctx.games_root.join("bios/SCPH5502.BIN"), b"x").unwrap();
         assert_eq!(value(&Bios::default().rows(&ctx), "ps1"), "Found SCPH5502.BIN");
+        let ps2 = ctx.games_root.join("bios/pcsx2/bios");
+        fs::create_dir_all(&ps2).unwrap();
+        fs::File::create(ps2.join("My PS2.bin"))
+            .unwrap()
+            .set_len(4 << 20)
+            .unwrap();
+        assert_eq!(value(&Bios::default().rows(&ctx), "ps2"), "Found My PS2.bin");
     }
 
     #[test]

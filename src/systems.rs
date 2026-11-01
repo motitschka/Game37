@@ -205,9 +205,10 @@ pub static SYSTEMS: [System; 17] = [
         short: "PS2",
         maker: Maker::Sony,
         year: 2000,
-        kind: Kind::External,
+        kind: Kind::Embedded,
         colour: 0x2443B8,
-        extensions: &["iso", "chd", "cso", "zso"],
+        // What LRPS2 loads, less .gz and .m3u (no disc swapping yet); .elf is homebrew (FR-NEW-4).
+        extensions: &["iso", "chd", "cso", "zso", "ciso", "cue", "elf"],
         folder_markers: &[],
     },
     System {
@@ -309,8 +310,18 @@ mod tests {
     }
 
     #[test]
-    fn nine_embedded_eight_external() {
-        assert_eq!(SYSTEMS.iter().filter(|s| s.kind == Kind::Embedded).count(), 9);
-        assert_eq!(SYSTEMS.iter().filter(|s| s.kind == Kind::External).count(), 8);
+    fn ten_embedded_seven_external() {
+        assert_eq!(SYSTEMS.iter().filter(|s| s.kind == Kind::Embedded).count(), 10);
+        assert_eq!(SYSTEMS.iter().filter(|s| s.kind == Kind::External).count(), 7);
+        assert_eq!(by_id("ps2").unwrap().kind, Kind::Embedded);
+    }
+
+    #[test]
+    fn ps2_takes_lrps2_homebrew_and_discs_but_no_disc_lists_yet() {
+        let ps2 = by_id("ps2").unwrap();
+        for ext in ["elf", "iso", "ciso", "cue", "chd", "cso", "zso"] {
+            assert!(ps2.extensions.contains(&ext), "{ext}");
+        }
+        assert!(!ps2.extensions.contains(&"m3u") && !ps2.extensions.contains(&"gz"));
     }
 }

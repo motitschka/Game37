@@ -54,13 +54,6 @@ pub static RYUBING: Emulator = Emulator {
     folder_file: &[],
     stays_open: true,
 };
-pub static PCSX2: Emulator = Emulator {
-    name: "PCSX2",
-    flatpak_id: "net.pcsx2.PCSX2",
-    args: &["-batch", "-fullscreen", PATH],
-    folder_file: &[],
-    stays_open: false,
-};
 pub static RPCS3: Emulator = Emulator {
     name: "RPCS3",
     flatpak_id: "net.rpcs3.RPCS3",
@@ -83,7 +76,6 @@ pub fn for_system(system: &System) -> Option<&'static Emulator> {
         "wiiu" => Some(&CEMU),
         "3ds" => Some(&AZAHAR),
         "switch" => Some(&RYUBING),
-        "ps2" => Some(&PCSX2),
         "ps3" => Some(&RPCS3),
         "ps4" => Some(&SHADPS4),
         _ => None,
@@ -190,7 +182,7 @@ mod tests {
 
     #[test]
     fn a_missing_flatpak_marks_only_its_systems() {
-        let list = "org.DolphinEmu.dolphin-emu\nnet.pcsx2.PCSX2\n\ninfo.cemu.Cemu\n";
+        let list = "org.DolphinEmu.dolphin-emu\nnet.shadps4.shadPS4\n\ninfo.cemu.Cemu\n";
         let emulators = Emulators::from_installed(parse_flatpak_list(list));
         assert_eq!(emulators.missing(by_id("gc").unwrap()), None);
         assert_eq!(emulators.missing(by_id("wiiu").unwrap()), None);
@@ -203,7 +195,12 @@ mod tests {
         let none = Emulators::from_installed(Vec::<String>::new());
         assert_eq!(none.missing(by_id("snes").unwrap()), None);
         assert_eq!(none.missing(by_id("ps1").unwrap()), None);
-        assert_eq!(none.missing(by_id("ps2").unwrap()), Some(&PCSX2));
+        assert_eq!(
+            none.missing(by_id("ps2").unwrap()),
+            None,
+            "PS2 plays in Game37 (ADR 0016)"
+        );
+        assert_eq!(none.missing(by_id("ps3").unwrap()), Some(&RPCS3));
     }
 
     #[test]

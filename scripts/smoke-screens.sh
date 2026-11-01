@@ -104,13 +104,13 @@ shot m6-search-open "$root/cfg.toml" "down,down,search"
 shot m6-settings-open "$root/cfg.toml" "settings"
 # First-run Setup step 2: GameCube, Switch and PlayStation 2 ticked, then every System
 shot m6-setup-emulators "$root/missing.toml" \
-    "down,confirm,down,right,confirm,up,right,right,right,right,confirm,settings" --missing-emulators switch,ps2
-shot m6-setup-emulators-all "$root/missing.toml" "sort,settings" --missing-emulators wii,3ds,wiiu,switch,ps2,ps3,ps4
+    "down,confirm,down,right,confirm,up,right,right,right,right,confirm,settings" --missing-emulators switch
+shot m6-setup-emulators-all "$root/missing.toml" "sort,settings" --missing-emulators wii,3ds,wiiu,switch,ps3,ps4
 # First-run Setup step 3: NES, GameCube, Switch and PlayStation 2 ticked, on through step 2, then
 # Create folders, under the Games Root that screenshot mode puts in the data dir
 shot m6-setup-folders "$root/missing.toml" \
     "confirm,down,confirm,down,right,confirm,up,right,right,right,right,confirm,settings,settings,confirm" \
-    --missing-emulators switch,ps2
+    --missing-emulators switch
 # First-run Setup step 4: NES and PSP ticked, step 2 passed over, Create folders on step 3, then the
 # Cores, which the smoke data dirs already have, so nothing downloads
 shot m6-setup-cores "$root/missing.toml" "confirm,down,down,right,right,confirm,settings,confirm,settings"

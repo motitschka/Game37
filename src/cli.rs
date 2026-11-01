@@ -399,5 +399,7 @@ mod tests {
     fn an_embedded_system_id_is_an_error() {
         let err = parse(shot_args("--screenshot o.bmp --missing-emulators snes")).unwrap_err();
         assert!(err.contains("snes"), "{err}");
+        let err = parse(shot_args("--screenshot o.bmp --missing-emulators ps2")).unwrap_err();
+        assert!(err.contains("Embedded"), "PS2 plays in Game37: {err}");
     }
 }
