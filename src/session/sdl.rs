@@ -1739,6 +1739,43 @@ mod tests {
         assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "resumed");
     }
 
+    /// An encrypted 3DS dump (FR-NEW-2, FR-EMB-14): Azahar refuses it, and the message the player
+    /// sees quotes Azahar saying it must be decrypted. The dump is a made-up NCCH header whose
+    /// "no crypto" flag is clear, as on a dump straight off a cartridge.
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn hw_azahar_refuses_an_encrypted_dump_and_says_it_must_be_decrypted() {
+        use crate::ui::text::Fonts;
+
+        let _serial = serial();
+        let (root, _data, ctx, mut game) = three_ds_world();
+        let mut ncch = vec![0u8; 0x4000];
+        ncch[0x100..0x104].copy_from_slice(b"NCCH");
+        // The content size, in 0x200-byte media units, and the extended header's size.
+        ncch[0x104..0x108].copy_from_slice(&0x20u32.to_le_bytes());
+        ncch[0x180..0x184].copy_from_slice(&0x400u32.to_le_bytes());
+        // An executable (content type 0x02); flags[7] without 0x04, so encrypted.
+        ncch[0x18D] = 0x02;
+        fs::write(root.path().join("3ds/Encrypted.cxi"), &ncch).unwrap();
+        game.rel_path = "3ds/Encrypted.cxi".into();
+        game.title = "Encrypted".into();
+        let (_sdl, canvas) = offscreen_renderer();
+        let creator = canvas.texture_creator();
+        let gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
+
+        match Session::start(&Play::resume(game), &ctx, gfx.gl_context(), None, Some(60.0)) {
+            Err(message) => {
+                eprintln!("{message}");
+                assert!(
+                    message.starts_with("Azahar couldn't start Encrypted."),
+                    "{message}"
+                );
+                assert!(message.contains("must be decrypted"), "{message}");
+            }
+            Ok(_) => panic!("Azahar started an encrypted dump"),
+        }
+    }
+
     #[test]
     fn sdl_cores_get_no_host_without_a_frontend_context() {
         assert!(open_gl(&cores::MESEN, None, None, "NES").unwrap().is_none());
