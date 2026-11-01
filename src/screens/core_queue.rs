@@ -1,8 +1,8 @@
 //! The Core download queue (FR-EMB-2) that Settings → Cores and First-run Setup's Cores step share:
 //! a fixed list of Cores, each with its download state. One download runs at a time and the rest
-//! wait in order; PPSSPP downloads its assets first, then the Core, on one bar, as `DownloadCore`
-//! does. Dropping the queue drops the running `Download`, which cancels it and removes its temp
-//! files.
+//! wait in order; a Core with assets (PPSSPP) downloads them first, then the Core, on one bar, as
+//! `DownloadCore` does. Dropping the queue drops the running `Download`, which cancels it and
+//! removes its temp files.
 
 use std::collections::VecDeque;
 use std::path::Path;
@@ -24,7 +24,7 @@ pub enum Job {
     Done,
 }
 
-/// The download running now: for which Core, and whether this step is PPSSPP's assets.
+/// The download running now: for which Core, and whether this step is its assets.
 struct Current {
     core: usize,
     assets: bool,
@@ -98,11 +98,11 @@ impl CoreQueue {
         if let Some(i) = self.waiting.pop_front() {
             let core = self.cores[i];
             self.jobs[i] = Job::Running(None);
-            self.current = Some(if core.system_in_data_dir {
+            self.current = Some(if let Some(assets) = core.assets {
                 Current {
                     core: i,
                     assets: true,
-                    download: (ctx.start_assets_download)(ctx.data_dir.clone()),
+                    download: (ctx.start_assets_download)(assets, ctx.data_dir.clone()),
                 }
             } else {
                 Current {
@@ -123,13 +123,13 @@ impl CoreQueue {
         self.advance(ctx);
     }
 
-    /// Moves the running download on: its progress, PPSSPP's Core after its assets, or the next
+    /// Moves the running download on: its progress, a Core after its assets, or the next
     /// Core once it ends.
     pub fn tick(&mut self, ctx: &Ctx) {
         let Some(current) = &mut self.current else {
             return;
         };
-        let two_steps = self.cores[current.core].system_in_data_dir;
+        let two_steps = self.cores[current.core].assets.is_some();
         let (step, steps) = match (two_steps, current.assets) {
             (true, true) => (0, 2),
             (true, false) => (1, 2),

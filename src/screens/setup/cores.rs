@@ -4,12 +4,13 @@
 //! missing Core at once in a [`CoreQueue`], one download at a time; leaving it drops the queue,
 //! which cancels the running download, and coming back queues what is still missing.
 
+use std::path::Path;
+
 use super::{Button, CONTENT_Y, Go, Model, SETUP_W, Step, system_chip, tick};
-use crate::cores::{self, CoreInfo};
+use crate::cores::{self, BiosRule, CoreInfo};
 use crate::ctx::Ctx;
 use crate::screens::core_queue::{CoreQueue, Job, percent, progress_bar};
 use crate::screens::home::tilde;
-use crate::screens::settings::bios::ASK_FOR;
 use crate::systems::System;
 use crate::ui::cover::ellipsize;
 use crate::ui::gfx::{Align, Gfx, TextStyle};
@@ -218,7 +219,7 @@ impl Cores {
 
 /// A row's sub-line: its Core, and PPSSPP's assets for PSP.
 fn sub_line(core: &CoreInfo) -> String {
-    if core.system_in_data_dir {
+    if core.assets.is_some() {
         format!("{} · plus {}'s assets", core.name, core.name)
     } else {
         core.name.to_owned()
@@ -240,14 +241,19 @@ fn state(job: Job, installed: bool) -> String {
 
 /// What the BIOS note says, if a ticked System's Core needs a BIOS.
 fn bios_note(model: &Model) -> Option<String> {
-    let system = model
+    let (system, rule) = model
         .ticked()
-        .find(|s| cores::for_system(s).is_some_and(|c| !c.required_bios.is_empty()))?;
-    let dir = tilde(&model.games_root.join("bios"), dirs::home_dir().as_deref());
-    Some(format!(
-        "{} needs a BIOS file: put {ASK_FOR} in {dir}/.",
-        system.name
-    ))
+        .find_map(|s| Some((s, cores::for_system(s)?.bios?)))?;
+    Some(note_text(system, rule, &model.games_root))
+}
+
+/// The BIOS note for `system`, whose Core needs `rule`'s BIOS: what to put where, in its words.
+fn note_text(system: &System, rule: &BiosRule, games_root: &Path) -> String {
+    let dir = tilde(&rule.dir(games_root), dirs::home_dir().as_deref());
+    format!(
+        "{} needs a BIOS file: put {} in {dir}/.",
+        system.name, rule.wording.ask_for
+    )
 }
 
 impl Step for Cores {
@@ -390,7 +396,7 @@ mod tests {
             download
         });
         let log = Rc::clone(&started);
-        ctx.start_assets_download = Box::new(move |_| {
+        ctx.start_assets_download = Box::new(move |_, _| {
             let (download, state) = manual();
             log.borrow_mut().push(("PPSSPP assets".to_owned(), state));
             download
@@ -621,7 +627,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(bios_note(&model(dir.path(), &["nes", "psp"])), None);
         let bios = tilde(&dir.path().join("Games/bios"), dirs::home_dir().as_deref());
-        let note = format!("PlayStation needs a BIOS file: put {ASK_FOR} in {bios}/.");
+        let note = format!(
+            "PlayStation needs a BIOS file: put scph5500.bin, scph5501.bin or scph5502.bin in {bios}/."
+        );
         assert_eq!(bios_note(&model(dir.path(), &["nes", "ps1"])), Some(note));
+    }
+
+    #[test]
+    fn the_ps2_bios_note_names_its_sub_folder() {
+        let ps2 = crate::systems::by_id("ps2").unwrap();
+        assert_eq!(
+            note_text(ps2, &cores::PS2_BIOS, Path::new("/srv/Games")),
+            "PlayStation 2 needs a BIOS file: put your own BIOS dump, any file name, in \
+             /srv/Games/bios/pcsx2/bios/."
+        );
     }
 }

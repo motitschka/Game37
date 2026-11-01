@@ -2,8 +2,10 @@
 //! table of every System in System Order and its BIOS status, using the same check as launching
 //! (FR-EMB-12). The rows have no action: the section can be entered only to move down the table.
 
+use std::path::Path;
+
 use super::{RW, RX, Row, Section, TOP};
-use crate::cores;
+use crate::cores::{self, BiosRule};
 use crate::ctx::Ctx;
 use crate::emulators;
 use crate::screens::home::tilde;
@@ -20,10 +22,12 @@ const PITCH: f32 = 41.0;
 /// Left edge of the BIOS column.
 const STATUS_X: f32 = RX + 320.0;
 
-/// The BIOS files the Missing text asks for. Beetle PSX HW is the only Core with a `required_bios`
-/// list, so, like launching's message (`launch::missing_bios_message`), this names PS1's three
-/// region BIOS files rather than every name the check accepts. A test keeps the two the same.
-pub(crate) const ASK_FOR: &str = "scph5500.bin, scph5501.bin or scph5502.bin";
+/// The Missing text for `rule`: what to put where, in its System's words. A test keeps it asking
+/// for the same files as launching's message (`launch::missing_bios_message`).
+fn missing_text(rule: &BiosRule, games_root: &Path) -> String {
+    let dir = tilde(&rule.dir(games_root), dirs::home_dir().as_deref());
+    format!("Missing: put {} in {dir}/", rule.wording.ask_for)
+}
 
 /// One System's BIOS status.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,15 +48,12 @@ impl Status {
         {
             return Status::Handled(emulator.name);
         }
-        match cores::for_system(system) {
-            Some(core) if !core.required_bios.is_empty() => match cores::found_bios(&ctx.games_root, core) {
+        match cores::for_system(system).and_then(|core| core.bios) {
+            Some(rule) => match rule.found(&ctx.games_root) {
                 Some(file) => Status::Found(file),
-                None => {
-                    let dir = tilde(&ctx.games_root.join("bios"), dirs::home_dir().as_deref());
-                    Status::Missing(format!("Missing: put {ASK_FOR} in {dir}/"))
-                }
+                None => Status::Missing(missing_text(rule, &ctx.games_root)),
             },
-            _ => Status::NotNeeded,
+            None => Status::NotNeeded,
         }
     }
 
@@ -191,7 +192,7 @@ mod tests {
         let rows = Bios::default().rows(&ctx);
         let bios = ctx.games_root.join("bios");
         let dir = tilde(&bios, dirs::home_dir().as_deref());
-        let missing = format!("Missing: put {ASK_FOR} in {dir}/");
+        let missing = format!("Missing: put scph5500.bin, scph5501.bin or scph5502.bin in {dir}/");
         assert_eq!(value(&rows, "ps1"), missing);
         for id in ["nes", "gb", "snes", "n64", "gbc", "gba", "nds", "psp"] {
             assert_eq!(value(&rows, id), "No BIOS needed", "{id}");
@@ -211,10 +212,19 @@ mod tests {
     #[test]
     fn missing_asks_for_the_same_files_as_launching_does() {
         let (_dir, ctx) = world();
-        let launch = crate::launch::missing_bios_message(&ctx.games_root);
+        let launch = crate::launch::missing_bios_message(&ctx.games_root, &cores::PS1_BIOS);
         let names = bios_names(&value(&Bios::default().rows(&ctx), "ps1"));
         assert_eq!(names, ["scph5500.bin", "scph5501.bin", "scph5502.bin"]);
         assert_eq!(names, bios_names(&launch));
+    }
+
+    #[test]
+    fn the_ps2_bios_is_asked_for_in_its_sub_folder() {
+        let root = Path::new("/srv/Games");
+        assert_eq!(
+            missing_text(&cores::PS2_BIOS, root),
+            "Missing: put your own BIOS dump, any file name, in /srv/Games/bios/pcsx2/bios/"
+        );
     }
 
     fn act(s: &mut Settings, ctx: &mut Ctx, actions: &[Action]) -> Transition {

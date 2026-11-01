@@ -214,7 +214,7 @@ mod tests {
             download
         });
         let log = Rc::clone(&started);
-        ctx.start_assets_download = Box::new(move |_| {
+        ctx.start_assets_download = Box::new(move |_, _| {
             let (download, state) = manual();
             log.borrow_mut().push(("PPSSPP assets".to_owned(), state));
             download
@@ -222,13 +222,14 @@ mod tests {
         (dir, ctx, started)
     }
 
-    /// Writes a dummy Core file where `is_installed` looks, and PPSSPP's assets folder for PPSSPP.
+    /// Writes a dummy Core file where `is_installed` looks, and its assets' marker folder for a Core
+    /// with assets.
     fn install(ctx: &Ctx, core: &CoreInfo) {
         let path = cores::installed_path(&ctx.data_dir, core);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, b"dummy").unwrap();
-        if core.system_in_data_dir {
-            fs::create_dir_all(cores::assets_dir(&ctx.data_dir)).unwrap();
+        if let Some(assets) = core.assets {
+            fs::create_dir_all(cores::assets_marker(&ctx.data_dir, assets)).unwrap();
         }
     }
 

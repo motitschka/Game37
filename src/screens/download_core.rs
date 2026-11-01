@@ -43,8 +43,8 @@ fn progress_text(state: &DownloadState) -> String {
     }
 }
 
-/// Which archive is downloading right now. PPSSPP needs two, assets then Core (FR-EMB-1); every
-/// other Core needs only the one.
+/// Which archive is downloading right now. A Core with assets (PPSSPP) needs two, assets then Core
+/// (FR-EMB-1); every other Core needs only the one.
 enum Step {
     Assets(Download),
     Core(Download),
@@ -57,7 +57,7 @@ pub struct DownloadCore {
     step: Step,
     /// Whether this screen runs an assets step (always before the Core step): only
     /// [`DownloadCore::new_with_assets`] sets it, so the label counts steps this screen actually
-    /// runs rather than going by [`CoreInfo::system_in_data_dir`] alone.
+    /// runs rather than going by [`CoreInfo::assets`] alone.
     assets_step: bool,
     progress: DownloadState,
     /// Set once the download fails; from then on this screen draws and behaves like `Message`.
@@ -66,13 +66,13 @@ pub struct DownloadCore {
 }
 
 impl DownloadCore {
-    /// Downloads just `core`'s library: every Core except PPSSPP, and PPSSPP once its assets are
-    /// already there.
+    /// Downloads just `core`'s library: a Core without assets, or one whose assets are already
+    /// there.
     pub fn new(play: Play, core: &'static CoreInfo, download: Download) -> DownloadCore {
         DownloadCore::with_step(play, core, Step::Core(download), false)
     }
 
-    /// Downloads `core`'s assets first, then its library (FR-EMB-1): PPSSPP only.
+    /// Downloads `core`'s assets first, then its library (FR-EMB-1, FR-NEW-3).
     pub fn new_with_assets(play: Play, core: &'static CoreInfo, assets: Download) -> DownloadCore {
         DownloadCore::with_step(play, core, Step::Assets(assets), true)
     }
@@ -361,7 +361,7 @@ mod tests {
     }
 
     /// A Core-only download (PPSSPP with its assets already present) never says "(2 of 2)": that
-    /// counted `system_in_data_dir`, true of PPSSPP regardless of whether an assets step runs.
+    /// counted whether the Core has assets, true of PPSSPP regardless of whether an assets step runs.
     #[test]
     fn a_core_only_download_of_ppsspp_never_says_2_of_2() {
         let dir = tempfile::tempdir().unwrap();
