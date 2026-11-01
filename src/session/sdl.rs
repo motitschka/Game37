@@ -1459,6 +1459,102 @@ mod tests {
         assert_eq!(colours.len(), 1, "one fill colour: {colours:?}");
     }
 
+    /// Draws `session`'s Game on a black screen; returns the distinct colours the renderer shows.
+    fn shown(
+        session: &mut Session,
+        gfx: &mut Gfx<'_>,
+        ctx: &Ctx,
+        at: &Path,
+    ) -> std::collections::HashSet<Vec<u8>> {
+        gfx.clear(crate::ui::theme::Colour::hex(0x000000));
+        session.draw(gfx, ctx);
+        shown_colours(gfx, at)
+    }
+
+    /// Runs `n` ticks of a 60 Hz display, with no input.
+    fn tick_n(session: &mut Session, gfx: &mut Gfx<'_>, n: usize) {
+        for _ in 0..n {
+            assert!(!session.tick(gfx, 1.0 / 60.0, &[], Mouse::default(), |_| false));
+        }
+    }
+
+    /// Several colours, not all black: a picture.
+    fn assert_a_picture(colours: &std::collections::HashSet<Vec<u8>>, when: &str) {
+        assert!(
+            colours.len() >= 4 && colours.iter().any(|c| c[..3].iter().any(|&b| b > 0)),
+            "{when}: the renderer shows no picture: {colours:?}"
+        );
+    }
+
+    /// The owner's PS2 BIOS (FR-NEW-1): wLaunchELF boots on LRPS2 through a PS2 session beside
+    /// the opengl renderer, and its picture shows on the renderer. Save State slot 1 saves and
+    /// loads, and after quitting, slot 1 and the Resume State restore in the next session.
+    /// Frames run with LRPS2's fastmem on (its SIGSEGV handler beside Rust's).
+    #[test]
+    #[ignore = "needs a PS2 BIOS dump in /home/matei/Game37/.testdata/bios/pcsx2/bios"]
+    fn needs_ps2_bios_lrps2_boots_wlaunchelf_on_the_renderer_and_states_round_trip() {
+        use crate::ui::text::Fonts;
+
+        let _serial = serial();
+        let (root, data, ctx, elf) = ps2_world();
+        fs::create_dir_all(root.path().join("bios")).unwrap();
+        std::os::unix::fs::symlink(
+            Path::new(TESTDATA).join("bios/pcsx2"),
+            root.path().join("bios/pcsx2"),
+        )
+        .unwrap();
+        assert!(
+            cores::PS2_BIOS.found(root.path()).is_some(),
+            "a PS2 BIOS dump of 4 to 8 MiB"
+        );
+        let (_sdl, canvas) = offscreen_renderer();
+        let creator = canvas.texture_creator();
+        let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
+        let shot = data.path().join("shot.bmp");
+        let game = ps2_game(elf);
+
+        let mut session = Session::start(
+            &Play::resume(game.clone()),
+            &ctx,
+            gfx.gl_context(),
+            None,
+            Some(60.0),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        tick_n(&mut session, &mut gfx, 1200);
+        assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "booted");
+
+        session.save_slot(1).unwrap_or_else(|e| panic!("save: {e}"));
+        tick_n(&mut session, &mut gfx, 120);
+        session.load_slot(1).unwrap_or_else(|e| panic!("load: {e}"));
+        tick_n(&mut session, &mut gfx, 60);
+        assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "loaded");
+        session.write_resume();
+        let resume = session.states.resume();
+        drop(session);
+        assert!(
+            fs::metadata(&resume).is_ok_and(|m| m.len() > 0),
+            "the Resume State"
+        );
+
+        let from_slot = Play {
+            game,
+            start: Start::Slot(1),
+        };
+        let mut session = Session::start(&from_slot, &ctx, gfx.gl_context(), None, Some(60.0))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(session.start_message, None, "slot 1 restored in a new session");
+        tick_n(&mut session, &mut gfx, 60);
+        assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "from slot 1");
+        let state = fs::read(&resume).unwrap();
+        session
+            .core
+            .unserialize(&state)
+            .unwrap_or_else(|e| panic!("resume: {e}"));
+        tick_n(&mut session, &mut gfx, 60);
+        assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "resumed");
+    }
+
     #[test]
     fn sdl_cores_get_no_host_without_a_frontend_context() {
         assert!(open_gl(&cores::MESEN, None, None, "NES").unwrap().is_none());
