@@ -653,8 +653,14 @@ mod tests {
         let ps2 = format!(
             "PlayStation 2 needs a BIOS file: put your own BIOS dump, any file name, in {bios}/pcsx2/bios/."
         );
-        assert_eq!(bios_note(&model(dir.path(), &["nes", "ps1"])), [ps1.clone()]);
-        assert_eq!(bios_note(&model(dir.path(), &["ps2", "psp"])), [ps2.clone()]);
+        assert_eq!(
+            bios_note(&model(dir.path(), &["nes", "ps1"])),
+            std::slice::from_ref(&ps1)
+        );
+        assert_eq!(
+            bios_note(&model(dir.path(), &["ps2", "psp"])),
+            std::slice::from_ref(&ps2)
+        );
         assert_eq!(
             bios_note(&model(dir.path(), &["nes", "ps1", "ps2", "psp"])),
             [ps1, ps2],
