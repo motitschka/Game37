@@ -172,7 +172,7 @@ impl Search {
     /// Options or a right-click on a result opens its Options Menu (FR-DET-3).
     fn options(&self, ctx: &Ctx) -> Transition {
         match self.games.get(self.grid_focus) {
-            Some(game) => Transition::Push(Box::new(OptionsMenu::new(game.clone(), &ctx.games_root))),
+            Some(game) => Transition::Push(Box::new(OptionsMenu::new(game.clone(), ctx))),
             None => Transition::None,
         }
     }

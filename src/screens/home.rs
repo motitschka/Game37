@@ -255,9 +255,7 @@ impl Home {
     fn options(&self, ctx: &Ctx) -> Transition {
         let row = &self.shelves[self.focus.shelf];
         match item_at(row.games.len(), self.focus.col()) {
-            Item::Game(i) => {
-                Transition::Push(Box::new(OptionsMenu::new(row.games[i].clone(), &ctx.games_root)))
-            }
+            Item::Game(i) => Transition::Push(Box::new(OptionsMenu::new(row.games[i].clone(), ctx))),
             _ => Transition::None,
         }
     }

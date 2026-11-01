@@ -944,7 +944,7 @@ mod tests {
             .unwrap()
             .remove(0);
         let mut nav = Nav::single(Box::new(Stub::new("Home")));
-        nav.push(Box::new(OptionsMenu::new(game.clone(), &ctx.games_root)));
+        nav.push(Box::new(OptionsMenu::new(game.clone(), &ctx)));
         let mut controls = Controls::new(InputKind::Keyboard);
         let press = |key| {
             [

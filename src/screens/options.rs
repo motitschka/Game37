@@ -158,6 +158,9 @@ pub struct OptionsMenu {
     /// The Core's name when it keeps In-game Saves every Game of the System shares
     /// ([`InGameSaves::Shared`]), so there is no In-game Save to delete.
     own_saves: Option<&'static str>,
+    /// The Display Title of another Game in the library whose Core names its In-game Save file
+    /// the same ([`InGameSaves::PerGame`], same file stem), so it can't be deleted on its own.
+    shared_with: Option<String>,
     /// What a confirmed delete did, left by the confirmation for the next tick to show.
     deleted: Rc<RefCell<Option<Result<(), String>>>>,
     /// The slots' times and screenshots, slot 1 first, `None` when empty: read on a thread when
@@ -180,14 +183,15 @@ pub struct OptionsMenu {
 }
 
 impl OptionsMenu {
-    /// The menu for `game`, its Save State slots read from under `games_root`.
-    pub fn new(game: GameRow, games_root: &Path) -> OptionsMenu {
+    /// The menu for `game`, its Save State slots read from under `ctx.games_root`.
+    pub fn new(game: GameRow, ctx: &Ctx) -> OptionsMenu {
         let core = systems::by_id(&game.system).and_then(cores::for_system);
-        OptionsMenu::with_core(game, games_root, core)
+        OptionsMenu::with_core(game, ctx, core)
     }
 
     /// [`OptionsMenu::new`] with `core` as the Game's System's Core, if it has one.
-    fn with_core(game: GameRow, games_root: &Path, core: Option<&'static CoreInfo>) -> OptionsMenu {
+    fn with_core(game: GameRow, ctx: &Ctx, core: Option<&'static CoreInfo>) -> OptionsMenu {
+        let games_root = ctx.games_root.as_path();
         let system = systems::by_id(&game.system);
         let short = system.map_or("?", |s| s.short);
         let meta = match game.playtime_secs {
@@ -221,6 +225,10 @@ impl OptionsMenu {
         let own_saves = core
             .filter(|core| core.saves == InGameSaves::Shared)
             .map(|core| core.name);
+        let shared_with = match kept {
+            InGameSaves::PerGame { .. } => shared_save_game(ctx, &game, rel_path),
+            InGameSaves::SaveMemory | InGameSaves::Shared => None,
+        };
         let (filled, resume_when, srm_when) = if embedded {
             read_save_data(&states, srm.as_deref())
         } else {
@@ -239,6 +247,7 @@ impl OptionsMenu {
             states,
             srm,
             own_saves,
+            shared_with,
             deleted: Rc::default(),
             slots: Vec::new(),
             reading: None,
@@ -271,7 +280,9 @@ impl OptionsMenu {
         match what {
             SaveData::ResumeState => self.resume_when.is_some(),
             SaveData::SaveStates => self.filled() > 0,
-            SaveData::InGameSave => self.own_saves.is_none() && self.srm_when.is_some(),
+            SaveData::InGameSave => {
+                self.own_saves.is_none() && self.shared_with.is_none() && self.srm_when.is_some()
+            }
             SaveData::Everything => DELETE_ROWS[..3].iter().any(|&w| self.has(w)),
         }
     }
@@ -286,9 +297,10 @@ impl OptionsMenu {
                 0 => none(),
                 n => format!("{n} of {SLOTS}"),
             }),
-            SaveData::InGameSave => Some(match self.own_saves {
-                Some(core) => format!("Kept by {core}"),
-                None => self.srm_when.clone().unwrap_or_else(none),
+            SaveData::InGameSave => Some(match (self.own_saves, &self.shared_with) {
+                (Some(core), _) => format!("Kept by {core}"),
+                (None, Some(title)) => format!("Shared with {title}"),
+                (None, None) => self.srm_when.clone().unwrap_or_else(none),
             }),
             SaveData::Everything => None,
         }
@@ -306,7 +318,9 @@ impl OptionsMenu {
             SaveData::Everything => "Delete all save data?".to_owned(),
         };
         let body = self.delete_body(what);
-        let (states, srm, deleted) = (self.states.clone(), self.srm.clone(), self.deleted.clone());
+        // A save file shared with another Game is never deleted, even under Everything.
+        let srm = self.srm.clone().filter(|_| self.shared_with.is_none());
+        let (states, deleted) = (self.states.clone(), self.deleted.clone());
         // Hold mode (the owner's call): the row that opens this is itself chosen with Confirm, so
         // a double tap must not also delete it (see `screens::confirm` module docs).
         Confirm::hold(title, body, "Delete", "Hold to delete", move |ctx| {
@@ -318,21 +332,27 @@ impl OptionsMenu {
 
     /// The line under the confirmation's question before deleting `what`.
     fn delete_body(&self, what: SaveData) -> String {
-        match (what, self.own_saves) {
-            (SaveData::ResumeState, _) => {
+        match what {
+            SaveData::ResumeState => {
                 "The next launch starts from power-on. Your In-game Save and Save States stay.".to_owned()
             }
-            (SaveData::SaveStates, _) => "They are deleted for good, with their screenshots.".to_owned(),
-            (SaveData::InGameSave, _) => "Your in-game progress is deleted for good, and so is the Resume \
+            SaveData::SaveStates => "They are deleted for good, with their screenshots.".to_owned(),
+            SaveData::InGameSave => "Your in-game progress is deleted for good, and so is the Resume \
                  State. The next launch starts a new save file."
                 .to_owned(),
-            (SaveData::Everything, None) => "The In-game Save, the Resume State and every Save State are \
-                 deleted for good. The next launch starts a new save file."
-                .to_owned(),
-            (SaveData::Everything, Some(core)) => format!(
-                "The Resume State and every Save State are deleted for good. In-game Saves stay: \
-                 {core} keeps them itself."
-            ),
+            SaveData::Everything => match (self.own_saves, &self.shared_with) {
+                (None, None) => "The In-game Save, the Resume State and every Save State are \
+                     deleted for good. The next launch starts a new save file."
+                    .to_owned(),
+                (Some(core), _) => format!(
+                    "The Resume State and every Save State are deleted for good. In-game Saves stay: \
+                     {core} keeps them itself."
+                ),
+                (None, Some(title)) => format!(
+                    "The Resume State and every Save State are deleted for good. In-game Saves stay: \
+                     shared with {title}."
+                ),
+            },
         }
     }
 
@@ -782,6 +802,19 @@ fn read_save_data(states: &StatePaths, srm: Option<&Path>) -> (Vec<bool>, Option
     (filled, written(&states.resume()), srm.and_then(written))
 }
 
+/// The Display Title of another Game of `game`'s System in the library whose file has the same
+/// stem ([`saves::per_game_stem`]), so an `InGameSaves::PerGame` Core would name its In-game Save
+/// file the same for both. `None` when no other Game shares it.
+fn shared_save_game(ctx: &Ctx, game: &GameRow, rel_path: &Path) -> Option<String> {
+    let stem = saves::per_game_stem(rel_path);
+    ctx.library
+        .system_games(&game.system, Default::default())
+        .ok()?
+        .into_iter()
+        .find(|other| other.id != game.id && saves::per_game_stem(Path::new(&other.rel_path)) == stem)
+        .map(|other| other.title)
+}
+
 /// A delete view row's name.
 fn delete_label(what: SaveData) -> &'static str {
     match what {
@@ -1027,7 +1060,7 @@ mod tests {
     #[test]
     fn favorite_toggles_and_the_menu_closes() {
         let (_dir, mut ctx, games) = world(1);
-        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx);
         assert_eq!(menu.focused(), Item::Favorite, "focus starts on Favorite");
         assert_eq!(Item::Favorite.label(menu.game.favorite), "Add to favorites");
         let revision = ctx.revision;
@@ -1038,7 +1071,7 @@ mod tests {
         assert!(fresh(&ctx, &games[0]).favorite);
         assert!(ctx.revision > revision, "screens reload");
 
-        let mut menu = OptionsMenu::new(fresh(&ctx, &games[0]), &ctx.games_root);
+        let mut menu = OptionsMenu::new(fresh(&ctx, &games[0]), &ctx);
         assert_eq!(Item::Favorite.label(menu.game.favorite), "Remove from favorites");
         assert!(matches!(
             act(&mut menu, &mut ctx, Action::Confirm),
@@ -1053,7 +1086,7 @@ mod tests {
         for (i, game) in games[..5].iter().enumerate() {
             ctx.library.set_favorite(game.id, true, i as i64).unwrap();
         }
-        let menu = OptionsMenu::new(games[5].clone(), &ctx.games_root);
+        let menu = OptionsMenu::new(games[5].clone(), &ctx);
         (dir, ctx, games, menu)
     }
 
@@ -1136,7 +1169,7 @@ mod tests {
         ctx.library
             .sync_system("snes", &found(&[1, 2, 3, 4, 5]), 0)
             .unwrap();
-        let mut menu = OptionsMenu::new(fresh(&ctx, &games[5]), &ctx.games_root);
+        let mut menu = OptionsMenu::new(fresh(&ctx, &games[5]), &ctx);
         act(&mut menu, &mut ctx, Action::Confirm);
         for _ in 0..4 {
             act(&mut menu, &mut ctx, Action::Down);
@@ -1204,7 +1237,7 @@ mod tests {
     #[test]
     fn an_action_that_cant_be_chosen_is_listed_but_not_selectable() {
         let (_dir, mut ctx, games) = world(1);
-        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx);
         use Item::*;
         assert_eq!(
             menu.items(),
@@ -1252,12 +1285,12 @@ mod tests {
     fn choose_artwork_opens_the_artwork_picker_over_the_menu_and_back_returns_to_it() {
         use crate::ui::nav::{Flow, Hits, Nav};
         let (_dir, mut ctx, games) = world(1);
-        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx);
         act(&mut menu, &mut ctx, Action::Down);
         act(&mut menu, &mut ctx, Action::Down);
         assert_eq!(menu.focused(), Item::ChooseArtwork);
         assert!(menu.enabled(Item::ChooseArtwork));
-        let mut nav = Nav::single(Box::new(OptionsMenu::new(games[0].clone(), &ctx.games_root)));
+        let mut nav = Nav::single(Box::new(OptionsMenu::new(games[0].clone(), &ctx)));
         nav.push(Box::new(menu));
         let press = |nav: &mut Nav, ctx: &mut Ctx, action| {
             assert_eq!(
@@ -1281,8 +1314,10 @@ mod tests {
         let mut game = world(1).2.remove(0);
         game.system = "gc".into();
         use Item::*;
+        let mut ctx = Ctx::empty();
+        ctx.games_root = PathBuf::from("/nonexistent");
         assert_eq!(
-            OptionsMenu::new(game, Path::new("/nonexistent")).items(),
+            OptionsMenu::new(game, &ctx).items(),
             [Favorite, ChooseArtwork, Rename, Hide, ShowFile]
         );
     }
@@ -1323,7 +1358,7 @@ mod tests {
     fn slot_screenshots_are_read_off_the_ui_thread_once_the_slot_picker_opens() {
         let (_dir, mut ctx, games) = world(1);
         fill_slots(&ctx, &games[0], &[2, 3]);
-        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx);
         assert_eq!(menu.filled(), 2, "the count needs no screenshot");
         assert!(menu.slots.is_empty() && menu.uploads.is_empty() && !menu.busy());
         act(&mut menu, &mut ctx, Action::Down);
@@ -1339,7 +1374,7 @@ mod tests {
     #[test]
     fn load_save_state_cant_be_chosen_without_a_filled_slot() {
         let (_dir, mut ctx, games) = world(1);
-        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx);
         assert!(!menu.enabled(Item::LoadSaveState));
         menu.item_hits = vec![(Rect::new(PANEL_X, 338.0, 100.0, 72.0), 1)];
         assert!(matches!(
@@ -1349,7 +1384,7 @@ mod tests {
         assert_eq!(menu.view(), View::List, "no slot picker opens");
 
         fill_slots(&ctx, &games[0], &[3]);
-        let menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        let menu = OptionsMenu::new(games[0].clone(), &ctx);
         assert!(menu.enabled(Item::LoadSaveState), "one filled slot is enough");
     }
 
@@ -1357,7 +1392,7 @@ mod tests {
     fn the_slot_picker_lists_the_filled_slots_and_skips_the_empty_one() {
         let (_dir, mut ctx, games) = world(1);
         fill_slots(&ctx, &games[0], &[1, 3]);
-        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx);
         act(&mut menu, &mut ctx, Action::Down);
         assert_eq!(menu.focused(), Item::LoadSaveState);
         assert!(matches!(
@@ -1412,7 +1447,7 @@ mod tests {
         let (dir, mut ctx, games) = world(1);
         install_snes_core(&mut ctx, dir.path());
         fill_slots(&ctx, &games[0], &[2]);
-        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx);
         act(&mut menu, &mut ctx, Action::Down);
         act(&mut menu, &mut ctx, Action::Confirm);
         assert_eq!(menu.picked(), 1, "focus starts on the first filled slot");
@@ -1427,7 +1462,7 @@ mod tests {
         assert_eq!(ctx.play.take(), Some(want.clone()));
 
         // A click on the slot does the same.
-        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx);
         act(&mut menu, &mut ctx, Action::Down);
         act(&mut menu, &mut ctx, Action::Confirm);
         menu.pick_hits = vec![(Rect::new(PANEL_X, 466.0, 100.0, 160.0), 1)];
@@ -1444,7 +1479,7 @@ mod tests {
         ctx.data_dir = dir.path().join("data");
         ctx.start_download = Box::new(crate::cores::testing::spawn_failing);
         fill_slots(&ctx, &games[0], &[1]);
-        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx);
         act(&mut menu, &mut ctx, Action::Down);
         act(&mut menu, &mut ctx, Action::Confirm);
         assert!(matches!(
@@ -1459,7 +1494,7 @@ mod tests {
         let (dir, mut ctx, games) = world(1);
         install_snes_core(&mut ctx, dir.path());
         fill_slots(&ctx, &games[0], &[1, 2]);
-        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx);
         act(&mut menu, &mut ctx, Action::Down);
         act(&mut menu, &mut ctx, Action::Confirm);
         act(&mut menu, &mut ctx, Action::Down);
@@ -1483,7 +1518,7 @@ mod tests {
     fn start_from_power_on_asks_to_play_the_game_from_power_on_and_closes_the_menu() {
         let (dir, mut ctx, games) = world(1);
         install_snes_core(&mut ctx, dir.path());
-        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx);
         assert!(menu.enabled(Item::StartFromPowerOn), "even with no save data");
         act(&mut menu, &mut ctx, Action::Down);
         assert_eq!(menu.focused(), Item::StartFromPowerOn);
@@ -1575,10 +1610,10 @@ mod tests {
         ];
         for (what, fill) in cases {
             let (_dir, ctx, games) = world(1);
-            let menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+            let menu = OptionsMenu::new(games[0].clone(), &ctx);
             assert!(!menu.enabled(Item::DeleteSaveData), "nothing yet");
             fill(&ctx, &games[0]);
-            let menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+            let menu = OptionsMenu::new(games[0].clone(), &ctx);
             assert!(menu.enabled(Item::DeleteSaveData), "{what}");
         }
     }
@@ -1588,7 +1623,7 @@ mod tests {
         let (_dir, mut ctx, games) = world(1);
         write_saves(&ctx, &games[0], true, false);
         fill_slots(&ctx, &games[0], &[1, 3]);
-        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx);
         open_delete(&mut menu, &mut ctx);
         assert_eq!(menu.hints()[0], Hint::new(&[Action::Confirm], "Delete"));
         let subs = delete_subs(&menu);
@@ -1620,7 +1655,7 @@ mod tests {
         let before = files(&ctx);
         assert_eq!(before.len(), 4);
         let revision = ctx.revision;
-        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx);
         open_delete(&mut menu, &mut ctx);
         for row in 0..DELETE_ROWS.len() {
             menu.pick = row;
@@ -1635,7 +1670,7 @@ mod tests {
     fn deleting_the_save_states_shows_what_is_left() {
         let (_dir, mut ctx, games) = world(1);
         fill_slots(&ctx, &games[0], &[2]);
-        let menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        let menu = OptionsMenu::new(games[0].clone(), &ctx);
         assert_eq!(
             menu.confirm_delete(SaveData::SaveStates).title(),
             "Delete the Save State?"
@@ -1643,7 +1678,7 @@ mod tests {
 
         write_saves(&ctx, &games[0], true, false);
         fill_slots(&ctx, &games[0], &[1, 3]);
-        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx);
         open_delete(&mut menu, &mut ctx);
         act(&mut menu, &mut ctx, Action::Down);
         let revision = ctx.revision;
@@ -1667,7 +1702,7 @@ mod tests {
         let (_dir, mut ctx, games) = world(1);
         write_saves(&ctx, &games[0], true, true);
         fill_slots(&ctx, &games[0], &[1, 2, 3]);
-        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx);
         open_delete(&mut menu, &mut ctx);
         for _ in 0..3 {
             act(&mut menu, &mut ctx, Action::Down);
@@ -1699,7 +1734,7 @@ mod tests {
         let game = ctx.library.system_games("psp", SortOrder::AZ).unwrap().remove(0);
         // A stray `.srm`, which PPSSPP never reads.
         write_saves(&ctx, &game, true, true);
-        let mut menu = OptionsMenu::new(game, &ctx.games_root);
+        let mut menu = OptionsMenu::new(game, &ctx);
         open_delete(&mut menu, &mut ctx);
         assert_eq!(pickable_rows(&menu), [true, false, false, true]);
         assert_eq!(delete_subs(&menu)[2].as_deref(), Some("Kept by PPSSPP"));
@@ -1720,13 +1755,13 @@ mod tests {
         // The Resume State, and a stray `.srm` this Core never reads.
         write_saves(&ctx, &games[0], true, true);
         let card = ctx.games_root.join("saves/snes/G0.ps2");
-        let mut menu = OptionsMenu::with_core(games[0].clone(), &ctx.games_root, Some(core));
+        let mut menu = OptionsMenu::with_core(games[0].clone(), &ctx, Some(core));
         open_delete(&mut menu, &mut ctx);
         assert_eq!(pickable_rows(&menu), [true, false, false, true], "no card yet");
         assert_eq!(delete_subs(&menu)[2].as_deref(), Some("None"));
 
         saves::write(&card, b"card").unwrap();
-        let mut menu = OptionsMenu::with_core(games[0].clone(), &ctx.games_root, Some(core));
+        let mut menu = OptionsMenu::with_core(games[0].clone(), &ctx, Some(core));
         open_delete(&mut menu, &mut ctx);
         assert_eq!(pickable_rows(&menu), [true, false, true, true]);
         let sub = delete_subs(&menu)[2].clone().unwrap();
@@ -1743,12 +1778,91 @@ mod tests {
         );
     }
 
+    /// Two Games of the same System and the Core they share: `core` keeps one file per Game file
+    /// stem (FR-EMB-15), so a card shared by stem.
+    fn per_game_core() -> &'static CoreInfo {
+        Box::leak(Box::new(CoreInfo {
+            name: "Card Core",
+            saves: InGameSaves::PerGame { extension: "ps2" },
+            ..cores::MESEN
+        }))
+    }
+
+    #[test]
+    fn a_game_sharing_its_per_game_save_with_another_cant_delete_it_alone_and_everything_keeps_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = dir.path().join("Games");
+        let found = [
+            FoundGame {
+                system: "snes",
+                rel_path: "snes/USA/Game.sfc".into(),
+                title: "Game (USA)".into(),
+            },
+            FoundGame {
+                system: "snes",
+                rel_path: "snes/Europe/Game.sfc".into(),
+                title: "Game (Europe)".into(),
+            },
+        ];
+        ctx.library.sync_system("snes", &found, 0).unwrap();
+        let games = ctx.library.system_games("snes", SortOrder::AZ).unwrap();
+        let core = per_game_core();
+        let card = ctx.games_root.join("saves/snes/Game.ps2");
+        saves::write(&card, b"card").unwrap();
+        write_saves(&ctx, &games[0], true, false);
+
+        let mut menu = OptionsMenu::with_core(games[0].clone(), &ctx, Some(core));
+        open_delete(&mut menu, &mut ctx);
+        assert_eq!(
+            delete_subs(&menu)[2].as_deref(),
+            Some("Shared with Game (USA)"),
+            "games[0] is \"Game (Europe)\" (AZ order), games[1] \"Game (USA)\""
+        );
+        assert_eq!(
+            pickable_rows(&menu),
+            [true, false, false, true],
+            "the shared In-game Save can't be chosen on its own"
+        );
+
+        for _ in 0..3 {
+            act(&mut menu, &mut ctx, Action::Down);
+        }
+        let (title, _) = answer(&mut menu, &mut ctx, true);
+        assert_eq!(title, "Delete all save data?");
+        assert!(card.exists(), "Everything leaves the shared card");
+        assert!(
+            !StatePaths::new(&ctx.games_root, "snes", Path::new(&games[0].rel_path))
+                .resume()
+                .exists(),
+            "the Resume State is still deleted"
+        );
+    }
+
+    #[test]
+    fn a_game_with_a_unique_per_game_save_stem_still_deletes_it() {
+        let (_dir, mut ctx, games) = world(2);
+        let core = per_game_core();
+        let card = ctx.games_root.join("saves/snes/G0.ps2");
+        saves::write(&card, b"card").unwrap();
+
+        let mut menu = OptionsMenu::with_core(games[0].clone(), &ctx, Some(core));
+        open_delete(&mut menu, &mut ctx);
+        let sub = delete_subs(&menu)[2].clone().unwrap();
+        assert!(sub != "None" && !sub.starts_with("Shared with"), "{sub}");
+        assert_eq!(pickable_rows(&menu), [false, false, true, true]);
+        menu.pick = 2;
+        let (title, _) = answer(&mut menu, &mut ctx, true);
+        assert_eq!(title, "Delete the In-game Save?");
+        assert!(!card.exists(), "no other Game shares its stem");
+    }
+
     #[test]
     fn deleting_the_in_game_save_takes_the_resume_state_and_a_failure_says_so() {
         let (_dir, mut ctx, games) = world(1);
         write_saves(&ctx, &games[0], true, true);
         fill_slots(&ctx, &games[0], &[1]);
-        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx);
         open_delete(&mut menu, &mut ctx);
         menu.pick = 2;
         let (title, _) = answer(&mut menu, &mut ctx, true);
@@ -1761,7 +1875,7 @@ mod tests {
         let states = StatePaths::new(&ctx.games_root, "snes", rel);
         std::fs::create_dir(states.resume()).unwrap();
         write_saves(&ctx, &games[0], false, true);
-        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx);
         open_delete(&mut menu, &mut ctx);
         menu.pick = 2;
         match answer(&mut menu, &mut ctx, true).1 {
@@ -1778,7 +1892,7 @@ mod tests {
     fn hide_hides_the_game_and_unfavorites_it() {
         let (_dir, mut ctx, games) = world(2);
         ctx.library.set_favorite(games[0].id, true, 0).unwrap();
-        let mut menu = OptionsMenu::new(fresh(&ctx, &games[0]), &ctx.games_root);
+        let mut menu = OptionsMenu::new(fresh(&ctx, &games[0]), &ctx);
         for _ in 0..4 {
             act(&mut menu, &mut ctx, Action::Down);
         }
@@ -1798,7 +1912,7 @@ mod tests {
     #[test]
     fn show_file_asks_for_the_games_file_and_a_folder_game_for_its_folder() {
         let (_dir, mut ctx, games) = world(1);
-        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx);
         for _ in 0..5 {
             act(&mut menu, &mut ctx, Action::Down);
         }
@@ -1818,7 +1932,7 @@ mod tests {
         std::fs::create_dir_all(folder.join("PS3_GAME")).unwrap();
         ctx.scan_all(0).unwrap();
         let game = ctx.library.system_games("ps3", SortOrder::AZ).unwrap().remove(0);
-        let mut menu = OptionsMenu::new(game, &ctx.games_root);
+        let mut menu = OptionsMenu::new(game, &ctx);
         let at = (PANEL_X + 10.0, 600.0);
         menu.item_hits = vec![(Rect::new(PANEL_X, 590.0, 100.0, 50.0), menu.items().len() - 1)];
         menu.handle(Input::Pointer(Pointer::Click { x: at.0, y: at.1 }), &mut ctx);
@@ -1828,7 +1942,7 @@ mod tests {
     #[test]
     fn back_or_a_click_outside_the_panel_closes_the_menu_and_changes_nothing() {
         let (_dir, mut ctx, games) = world(1);
-        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx);
         let revision = ctx.revision;
         assert!(matches!(act(&mut menu, &mut ctx, Action::Back), Transition::Pop));
         let outside = Input::Pointer(Pointer::Click {
@@ -1847,7 +1961,7 @@ mod tests {
         let snes = ctx.games_root.join("snes");
         std::fs::create_dir_all(&snes).unwrap();
         std::fs::write(snes.join("G0.sfc"), b"not a game").unwrap();
-        let mut menu = OptionsMenu::new(games[0].clone(), &ctx.games_root);
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx);
         for _ in 0..3 {
             act(&mut menu, &mut ctx, Action::Down);
         }
@@ -1925,7 +2039,7 @@ mod tests {
         for typed in ["", "   ", " G0 "] {
             let (_dir, mut ctx, game, _) = renaming();
             ctx.library.rename(game.id, Some("Mine".into())).unwrap();
-            let mut menu = OptionsMenu::new(fresh(&ctx, &game), &ctx.games_root);
+            let mut menu = OptionsMenu::new(fresh(&ctx, &game), &ctx);
             for _ in 0..3 {
                 act(&mut menu, &mut ctx, Action::Down);
             }
@@ -1983,11 +2097,8 @@ mod tests {
         use sdl3::keyboard::Keycode;
         let (_dir, mut ctx, game, menu) = renaming();
         let mut nav = Nav::with_tabs(vec![
-            ("Home", Box::new(OptionsMenu::new(game.clone(), &ctx.games_root))),
-            (
-                "Consoles",
-                Box::new(OptionsMenu::new(game.clone(), &ctx.games_root)),
-            ),
+            ("Home", Box::new(OptionsMenu::new(game.clone(), &ctx))),
+            ("Consoles", Box::new(OptionsMenu::new(game.clone(), &ctx))),
         ]);
         nav.push(Box::new(menu));
         let mut controls = Controls::new(InputKind::Keyboard);

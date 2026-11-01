@@ -49,13 +49,19 @@ pub fn in_game_save_path(
         InGameSaves::SaveMemory => Some(srm_path(games_root, system, rel_path)),
         InGameSaves::Shared => None,
         InGameSaves::PerGame { extension } => {
-            let stem = rel_path.file_stem().unwrap_or(rel_path.as_os_str());
-            let mut name = stem.to_owned();
+            let mut name = per_game_stem(rel_path);
             name.push(".");
             name.push(extension);
             Some(save_dir(games_root, system).join(name))
         }
     }
+}
+
+/// The stem a [`InGameSaves::PerGame`] Core names its save file after: the Game file's stem
+/// alone, with no subfolder. Two Games of the same System whose files have this stem in common
+/// (e.g. different Regions, or `.iso` and `.chd` of the same Game) share one save file.
+pub fn per_game_stem(rel_path: &Path) -> std::ffi::OsString {
+    rel_path.file_stem().unwrap_or(rel_path.as_os_str()).to_owned()
 }
 
 /// Copies the save file at `path`, if there is one, into the Core's save memory. On a size

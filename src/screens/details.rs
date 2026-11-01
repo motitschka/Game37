@@ -297,7 +297,7 @@ impl DetailsPage {
     }
 
     fn options(&self, ctx: &Ctx) -> Transition {
-        Transition::Push(Box::new(OptionsMenu::new(self.game.clone(), &ctx.games_root)))
+        Transition::Push(Box::new(OptionsMenu::new(self.game.clone(), ctx)))
     }
 
     fn draw_play(&self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
