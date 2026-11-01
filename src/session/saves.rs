@@ -64,6 +64,29 @@ pub fn per_game_stem(rel_path: &Path) -> std::ffi::OsString {
     rel_path.file_stem().unwrap_or(rel_path.as_os_str()).to_owned()
 }
 
+/// Gives the Game at `rel_path` a new save file before its first start where its Core would
+/// otherwise make one a Game can't use: LRPS2's memory card (`.ps2`), which LRPS2 makes
+/// unformatted and some Games hang on (see [`super::ps2_card`]). A file already there, the
+/// player's saves, is left as it is. Returns whether it wrote one.
+pub fn give_first_save(
+    kept: InGameSaves,
+    games_root: &Path,
+    system: &str,
+    rel_path: &Path,
+) -> io::Result<bool> {
+    let InGameSaves::PerGame { extension: "ps2" } = kept else {
+        return Ok(false);
+    };
+    let Some(path) = in_game_save_path(kept, games_root, system, rel_path) else {
+        return Ok(false);
+    };
+    if fs::symlink_metadata(&path).is_ok() {
+        return Ok(false);
+    }
+    write(&path, &super::ps2_card::formatted())?;
+    Ok(true)
+}
+
 /// Copies the save file at `path`, if there is one, into the Core's save memory. On a size
 /// mismatch the overlap is copied and the mismatch logged. Returns whether a file was loaded.
 pub fn load(path: &Path, ram: &mut [u8]) -> io::Result<bool> {
@@ -150,6 +173,41 @@ impl Tracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_ps2_game_gets_a_formatted_memory_card_before_its_first_start() {
+        let root = tempfile::TempDir::new().unwrap();
+        let kept = InGameSaves::PerGame { extension: "ps2" };
+        let rel = Path::new("ps2/Game (Europe).iso");
+        assert!(give_first_save(kept, root.path(), "ps2", rel).unwrap());
+        let card = fs::read(root.path().join("saves/ps2/Game (Europe).ps2")).unwrap();
+        assert_eq!(card, super::super::ps2_card::formatted());
+        assert!(!tmp_path(&root.path().join("saves/ps2/Game (Europe).ps2")).exists());
+    }
+
+    #[test]
+    fn a_memory_card_already_there_is_kept() {
+        let root = tempfile::TempDir::new().unwrap();
+        let card = root.path().join("saves/ps2/Game.ps2");
+        fs::create_dir_all(card.parent().unwrap()).unwrap();
+        fs::write(&card, b"the player's saves").unwrap();
+        let kept = InGameSaves::PerGame { extension: "ps2" };
+        assert!(!give_first_save(kept, root.path(), "ps2", Path::new("ps2/Game.iso")).unwrap());
+        assert_eq!(fs::read(&card).unwrap(), b"the player's saves");
+    }
+
+    #[test]
+    fn other_cores_saves_are_left_to_them() {
+        let root = tempfile::TempDir::new().unwrap();
+        for kept in [
+            InGameSaves::SaveMemory,
+            InGameSaves::Shared,
+            InGameSaves::PerGame { extension: "sav" },
+        ] {
+            assert!(!give_first_save(kept, root.path(), "x", Path::new("x/Game.bin")).unwrap());
+        }
+        assert!(!root.path().join("saves").exists());
+    }
 
     #[test]
     fn the_save_file_is_named_after_the_game_file_in_its_systems_saves_folder() {

@@ -254,6 +254,10 @@ impl Session {
             fs::create_dir_all(dir)
                 .map_err(|e| StartError::generic(fail(&format!("Can't create {}: {e}", dir.display()))))?;
         }
+        // Before the Core loads, or it makes its own (an unformatted PS2 memory card).
+        let rel_path = Path::new(&game.rel_path);
+        saves::give_first_save(core_info.saves, root, system.id, rel_path)
+            .map_err(|e| StartError::generic(fail(&format!("Can't write its memory card: {e}"))))?;
         let core_path = cores::installed_path(&ctx.data_dir, core_info);
         let game_path = root.join(&game.rel_path);
         let options = core_options(ctx, system, core_info, &game_path);
