@@ -43,13 +43,34 @@ pub struct CoreInfo {
 
 /// A Core's touch screen, one of two screens it shows in one frame (FR-DS-1–3, FR-NEW-2): the
 /// mouse touches it through `RETRO_DEVICE_POINTER` over the whole frame, the mouse cursor shows,
-/// and Game37's swap control (R3, Tab) swaps which screen is large.
+/// Game37's swap control (a pad's R3, Tab) swaps which screen is large, and the right stick moves
+/// a cursor the Core draws on it, which taps on `tap`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TouchScreen {
-    /// The RetroPad button the Core swaps its screens on, which Game37's swap control presses:
-    /// R3 for melonDS DS, L3 for Azahar (its own swap hotkey; it reads no R3). A pad's R3 reaches
-    /// the Core as this button instead.
-    pub swap: Button,
+    /// How Game37's swap control reaches the Core.
+    pub swap: Swap,
+    /// The RetroPad button the Core's right-stick cursor taps on: R2 on melonDS DS (its "Touch
+    /// Joystick"; the DS has no R2 of its own), R3 on Azahar (its "Touch Screen Touch").
+    pub tap: Button,
+    /// The pad button that reaches the Core as `tap`: R2 itself on DS, L3 on 3DS, whose R2 is ZR
+    /// and whose R3 is Game37's swap. On DS L3 stays L3, melonDS DS's microphone.
+    pub tap_with: Button,
+}
+
+/// How Game37's swap control reaches a Core (FR-DS-2, FR-NEW-2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Swap {
+    /// The Core swaps on this RetroPad button, held while the swap control is: melonDS DS's
+    /// "Next Screen Layout", R3, which cycles its two layouts.
+    Button(Button),
+    /// The Core swaps when the option `key` changes during play, from `values[0]`, the value the
+    /// Game starts with, to `values[1]` and back, once per press of the swap control: Azahar's
+    /// `citra_swap_screen`, its prominent screen. Its own swap button, L3, is also the 3DS HOME
+    /// button, so it never sees L3 pressed.
+    Option {
+        key: &'static str,
+        values: [&'static str; 2],
+    },
 }
 
 /// How a Core keeps a Game's In-game Saves, all under the save directory it is given,
@@ -320,7 +341,11 @@ pub static MELONDS_DS: CoreInfo = CoreInfo {
     bios: None,
     assets: None,
     saves: InGameSaves::SaveMemory,
-    touch: Some(TouchScreen { swap: Button::R3 }),
+    touch: Some(TouchScreen {
+        swap: Swap::Button(Button::R3),
+        tap: Button::R2,
+        tap_with: Button::R2,
+    }),
 };
 pub static PPSSPP: CoreInfo = CoreInfo {
     name: "PPSSPP",
@@ -361,11 +386,20 @@ pub static AZAHAR: CoreInfo = CoreInfo {
         ("citra_graphics_api", "OpenGL"),
         ("citra_use_libretro_save_path", "LibRetro Default"),
         ("citra_analog_function", "c_stick_and_touchscreen"),
+        // The top screen prominent, as the swap option starts (see `touch`).
+        ("citra_swap_screen", "Top"),
     ],
     bios: None,
     assets: None,
     saves: InGameSaves::Shared,
-    touch: Some(TouchScreen { swap: Button::L3 }),
+    touch: Some(TouchScreen {
+        swap: Swap::Option {
+            key: "citra_swap_screen",
+            values: ["Top", "Bottom"],
+        },
+        tap: Button::R3,
+        tap_with: Button::L3,
+    }),
 };
 
 /// How a two-screen System shows its two screens (FR-DS-1, FR-NEW-2), chosen per System in
@@ -1664,6 +1698,7 @@ mod tests {
                 ("citra_graphics_api", "OpenGL"),
                 ("citra_use_libretro_save_path", "LibRetro Default"),
                 ("citra_analog_function", "c_stick_and_touchscreen"),
+                ("citra_swap_screen", "Top"),
             ]
         );
         assert_eq!(
@@ -1683,12 +1718,31 @@ mod tests {
     }
 
     #[test]
-    fn ds_and_3ds_have_a_touch_screen_whose_swap_their_cores_take_differently() {
-        assert_eq!(MELONDS_DS.touch, Some(TouchScreen { swap: Button::R3 }));
+    fn ds_and_3ds_have_a_touch_screen_whose_swap_and_tap_their_cores_take_differently() {
         assert_eq!(
-            AZAHAR.touch,
-            Some(TouchScreen { swap: Button::L3 }),
-            "Azahar's own swap hotkey"
+            MELONDS_DS.touch,
+            Some(TouchScreen {
+                swap: Swap::Button(Button::R3),
+                tap: Button::R2,
+                tap_with: Button::R2,
+            }),
+            "melonDS DS's Next Screen Layout and Touch Joystick"
+        );
+        let Some(TouchScreen {
+            swap: Swap::Option { key, values },
+            tap: Button::R3,
+            tap_with: Button::L3,
+        }) = AZAHAR.touch
+        else {
+            panic!(
+                "Azahar swaps through an option and taps on R3: {:?}",
+                AZAHAR.touch
+            );
+        };
+        assert_eq!((key, values), ("citra_swap_screen", ["Top", "Bottom"]));
+        assert!(
+            AZAHAR.options.contains(&(key, values[0])),
+            "the Game starts with the screens unswapped"
         );
         for core in [
             &MESEN,

@@ -36,6 +36,11 @@ pub(super) struct State {
     pub options: HashMap<CString, CString>,
     /// The host's values for Core options, by key, answered ahead of the defaults.
     pub overrides: HashMap<CString, CString>,
+    /// Values `overrides` held before [`State::set_option`] replaced them, kept until the Core is
+    /// unloaded, as the Core may still hold them.
+    pub replaced: Vec<CString>,
+    /// An option changed since the Core last asked `GET_VARIABLE_UPDATE`.
+    pub options_updated: bool,
     /// The frontend's OpenGL side; without it, hardware rendering is refused.
     pub gl_host: Option<Box<dyn GlHost>>,
     /// What the Core asked for in `SET_HW_RENDER`, once accepted.
@@ -58,11 +63,30 @@ impl State {
             fresh: false,
             options: HashMap::new(),
             overrides: HashMap::new(),
+            replaced: Vec::new(),
+            options_updated: false,
             gl_host: None,
             hw: None,
             hw_size: None,
             serialization_quirks: 0,
         }
+    }
+
+    /// Changes the host's value for the option `key` while the Game runs: the Core's next
+    /// `GET_VARIABLE_UPDATE` answers true, and `GET_VARIABLE` then answers `value`.
+    ///
+    /// Like the rest of the options, on the thread that runs the Core: a Core asking from a
+    /// thread of its own is told nothing changed, and sees the change on that thread later.
+    /// Azahar asks both from `retro_run`.
+    ///
+    /// # Panics
+    /// On a NUL in `key` or `value`: they are Game37's own constants.
+    pub fn set_option(&mut self, key: &str, value: &str) {
+        let c = |s: &str| CString::new(s).expect("Core option keys and values have no NUL");
+        if let Some(old) = self.overrides.insert(c(key), c(value)) {
+            self.replaced.push(old);
+        }
+        self.options_updated = true;
     }
 }
 
@@ -462,8 +486,8 @@ pub(super) unsafe fn dispatch(s: &mut State, cmd: c_uint, data: *mut c_void) -> 
                 None => false,
             }
         }
-        // Options never change while a Game runs.
-        ffi::ENV_GET_VARIABLE_UPDATE => unsafe { write_out(data, false) },
+        // Whether `State::set_option` changed one since the Core last asked; once.
+        ffi::ENV_GET_VARIABLE_UPDATE => unsafe { write_out(data, std::mem::take(&mut s.options_updated)) },
         ffi::ENV_SET_SERIALIZATION_QUIRKS => {
             // SAFETY: for this command `data` is a `uint64_t *`, read and written back.
             let Some(quirks) = (unsafe { data.cast::<u64>().as_mut() }) else {
@@ -977,7 +1001,46 @@ mod tests {
         assert_eq!(get_variable(&mut s, "unknown"), None);
         let mut updated = true;
         assert!(env(&mut s, ffi::ENV_GET_VARIABLE_UPDATE, &mut updated));
-        assert!(!updated, "options never change while a Game runs");
+        assert!(!updated, "no option changed");
+    }
+
+    /// The Session flips Azahar's `citra_swap_screen` while it runs (FR-NEW-2): the Core is told
+    /// once that options changed, then reads the new value, ahead of its own default.
+    #[test]
+    fn an_option_set_during_play_is_announced_once_and_then_answered() {
+        let updated = |s: &mut State| {
+            let mut updated = false;
+            assert!(env(s, ffi::ENV_GET_VARIABLE_UPDATE, &mut updated));
+            updated
+        };
+        let mut s = state();
+        s.overrides = option_overrides(&[("citra_swap_screen", "Top")]);
+        let (_strings, mut array) = variables(&[("citra_swap_screen", "Prominent Screen; Top|Bottom")]);
+        // SAFETY: `array` is ended by a null key; its strings live in `_strings`.
+        assert!(unsafe { dispatch(&mut s, ffi::ENV_SET_VARIABLES, array.as_mut_ptr().cast()) });
+        assert!(!updated(&mut s));
+        let mut before = RetroVariable {
+            key: c"citra_swap_screen".as_ptr(),
+            value: ptr::null(),
+        };
+        assert!(env(&mut s, ffi::ENV_GET_VARIABLE, &mut before));
+
+        s.set_option("citra_swap_screen", "Bottom");
+        assert!(updated(&mut s), "announced");
+        assert!(!updated(&mut s), "once");
+        assert_eq!(
+            get_variable(&mut s, "citra_swap_screen").as_deref(),
+            Some("Bottom")
+        );
+        // SAFETY: the value handed out before the change is kept until the Core is unloaded.
+        assert_eq!(unsafe { CStr::from_ptr(before.value) }, c"Top", "still readable");
+
+        s.set_option("citra_swap_screen", "Top");
+        s.set_option("only_ours", "on");
+        assert!(updated(&mut s), "two changes, one answer");
+        assert!(!updated(&mut s));
+        assert_eq!(get_variable(&mut s, "citra_swap_screen").as_deref(), Some("Top"));
+        assert_eq!(get_variable(&mut s, "only_ours").as_deref(), Some("on"));
     }
 
     #[test]

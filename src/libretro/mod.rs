@@ -508,6 +508,12 @@ impl Core {
         callbacks::shared(|s| s.input).unwrap_or_default()
     }
 
+    /// Changes the Core option `key` to `value` while the Game runs, for the Core to pick up at
+    /// its next `GET_VARIABLE_UPDATE` (see `callbacks::State::set_option`).
+    pub fn set_option(&mut self, key: &str, value: &str) {
+        callbacks::with(|s| s.set_option(key, value)).expect("a loaded Core's state is installed");
+    }
+
     /// Each input query the Core made, `(port, device, index, id)`, and the last answer to it.
     #[cfg(test)]
     pub fn input_queries(&self) -> std::collections::HashMap<(u32, u32, u32, u32), i16> {

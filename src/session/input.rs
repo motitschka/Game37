@@ -5,6 +5,7 @@
 use sdl3::gamepad::Button as Pad;
 use sdl3::keyboard::Scancode;
 
+use crate::cores::{Swap, TouchScreen};
 use crate::libretro::{Button, InputState, MAX_PORTS, Pointer, Stick};
 use crate::ui::Rect;
 
@@ -192,32 +193,70 @@ const KEYBOARD: [(Scancode, Button); 12] = [
     (Scancode::RShift, Button::Select),
 ];
 
-/// The RetroPad buttons the keyboard holds, given which keys are down; in a Game with a touch
-/// screen (DS, 3DS), [`SWAP_SCREENS_KEY`] holds `swap`, the button its Core swaps screens on
-/// ([`crate::cores::TouchScreen::swap`]).
-pub fn keyboard_buttons(down: impl Fn(Scancode) -> bool, swap: Option<Button>) -> InputState {
+/// The RetroPad buttons the keyboard holds, given which keys are down. [`SWAP_SCREENS_KEY`] holds
+/// none: [`TouchControls`] reads it.
+pub fn keyboard_buttons(down: impl Fn(Scancode) -> bool) -> InputState {
     let mut input = InputState::default();
     for (key, button) in KEYBOARD {
         if down(key) {
             input.set(0, button, true);
         }
     }
-    if let Some(swap) = swap
-        && down(SWAP_SCREENS_KEY)
-    {
-        input.set(0, swap, true);
-    }
     input
 }
 
-/// Game37's swap control on a pad, R3 (FR-DS-2, FR-NEW-2), as `swap`, the button the Core swaps
-/// screens on: on every port a held R3 is let go and `swap` held instead. Azahar swaps on L3;
-/// melonDS DS swaps on R3 itself, so nothing changes for it.
-pub fn swap_on(input: &mut InputState, swap: Button) {
-    for port in 0..MAX_PORTS {
-        if input.is_pressed(port, Button::R3) {
+/// Game37's controls for a touch screen (DS, 3DS; FR-DS-2, FR-DS-3, FR-NEW-2), the same on both:
+/// R3 on any pad, or Tab, swaps the screens, and the pad button that taps with the right-stick
+/// cursor reaches the Core as the button its cursor taps on ([`TouchScreen`]).
+#[derive(Debug, Clone, Copy)]
+pub struct TouchControls {
+    touch: TouchScreen,
+    /// Whether the swap control was held at the last frame.
+    held: bool,
+    /// For a Core that swaps through an option: whether it has `values[1]` now.
+    swapped: bool,
+}
+
+impl TouchControls {
+    pub fn new(touch: TouchScreen) -> TouchControls {
+        TouchControls {
+            touch,
+            held: false,
+            swapped: false,
+        }
+    }
+
+    /// Takes the touch controls out of a frame's `input` and `tab`, whether Tab is down, and puts
+    /// in what the Core takes for them. Each pad's `tap_with` is let go and `tap` held instead;
+    /// each pad's R3 is let go, and with [`Swap::Button`] that button held while the swap control
+    /// is. With [`Swap::Option`], returns the option and its new value once per press of the swap
+    /// control, however long it is held, for the Core to change.
+    pub fn apply(&mut self, input: &mut InputState, tab: bool) -> Option<(&'static str, &'static str)> {
+        let mut held = false;
+        for port in 0..MAX_PORTS {
+            let tap = input.is_pressed(port, self.touch.tap_with);
+            // Tab is port 0's, as the rest of the keyboard is.
+            let swap = input.is_pressed(port, Button::R3) || (port == 0 && tab);
+            held |= swap;
             input.set(port, Button::R3, false);
-            input.set(port, swap, true);
+            input.set(port, self.touch.tap_with, false);
+            if tap {
+                input.set(port, self.touch.tap, true);
+            }
+            if let Swap::Button(button) = self.touch.swap
+                && swap
+            {
+                input.set(port, button, true);
+            }
+        }
+        let pressed = held && !self.held;
+        self.held = held;
+        match self.touch.swap {
+            Swap::Option { key, values } if pressed => {
+                self.swapped = !self.swapped;
+                Some((key, values[usize::from(self.swapped)]))
+            }
+            _ => None,
         }
     }
 }
@@ -591,15 +630,12 @@ mod tests {
         for (key, button) in KEYBOARD {
             let mut want = InputState::default();
             want.set(0, button, true);
-            assert_eq!(keyboard_buttons(|k| k == key, None), want, "{key:?}");
+            assert_eq!(keyboard_buttons(|k| k == key), want, "{key:?}");
         }
-        assert!(keyboard_buttons(|k| k == Scancode::X, None).is_pressed(0, Button::A));
-        assert!(keyboard_buttons(|k| k == Scancode::Z, None).is_pressed(0, Button::B));
-        assert!(keyboard_buttons(|k| k == Scancode::RShift, None).is_pressed(0, Button::Select));
-        assert_eq!(
-            keyboard_buttons(|k| k == Scancode::Escape, None),
-            InputState::default()
-        );
+        assert!(keyboard_buttons(|k| k == Scancode::X).is_pressed(0, Button::A));
+        assert!(keyboard_buttons(|k| k == Scancode::Z).is_pressed(0, Button::B));
+        assert!(keyboard_buttons(|k| k == Scancode::RShift).is_pressed(0, Button::Select));
+        assert_eq!(keyboard_buttons(|k| k == Scancode::Escape), InputState::default());
     }
 
     #[test]
@@ -619,7 +655,7 @@ mod tests {
         );
 
         // The keyboard's own d-pad press is unaffected, so menus inside games still work.
-        let left = keyboard_buttons(|k| k == Scancode::Left, None);
+        let left = keyboard_buttons(|k| k == Scancode::Left);
         assert!(left.is_pressed(0, Button::Left));
     }
 
@@ -627,7 +663,7 @@ mod tests {
     fn pads_play_on_their_ports_and_the_keyboard_joins_port_1() {
         let mut pause = PauseTrigger::default();
         let pads = [(0, pad(&[Pad::South])), (1, pad(&[Pad::East]))];
-        let keys = keyboard_buttons(|k| k == Scancode::X, None);
+        let keys = keyboard_buttons(|k| k == Scancode::X);
         let (input, paused) = frame_input(&pads, keys, false, &mut pause);
         assert!(!paused);
         assert!(input.is_pressed(0, Button::B) && input.is_pressed(0, Button::A));
@@ -681,40 +717,88 @@ mod tests {
     }
 
     #[test]
-    fn tab_swaps_the_ds_screens_with_r3_and_clashes_with_no_other_key() {
-        let tab = |k| k == SWAP_SCREENS_KEY;
-        let mut r3 = InputState::default();
-        r3.set(0, Button::R3, true);
+    fn tab_is_the_swap_key_and_clashes_with_no_other_key() {
         assert_eq!(SWAP_SCREENS_KEY, Scancode::Tab);
-        assert_eq!(keyboard_buttons(tab, Some(Button::R3)), r3, "in a DS Game");
-        assert_eq!(keyboard_buttons(tab, None), InputState::default(), "elsewhere");
+        assert_eq!(
+            keyboard_buttons(|k| k == SWAP_SCREENS_KEY),
+            InputState::default(),
+            "Tab holds no button of its own"
+        );
         assert!(KEYBOARD.iter().all(|(key, _)| *key != SWAP_SCREENS_KEY));
         assert_ne!(SWAP_SCREENS_KEY, Scancode::Escape, "Esc pauses");
     }
 
-    #[test]
-    fn tab_and_r3_swap_the_3ds_screens_with_l3_and_never_send_r3() {
-        let tab = |k| k == SWAP_SCREENS_KEY;
-        let mut l3 = InputState::default();
-        l3.set(0, Button::L3, true);
-        assert_eq!(keyboard_buttons(tab, Some(Button::L3)), l3, "Tab");
-
+    /// `buttons` held on `port`.
+    fn holding(port: usize, buttons: &[Button]) -> InputState {
         let mut input = InputState::default();
-        input.set(0, Button::R3, true);
-        input.set(2, Button::R3, true);
-        input.set(2, Button::A, true);
-        swap_on(&mut input, Button::L3);
-        let mut expected = InputState::default();
-        expected.set(0, Button::L3, true);
-        expected.set(2, Button::L3, true);
-        expected.set(2, Button::A, true);
-        assert_eq!(input, expected, "each pad's R3 is L3");
+        for &button in buttons {
+            input.set(port, button, true);
+        }
+        input
+    }
 
-        let mut ds = InputState::default();
-        ds.set(1, Button::R3, true);
-        let before = ds;
-        swap_on(&mut ds, Button::R3);
-        assert_eq!(ds, before, "melonDS DS swaps on R3 itself");
+    /// The touch controls' frame: what reaches the Core and the option change, for `input`.
+    fn touch_frame(
+        controls: &mut TouchControls,
+        mut input: InputState,
+        tab: bool,
+    ) -> (InputState, Option<(&'static str, &'static str)>) {
+        let change = controls.apply(&mut input, tab);
+        (input, change)
+    }
+
+    /// 3DS on Azahar (FR-NEW-2): a pad's L3 taps with the right-stick cursor, reaching Azahar as
+    /// R3; R3 and Tab swap the screens through `citra_swap_screen`, once per press, and reach
+    /// Azahar as neither R3 nor L3, which is its HOME button.
+    #[test]
+    fn on_3ds_l3_taps_as_r3_and_r3_or_tab_flip_the_swap_option_once_per_press() {
+        let mut controls = TouchControls::new(crate::cores::AZAHAR.touch.unwrap());
+        let swap = |value| Some(("citra_swap_screen", value));
+
+        let (input, change) = touch_frame(&mut controls, holding(1, &[Button::L3, Button::A]), false);
+        assert_eq!(input, holding(1, &[Button::R3, Button::A]), "L3 taps, as R3");
+        assert_eq!(change, None);
+
+        let (input, change) = touch_frame(&mut controls, holding(2, &[Button::R3, Button::B]), false);
+        assert_eq!(input, holding(2, &[Button::B]), "R3 never reaches Azahar");
+        assert_eq!(change, swap("Bottom"), "the press swaps");
+        for _ in 0..3 {
+            let (input, change) = touch_frame(&mut controls, holding(2, &[Button::R3]), false);
+            assert_eq!(input, InputState::default());
+            assert_eq!(change, None, "a held R3 is one swap");
+        }
+        let (_, change) = touch_frame(&mut controls, InputState::default(), false);
+        assert_eq!(change, None, "letting go swaps nothing");
+
+        let (input, change) = touch_frame(&mut controls, InputState::default(), true);
+        assert_eq!(input, InputState::default(), "Tab reaches Azahar as no button");
+        assert_eq!(change, swap("Top"), "Tab swaps back");
+        let (_, change) = touch_frame(&mut controls, holding(0, &[Button::R3]), true);
+        assert_eq!(change, None, "still held, now on R3 as well");
+        touch_frame(&mut controls, InputState::default(), false);
+
+        let (input, change) = touch_frame(&mut controls, holding(0, &[Button::L3, Button::R3]), false);
+        assert_eq!(input, holding(0, &[Button::R3]), "the tap, not the swap");
+        assert_eq!(change, swap("Bottom"));
+    }
+
+    /// DS on melonDS DS (FR-DS-2, FR-DS-3), as before: R3 and Tab hold R3, its Next Screen
+    /// Layout, while held; R2 taps with its cursor; L3 is its microphone; no option changes.
+    #[test]
+    fn on_ds_r3_and_tab_hold_r3_and_r2_and_l3_reach_melonds_ds_as_they_are() {
+        let mut controls = TouchControls::new(crate::cores::MELONDS_DS.touch.unwrap());
+        for _ in 0..2 {
+            let (input, change) = touch_frame(&mut controls, holding(1, &[Button::R3, Button::A]), false);
+            assert_eq!(
+                (input, change),
+                (holding(1, &[Button::R3, Button::A]), None),
+                "R3"
+            );
+        }
+        let (input, change) = touch_frame(&mut controls, InputState::default(), true);
+        assert_eq!((input, change), (holding(0, &[Button::R3]), None), "Tab");
+        let both = holding(2, &[Button::R2, Button::L3]);
+        assert_eq!(touch_frame(&mut controls, both, false), (both, None), "R2 and L3");
     }
 
     #[test]

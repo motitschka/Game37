@@ -18,11 +18,11 @@ use sdl3::video::Window;
 
 use super::gl::SdlGl;
 use super::glx::GlxGl;
-use super::input::{self, HeldOver, Mouse, PadState, PauseTrigger};
+use super::input::{self, HeldOver, Mouse, PadState, PauseTrigger, TouchControls};
 use super::saves::{self, Tracker};
 use super::states::{self, SLOTS, StatePaths};
 use super::timing::{self, AUDIO_MAX, PlayTimer, Scheduler};
-use crate::cores::{self, CoreInfo, GlKind, TouchScreen};
+use crate::cores::{self, CoreInfo, GlKind};
 use crate::ctx::{self, Ctx, Play, Start};
 use crate::launch::{self, FAILED_TITLE};
 use crate::libretro::{Core, CoreDirs, Frame, GlHost, Stick};
@@ -61,9 +61,10 @@ pub struct Session {
     shown: bool,
     /// Whether the Pause Menu is open over it.
     paused: bool,
-    /// The Game's touch screen (DS, 3DS), if it has one: the mouse touches it, R3 and Tab swap
-    /// screens, and the mouse cursor shows.
-    touch: Option<TouchScreen>,
+    /// The controls of the Game's touch screen (DS, 3DS), if it has one: the mouse touches it, R3
+    /// and Tab swap screens, a pad button taps with the right-stick cursor, and the mouse cursor
+    /// shows.
+    touch: Option<TouchControls>,
     /// Whether the left stick also presses the d-pad ([`cores::CoreInfo::stick_is_dpad`]).
     stick_dpad: bool,
     /// How fast the Game really ran, logged when the session ends.
@@ -304,7 +305,7 @@ impl Session {
             timer: PlayTimer::start(Instant::now()),
             shown: true,
             paused: false,
-            touch: core_info.touch,
+            touch: core_info.touch.map(TouchControls::new),
             stick_dpad: core_info.stick_is_dpad(),
             pace: Pace::default(),
             start_message,
@@ -368,8 +369,7 @@ impl Session {
         mouse: Mouse,
         down: impl Fn(Scancode) -> bool,
     ) -> bool {
-        let swap = self.touch.map(|touch| touch.swap);
-        let keyboard = input::keyboard_buttons(&down, swap);
+        let keyboard = input::keyboard_buttons(&down);
         let esc = down(Scancode::Escape);
         let (mut input, paused) =
             input::frame_input_with(pads, keyboard, esc, &mut self.pause, self.stick_dpad);
@@ -377,8 +377,10 @@ impl Session {
             return true;
         }
         apply_keyboard_stick(&mut input, &down, self.stick_dpad);
-        if let Some(swap) = swap {
-            input::swap_on(&mut input, swap);
+        if let Some(controls) = &mut self.touch
+            && let Some((key, value)) = controls.apply(&mut input, down(input::SWAP_SCREENS_KEY))
+        {
+            self.core.set_option(key, value);
         }
         self.held.mask(&mut input);
         self.follow_av_info();
@@ -1710,7 +1712,8 @@ mod tests {
         (root, data, ctx, game)
     }
 
-    /// Azahar's 1920×960 frame with the large/small layout at proportion 3 (`AZAHAR_LAYOUT`): the
+    /// Azahar's 1920×960 frame with the large/small layout at proportion 3
+    /// (`cores::THREE_DS_LAYOUTS.large_and_small`): the
     /// large screen's inside, `(x, y, w, h)`, top left, and the small one's, bottom right, each
     /// a few pixels in from its edges.
     const AZAHAR_LARGE: (usize, usize, usize, usize) = (8, 8, 1500, 895);
@@ -1752,9 +1755,11 @@ mod tests {
 
     /// 3DS with Azahar (FR-NEW-2): ftpd boots through a 3DS session on the SDL OpenGL host and its
     /// picture shows on the renderer; one large and one small screen in a 2:1 frame. The mouse on
-    /// the small screen reaches Azahar as `RETRO_DEVICE_POINTER`; a pad's R3 swaps the screens and
-    /// Tab swaps them back. Save State slot 1 saves and loads, and slot 1 and the Resume State
-    /// restore in the next session (after its first frame, for Azahar's `MUST_INITIALIZE`).
+    /// the small screen reaches Azahar as `RETRO_DEVICE_POINTER`; a pad's L3 reaches it as R3, the
+    /// tap of its right-stick cursor; a pad's R3 swaps the screens and Tab swaps them back,
+    /// through `citra_swap_screen`, and Azahar never sees L3, its HOME button, pressed. Save State
+    /// slot 1 saves and loads, and slot 1 and the Resume State restore in the next session (after
+    /// its first frame, for Azahar's `MUST_INITIALIZE`).
     #[test]
     #[ignore = "needs /home/matei/Game37/.testdata"]
     fn hw_azahar_boots_ftpd_on_the_renderer_touches_swaps_and_states_round_trip() {
@@ -1763,6 +1768,10 @@ mod tests {
         const X: u32 = 0;
         const Y: u32 = 1;
         const PRESSED: u32 = 2;
+        // RETRO_DEVICE_JOYPAD, and its ids for L3 and R3.
+        const JOYPAD: u32 = 1;
+        const L3: u32 = 14;
+        const R3: u32 = 15;
         use crate::ui::text::Fonts;
 
         let _serial = serial();
@@ -1807,12 +1816,30 @@ mod tests {
         assert_eq!(asked(Y), Some(pointer.y), "y");
         tick_n(&mut session, &mut gfx, 30);
 
+        // Azahar asked for L3 and R3; L3 is never pressed, whatever the player holds.
+        let joypad = |session: &Session, id| session.core.input_queries().get(&(0, JOYPAD, 0, id)).copied();
+        assert_eq!(joypad(&session, R3), Some(0), "Azahar reads R3, its touch tap");
+        assert_eq!(joypad(&session, L3), Some(0), "and L3, its swap and HOME");
+        let mut l3 = PadState::default();
+        l3.press(sdl3::gamepad::Button::LeftStick);
+        for _ in 0..3 {
+            session.tick(&mut gfx, 1.0 / 60.0, &[(0, l3)], Mouse::default(), |_| false);
+        }
+        assert_eq!(joypad(&session, R3), Some(1), "a pad's L3 taps, as R3");
+        assert_eq!(joypad(&session, L3), Some(0), "and is not L3");
+        tick_n(&mut session, &mut gfx, 30);
+
         // R3 on a pad, then Tab: each swaps which screen is large.
         let before = session.core.frame().clone();
         let mut r3 = PadState::default();
         r3.press(sdl3::gamepad::Button::RightStick);
         for _ in 0..5 {
             session.tick(&mut gfx, 1.0 / 60.0, &[(0, r3)], Mouse::default(), |_| false);
+            assert_eq!(
+                (joypad(&session, R3), joypad(&session, L3)),
+                (Some(0), Some(0)),
+                "R3 reaches Azahar as neither"
+            );
         }
         tick_n(&mut session, &mut gfx, 30);
         let after_r3 = session.core.frame().clone();
@@ -1823,6 +1850,11 @@ mod tests {
         let tab = |key| key == input::SWAP_SCREENS_KEY;
         for _ in 0..5 {
             session.tick(&mut gfx, 1.0 / 60.0, &[], Mouse::default(), tab);
+            assert_eq!(
+                (joypad(&session, R3), joypad(&session, L3)),
+                (Some(0), Some(0)),
+                "Tab reaches Azahar as neither"
+            );
         }
         tick_n(&mut session, &mut gfx, 30);
         assert!(
