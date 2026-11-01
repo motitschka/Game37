@@ -190,31 +190,60 @@ fn core_options(
     core.options_for(system, game, ctx.screen_layout(system))
 }
 
+/// Why [`Session::start`] failed: the title to show it under, besides [`FAILED_TITLE`] for most
+/// failures, and the message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartError {
+    pub title: &'static str,
+    pub message: String,
+}
+
+impl StartError {
+    /// A failure under the generic [`FAILED_TITLE`].
+    fn generic(message: String) -> StartError {
+        StartError {
+            title: FAILED_TITLE,
+            message,
+        }
+    }
+}
+
+impl Display for StartError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
 impl Session {
     /// Loads `play`'s Game on its System's Core, on the OpenGL host its [`cores::GlKind`] needs
     /// (see [`open_gl`]), beside the SDL renderer's own window and context `frontend` (`None` on
     /// another renderer), and puts it in the state [`start_state`] picks. `refresh` is the
     /// display's refresh rate when frames are synced to it (vsync), else `None`. `Err` is the
-    /// message to show.
+    /// title to show the failure under and its message (e.g. the BIOS rule's own title for a
+    /// missing BIOS, FR-EMB-14).
     pub fn start(
         play: &Play,
         ctx: &Ctx,
         frontend: Option<(Window, SDL_GLContext)>,
         audio: Option<&AudioSubsystem>,
         refresh: Option<f64>,
-    ) -> Result<Session, String> {
+    ) -> Result<Session, StartError> {
         let game = &play.game;
-        let system = systems::by_id(&game.system).ok_or_else(|| format!("No System {:?}", game.system))?;
-        let core_info =
-            cores::for_system(system).ok_or_else(|| format!("{} has no Core yet.", system.name))?;
+        let system = systems::by_id(&game.system)
+            .ok_or_else(|| StartError::generic(format!("No System {:?}", game.system)))?;
+        let core_info = cores::for_system(system)
+            .ok_or_else(|| StartError::generic(format!("{} has no Core yet.", system.name)))?;
         // Launching checks this too, but a Core may only log a missing BIOS (LRPS2 does), so the
         // BIOS taken away since then gets the same message (FR-EMB-12).
         if let Some(rule) = core_info.bios
             && rule.found(&ctx.games_root).is_none()
         {
-            return Err(launch::missing_bios_message(&ctx.games_root, rule));
+            return Err(StartError {
+                title: rule.wording.title,
+                message: launch::missing_bios_message(&ctx.games_root, rule),
+            });
         }
-        let gl = open_gl(core_info, frontend, None, system.name)?;
+        let gl = open_gl(core_info, frontend, None, system.name).map_err(StartError::generic)?;
         let fail = |e: &dyn Display| format!("{} couldn't start {}: {e}.", core_info.name, game.title);
         let root = &ctx.games_root;
         let dirs = CoreDirs {
@@ -222,18 +251,20 @@ impl Session {
             save: saves::save_dir(root, system.id),
         };
         for dir in [&dirs.system, &dirs.save] {
-            fs::create_dir_all(dir).map_err(|e| fail(&format!("Can't create {}: {e}", dir.display())))?;
+            fs::create_dir_all(dir)
+                .map_err(|e| StartError::generic(fail(&format!("Can't create {}: {e}", dir.display()))))?;
         }
         let core_path = cores::installed_path(&ctx.data_dir, core_info);
         let game_path = root.join(&game.rel_path);
         let options = core_options(ctx, system, core_info, &game_path);
         // When the Core says why (a missing BIOS, an encrypted dump), that is the reason shown
         // (FR-EMB-14).
-        let mut core =
-            Core::load(&core_path, &game_path, dirs, &options, gl).map_err(|e| match e.core_message() {
+        let mut core = Core::load(&core_path, &game_path, dirs, &options, gl).map_err(|e| {
+            StartError::generic(match e.core_message() {
                 Some(said) => format!("{} couldn't start {}.\n{said}", core_info.name, game.title),
                 None => fail(&e),
-            })?;
+            })
+        })?;
 
         let srm = saves::srm_path(root, system.id, Path::new(&game.rel_path));
         let save = core.save_ram().map(|ram| {
@@ -611,7 +642,7 @@ pub fn start(
                 nav.push(Box::new(Message::new(SLOT_FAILED_TITLE, text)));
             }
         }
-        Err(message) => nav.push(Box::new(Message::new(FAILED_TITLE, message))),
+        Err(e) => nav.push(Box::new(Message::new(e.title, e.message))),
     }
 }
 
@@ -1337,13 +1368,16 @@ mod tests {
             start: Start::PowerOn,
         };
         match Session::start(&play, &ctx, None, None, None) {
-            Err(message) => assert_eq!(
-                message,
-                format!(
-                    "Mesen couldn't start Game.\n{}",
-                    crate::libretro::tests::FAKE_MESSAGE
+            Err(e) => {
+                assert_eq!(e.title, launch::FAILED_TITLE);
+                assert_eq!(
+                    e.message,
+                    format!(
+                        "Mesen couldn't start Game.\n{}",
+                        crate::libretro::tests::FAKE_MESSAGE
+                    )
                 )
-            ),
+            }
             Ok(_) => panic!("the fake Core loads no Game"),
         }
     }
@@ -1390,8 +1424,9 @@ mod tests {
         }
     }
 
-    /// Without its BIOS a PS2 session doesn't start, and says where the BIOS goes, before it
-    /// loads any Core: LRPS2 itself only logs that it found none (FR-EMB-12, FR-NEW-1).
+    /// Without its BIOS a PS2 session doesn't start, and says where the BIOS goes, under the
+    /// BIOS rule's own title (not the generic "Couldn't start the game"), before it loads any
+    /// Core: LRPS2 itself only logs that it found none (FR-EMB-12, FR-NEW-1).
     #[test]
     fn a_ps2_session_without_its_bios_names_the_bios_folder() {
         let dir = TempDir::new().unwrap();
@@ -1401,10 +1436,13 @@ mod tests {
         fs::create_dir_all(cores::PS2_BIOS.dir(&ctx.games_root)).unwrap();
         let play = Play::resume(ps2_game("Game.iso"));
         match Session::start(&play, &ctx, None, None, None) {
-            Err(message) => assert_eq!(
-                message,
-                launch::missing_bios_message(&ctx.games_root, &cores::PS2_BIOS)
-            ),
+            Err(e) => {
+                assert_eq!(e.title, "PlayStation 2 BIOS missing");
+                assert_eq!(
+                    e.message,
+                    launch::missing_bios_message(&ctx.games_root, &cores::PS2_BIOS)
+                )
+            }
             Ok(_) => panic!("no PS2 session without a BIOS"),
         }
     }
@@ -1474,10 +1512,13 @@ mod tests {
 
         let play = Play::resume(ps2_game(elf));
         match Session::start(&play, &ctx, gfx.gl_context(), None, Some(60.0)) {
-            Err(message) => assert_eq!(
-                message,
-                launch::missing_bios_message(root.path(), &cores::PS2_BIOS)
-            ),
+            Err(e) => {
+                assert_eq!(e.title, "PlayStation 2 BIOS missing");
+                assert_eq!(
+                    e.message,
+                    launch::missing_bios_message(root.path(), &cores::PS2_BIOS)
+                )
+            }
             Ok(_) => panic!("no PS2 session without a BIOS"),
         }
 
@@ -1514,6 +1555,16 @@ mod tests {
         shown_colours(gfx, at)
     }
 
+    /// Draws `session`'s Game on a black screen; returns the exact picture, as the bytes of the
+    /// `.bmp` file the renderer wrote. Unlike [`shown`]'s set of distinct colours, two pictures
+    /// with the same palette but different content (e.g. a moved menu cursor) compare unequal.
+    fn shown_exactly(session: &mut Session, gfx: &mut Gfx<'_>, ctx: &Ctx, at: &Path) -> Vec<u8> {
+        gfx.clear(crate::ui::theme::Colour::hex(0x000000));
+        session.draw(gfx, ctx);
+        gfx.save_bmp(at).unwrap();
+        fs::read(at).unwrap()
+    }
+
     /// Runs `n` ticks of a 60 Hz display, with no input.
     fn tick_n(session: &mut Session, gfx: &mut Gfx<'_>, n: usize) {
         for _ in 0..n {
@@ -1530,9 +1581,11 @@ mod tests {
     }
 
     /// The owner's PS2 BIOS (FR-NEW-1): wLaunchELF boots on LRPS2 through a PS2 session beside
-    /// the opengl renderer, and its picture shows on the renderer. Save State slot 1 saves and
-    /// loads, and after quitting, slot 1 and the Resume State restore in the next session.
-    /// Frames run with LRPS2's fastmem on (its SIGSEGV handler beside Rust's).
+    /// the opengl renderer, and its picture shows on the renderer. Save State slot 1 saves the
+    /// picture at the menu's starting position; moving the cursor away and loading the slot again
+    /// brings back that exact picture, not the moved one (so a no-op load would fail this), and
+    /// the same is true of the Resume State in a new session after quitting. Frames run with
+    /// LRPS2's fastmem on (its SIGSEGV handler beside Rust's).
     #[test]
     #[ignore = "needs a PS2 BIOS dump in /home/matei/Game37/.testdata/bios/pcsx2/bios"]
     fn needs_ps2_bios_lrps2_boots_wlaunchelf_on_the_renderer_and_states_round_trip() {
@@ -1540,12 +1593,15 @@ mod tests {
 
         let _serial = serial();
         let (root, data, ctx, elf) = ps2_world();
-        fs::create_dir_all(root.path().join("bios")).unwrap();
-        std::os::unix::fs::symlink(
-            Path::new(TESTDATA).join("bios/pcsx2"),
-            root.path().join("bios/pcsx2"),
-        )
-        .unwrap();
+        // Only the BIOS dump(s) are symlinked, into a temp `bios/pcsx2/bios/`: LRPS2 writes
+        // `.nvm`/`.mec` and other folders beside the dump, under its `pcsx2/` system directory,
+        // and those must land in `root`, never in `.testdata` itself.
+        let bios_dir = root.path().join("bios/pcsx2/bios");
+        fs::create_dir_all(&bios_dir).unwrap();
+        for entry in fs::read_dir(Path::new(TESTDATA).join("bios/pcsx2/bios")).unwrap() {
+            let entry = entry.unwrap();
+            std::os::unix::fs::symlink(entry.path(), bios_dir.join(entry.file_name())).unwrap();
+        }
         assert!(
             cores::PS2_BIOS.found(root.path()).is_some(),
             "a PS2 BIOS dump of 4 to 8 MiB"
@@ -1565,13 +1621,32 @@ mod tests {
         )
         .unwrap_or_else(|e| panic!("{e}"));
         tick_n(&mut session, &mut gfx, 1200);
+        let booted = shown_exactly(&mut session, &mut gfx, &ctx, &shot);
         assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "booted");
 
         session.save_slot(1).unwrap_or_else(|e| panic!("save: {e}"));
-        tick_n(&mut session, &mut gfx, 120);
+
+        // Moves wLaunchELF's menu cursor, so the picture changes: a no-op load would leave it
+        // here rather than bringing back the one saved above.
+        for _ in 0..30 {
+            assert!(!session.tick(&mut gfx, 1.0 / 60.0, &[], Mouse::default(), |s| s
+                == Scancode::Down));
+        }
+        tick_n(&mut session, &mut gfx, 30);
+        let moved = shown_exactly(&mut session, &mut gfx, &ctx, &shot);
+        assert_ne!(
+            moved, booted,
+            "the cursor moved the picture away from the saved one"
+        );
+
         session.load_slot(1).unwrap_or_else(|e| panic!("load: {e}"));
         tick_n(&mut session, &mut gfx, 60);
-        assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "loaded");
+        assert_eq!(
+            shown_exactly(&mut session, &mut gfx, &ctx, &shot),
+            booted,
+            "the slot brings back the picture from save time, not the moved one"
+        );
+
         session.write_resume();
         let resume = session.states.resume();
         drop(session);
@@ -1588,14 +1663,22 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(session.start_message, None, "slot 1 restored in a new session");
         tick_n(&mut session, &mut gfx, 60);
-        assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "from slot 1");
+        assert_eq!(
+            shown_exactly(&mut session, &mut gfx, &ctx, &shot),
+            booted,
+            "a fresh session also restores the saved picture"
+        );
         let state = fs::read(&resume).unwrap();
         session
             .core
             .unserialize(&state)
             .unwrap_or_else(|e| panic!("resume: {e}"));
         tick_n(&mut session, &mut gfx, 60);
-        assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "resumed");
+        assert_eq!(
+            shown_exactly(&mut session, &mut gfx, &ctx, &shot),
+            booted,
+            "the Resume State also restores the saved picture"
+        );
     }
 
     /// A 3DS Games Root holding ftpd, and a data dir with the test data's Cores.
@@ -1803,13 +1886,15 @@ mod tests {
         let gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
 
         match Session::start(&Play::resume(game), &ctx, gfx.gl_context(), None, Some(60.0)) {
-            Err(message) => {
-                eprintln!("{message}");
+            Err(e) => {
+                eprintln!("{e}");
+                assert_eq!(e.title, launch::FAILED_TITLE);
                 assert!(
-                    message.starts_with("Azahar couldn't start Encrypted."),
-                    "{message}"
+                    e.message.starts_with("Azahar couldn't start Encrypted."),
+                    "{}",
+                    e.message
                 );
-                assert!(message.contains("must be decrypted"), "{message}");
+                assert!(e.message.contains("must be decrypted"), "{}", e.message);
             }
             Ok(_) => panic!("Azahar started an encrypted dump"),
         }
