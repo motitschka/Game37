@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
-use crate::cores;
+use crate::cores::{self, CoreInfo, InGameSaves};
 use crate::ctx::{self, Ctx, Play, Start};
 use crate::launch;
 use crate::library::db::GameRow;
@@ -152,10 +152,11 @@ pub struct OptionsMenu {
     srm_when: Option<String>,
     /// Where the Game's Save States are.
     states: StatePaths,
-    /// The Game's In-game Save.
-    srm: PathBuf,
-    /// The Core's name when it keeps the Game's In-game Saves itself
-    /// ([`cores::CoreInfo::keeps_own_saves`]), so there is no In-game Save to delete.
+    /// The Game's In-game Save file: its `.srm`, or the file its Core keeps for it. `None` when
+    /// the Core keeps In-game Saves every Game of the System shares.
+    srm: Option<PathBuf>,
+    /// The Core's name when it keeps In-game Saves every Game of the System shares
+    /// ([`InGameSaves::Shared`]), so there is no In-game Save to delete.
     own_saves: Option<&'static str>,
     /// What a confirmed delete did, left by the confirmation for the next tick to show.
     deleted: Rc<RefCell<Option<Result<(), String>>>>,
@@ -181,6 +182,12 @@ pub struct OptionsMenu {
 impl OptionsMenu {
     /// The menu for `game`, its Save State slots read from under `games_root`.
     pub fn new(game: GameRow, games_root: &Path) -> OptionsMenu {
+        let core = systems::by_id(&game.system).and_then(cores::for_system);
+        OptionsMenu::with_core(game, games_root, core)
+    }
+
+    /// [`OptionsMenu::new`] with `core` as the Game's System's Core, if it has one.
+    fn with_core(game: GameRow, games_root: &Path, core: Option<&'static CoreInfo>) -> OptionsMenu {
         let system = systems::by_id(&game.system);
         let short = system.map_or("?", |s| s.short);
         let meta = match game.playtime_secs {
@@ -209,13 +216,13 @@ impl OptionsMenu {
         .collect();
         let rel_path = Path::new(&game.rel_path);
         let states = StatePaths::new(games_root, &game.system, rel_path);
-        let srm = saves::srm_path(games_root, &game.system, rel_path);
-        let own_saves = system
-            .and_then(cores::for_system)
-            .filter(|core| core.keeps_own_saves())
+        let kept = core.map_or(InGameSaves::SaveMemory, |core| core.saves);
+        let srm = saves::in_game_save_path(kept, games_root, &game.system, rel_path);
+        let own_saves = core
+            .filter(|core| core.saves == InGameSaves::Shared)
             .map(|core| core.name);
         let (filled, resume_when, srm_when) = if embedded {
-            read_save_data(&states, &srm)
+            read_save_data(&states, srm.as_deref())
         } else {
             (Vec::new(), None, None)
         };
@@ -303,7 +310,7 @@ impl OptionsMenu {
         // Hold mode (the owner's call): the row that opens this is itself chosen with Confirm, so
         // a double tap must not also delete it (see `screens::confirm` module docs).
         Confirm::hold(title, body, "Delete", "Hold to delete", move |ctx| {
-            *deleted.borrow_mut() = Some(states::delete(what, &states, &srm));
+            *deleted.borrow_mut() = Some(states::delete(what, &states, srm.as_deref()));
             // The Details Page's Save State count reloads.
             ctx.revision += 1;
         })
@@ -335,7 +342,7 @@ impl OptionsMenu {
         let Some(done) = self.deleted.borrow_mut().take() else {
             return Transition::None;
         };
-        (self.filled, self.resume_when, self.srm_when) = read_save_data(&self.states, &self.srm);
+        (self.filled, self.resume_when, self.srm_when) = read_save_data(&self.states, self.srm.as_deref());
         // The slot picker reads its slots afresh, and forgets the old screenshots.
         self.reading = None;
         self.slots.clear();
@@ -764,14 +771,15 @@ impl OptionsMenu {
 }
 
 /// Whether each Save State slot of `states` is filled, and when the Resume State and the In-game
-/// Save `srm` were written, if they exist: file metadata only, cheap enough for the UI thread.
-fn read_save_data(states: &StatePaths, srm: &Path) -> (Vec<bool>, Option<String>, Option<String>) {
+/// Save file `srm`, if it has one, were written, if they exist: file metadata only, cheap enough
+/// for the UI thread.
+fn read_save_data(states: &StatePaths, srm: Option<&Path>) -> (Vec<bool>, Option<String>, Option<String>) {
     let written = |path: &Path| {
         let modified = fs::metadata(path).ok().filter(|m| m.is_file())?.modified().ok()?;
         Some(sdl::when_label(modified))
     };
     let filled = (1..=SLOTS).map(|n| states.slot(n).is_file()).collect();
-    (filled, written(&states.resume()), written(srm))
+    (filled, written(&states.resume()), srm.and_then(written))
 }
 
 /// A delete view row's name.
@@ -1698,6 +1706,40 @@ mod tests {
         assert!(
             menu.delete_body(SaveData::Everything)
                 .contains("In-game Saves stay")
+        );
+    }
+
+    #[test]
+    fn a_core_that_keeps_a_file_per_game_offers_it_as_the_in_game_save() {
+        let (_dir, mut ctx, games) = world(1);
+        let core: &'static CoreInfo = Box::leak(Box::new(CoreInfo {
+            name: "Card Core",
+            saves: InGameSaves::PerGame { extension: "ps2" },
+            ..cores::MESEN
+        }));
+        // The Resume State, and a stray `.srm` this Core never reads.
+        write_saves(&ctx, &games[0], true, true);
+        let card = ctx.games_root.join("saves/snes/G0.ps2");
+        let mut menu = OptionsMenu::with_core(games[0].clone(), &ctx.games_root, Some(core));
+        open_delete(&mut menu, &mut ctx);
+        assert_eq!(pickable_rows(&menu), [true, false, false, true], "no card yet");
+        assert_eq!(delete_subs(&menu)[2].as_deref(), Some("None"));
+
+        saves::write(&card, b"card").unwrap();
+        let mut menu = OptionsMenu::with_core(games[0].clone(), &ctx.games_root, Some(core));
+        open_delete(&mut menu, &mut ctx);
+        assert_eq!(pickable_rows(&menu), [true, false, true, true]);
+        let sub = delete_subs(&menu)[2].clone().unwrap();
+        assert!(sub != "None" && !sub.starts_with("Kept by"), "{sub}");
+        menu.pick = 2;
+        let (title, _) = answer(&mut menu, &mut ctx, true);
+        assert_eq!(title, "Delete the In-game Save?");
+        assert!(!card.exists(), "the card is the In-game Save");
+        let rel = Path::new(&games[0].rel_path);
+        assert!(!StatePaths::new(&ctx.games_root, "snes", rel).resume().exists());
+        assert!(
+            saves::srm_path(&ctx.games_root, "snes", rel).exists(),
+            "not this Core's"
         );
     }
 
