@@ -26,8 +26,6 @@ pub(super) struct State {
     pub system_dir: CString,
     pub save_dir: CString,
     pub av_info: AvInfo,
-    /// The Core asked `GET_INPUT_BITMASKS`, so it may query `RETRO_DEVICE_ID_JOYPAD_MASK`.
-    pub bitmasks: bool,
     pub input: InputState,
     /// The last frame the Core sent, when `fresh`.
     pub frame: Frame,
@@ -59,7 +57,6 @@ impl State {
             system_dir,
             save_dir,
             av_info: AvInfo::default(),
-            bitmasks: false,
             input: InputState::default(),
             frame: Frame::default(),
             fresh: false,
@@ -201,7 +198,7 @@ pub(super) extern "C" fn input_poll() {}
 
 pub(super) extern "C" fn input_state(port: c_uint, device: c_uint, index: c_uint, id: c_uint) -> i16 {
     guarded(0, |s| {
-        let answer = input_answer(&s.input, s.bitmasks, port, device, index, id);
+        let answer = input_answer(&s.input, port, device, index, id);
         #[cfg(test)]
         s.queries.insert((port, device, index, id), answer);
         answer
@@ -239,10 +236,8 @@ pub(super) unsafe fn dispatch(s: &mut State, cmd: c_uint, data: *mut c_void) -> 
         | ffi::ENV_SET_MEMORY_MAPS
         | ffi::ENV_SET_SUBSYSTEM_INFO
         | ffi::ENV_SET_SUPPORT_ACHIEVEMENTS => true,
-        ffi::ENV_GET_INPUT_BITMASKS => {
-            s.bitmasks = true;
-            true
-        }
+        // `RETRO_DEVICE_ID_JOYPAD_MASK` is answered whether or not the Core asks this first.
+        ffi::ENV_GET_INPUT_BITMASKS => true,
         ffi::ENV_SET_GEOMETRY => {
             // SAFETY: for this command `data` is a `const struct retro_game_geometry *`.
             let Some(g) = (unsafe { data.cast::<RetroGameGeometry>().as_ref() }) else {
@@ -405,7 +400,6 @@ unsafe fn write_out<T>(data: *mut c_void, value: T) -> bool {
 /// for any other device.
 pub(super) fn input_answer(
     input: &InputState,
-    bitmasks: bool,
     port: c_uint,
     device: c_uint,
     index: c_uint,
@@ -415,8 +409,9 @@ pub(super) fn input_answer(
         ffi::RETRO_DEVICE_JOYPAD => {
             let mask = input.mask(port as usize);
             match id {
-                // R3 is bit 15, the sign bit of the returned i16.
-                ffi::RETRO_DEVICE_ID_JOYPAD_MASK if bitmasks => mask as i16,
+                // R3 is bit 15, the sign bit of the returned i16. Answered even to a Core that never
+                // asked `GET_INPUT_BITMASKS` (LRPS2 reads it every frame without asking).
+                ffi::RETRO_DEVICE_ID_JOYPAD_MASK => mask as i16,
                 0..=15 => i16::from(mask >> id & 1 == 1),
                 _ => 0,
             }
@@ -574,11 +569,10 @@ mod tests {
     }
 
     #[test]
-    fn input_bitmasks_are_offered_and_remembered() {
+    fn input_bitmasks_are_offered() {
         let mut s = state();
         // SAFETY: GET_INPUT_BITMASKS ignores its data.
         assert!(unsafe { dispatch(&mut s, ffi::ENV_GET_INPUT_BITMASKS, ptr::null_mut()) });
-        assert!(s.bitmasks);
     }
 
     #[test]
@@ -995,38 +989,40 @@ mod tests {
         let mut input = InputState::default();
         input.set(1, Button::Start, true);
         let joypad = ffi::RETRO_DEVICE_JOYPAD;
-        assert_eq!(
-            input_answer(&input, false, 1, joypad, 0, Button::Start as c_uint),
-            1
-        );
-        assert_eq!(input_answer(&input, false, 1, joypad, 0, Button::A as c_uint), 0);
-        assert_eq!(
-            input_answer(&input, false, 0, joypad, 0, Button::Start as c_uint),
-            0
-        );
-        assert_eq!(
-            input_answer(&input, false, 9, joypad, 0, Button::Start as c_uint),
-            0
-        );
+        assert_eq!(input_answer(&input, 1, joypad, 0, Button::Start as c_uint), 1);
+        assert_eq!(input_answer(&input, 1, joypad, 0, Button::A as c_uint), 0);
+        assert_eq!(input_answer(&input, 0, joypad, 0, Button::Start as c_uint), 0);
+        assert_eq!(input_answer(&input, 9, joypad, 0, Button::Start as c_uint), 0);
         // A joypad subclass is still a joypad.
         let subclass = (1 + 1) << ffi::RETRO_DEVICE_TYPE_SHIFT | joypad;
-        assert_eq!(
-            input_answer(&input, false, 1, subclass, 0, Button::Start as c_uint),
-            1
-        );
+        assert_eq!(input_answer(&input, 1, subclass, 0, Button::Start as c_uint), 1);
         // Other devices (here the keyboard, 3) read nothing.
-        assert_eq!(input_answer(&input, false, 1, 3, 0, Button::Start as c_uint), 0);
-        assert_eq!(input_answer(&input, false, 1, joypad, 0, 16), 0);
+        assert_eq!(input_answer(&input, 1, 3, 0, Button::Start as c_uint), 0);
+        assert_eq!(input_answer(&input, 1, joypad, 0, 16), 0);
     }
 
     #[test]
-    fn joypad_mask_is_answered_only_after_the_core_asked() {
+    fn joypad_mask_is_answered_without_the_core_asking_for_bitmasks() {
         let mut input = InputState::default();
         input.set(0, Button::Y, true);
         input.set(0, Button::R3, true);
         let (joypad, mask) = (ffi::RETRO_DEVICE_JOYPAD, ffi::RETRO_DEVICE_ID_JOYPAD_MASK);
-        assert_eq!(input_answer(&input, false, 0, joypad, 0, mask), 0);
-        assert_eq!(input_answer(&input, true, 0, joypad, 0, mask) as u16, 0x8002);
+        let _serial = crate::libretro::tests::serial();
+        install(state());
+        let _remove = Removed;
+        // The Core never asked GET_INPUT_BITMASKS (as LRPS2 doesn't), and reads the mask anyway.
+        with(|s| s.input = input);
+        assert_eq!(input_state(0, joypad, 0, mask) as u16, 0x8002);
+        assert_eq!(input_state(1, joypad, 0, mask), 0);
+    }
+
+    /// Removes the callbacks' state when dropped, so a failed assertion leaves none behind.
+    struct Removed;
+
+    impl Drop for Removed {
+        fn drop(&mut self) {
+            remove();
+        }
     }
 
     #[test]
@@ -1035,7 +1031,7 @@ mod tests {
         input.set_stick(1, Stick::Left, -0x7fff, 100);
         input.set_stick(1, Stick::Right, 200, 0x7fff);
         let analog = ffi::RETRO_DEVICE_ANALOG;
-        let ask = |port, index, id| input_answer(&input, false, port, analog, index, id);
+        let ask = |port, index, id| input_answer(&input, port, analog, index, id);
         assert_eq!((ask(1, 0, 0), ask(1, 0, 1)), (-0x7fff, 100), "left stick");
         assert_eq!((ask(1, 1, 0), ask(1, 1, 1)), (200, 0x7fff), "right stick");
         assert_eq!((ask(0, 0, 0), ask(9, 1, 1)), (0, 0), "other ports are centred");
@@ -1047,7 +1043,7 @@ mod tests {
     fn pointer_queries_answer_port_0s_pointer_or_off_the_frame() {
         let mut input = InputState::default();
         let pointer = ffi::RETRO_DEVICE_POINTER;
-        let ask = |input: &InputState, port, id| input_answer(input, false, port, pointer, 0, id);
+        let ask = |input: &InputState, port, id| input_answer(input, port, pointer, 0, id);
         let (x, y, pressed, offscreen) = (
             ffi::RETRO_DEVICE_ID_POINTER_X,
             ffi::RETRO_DEVICE_ID_POINTER_Y,
@@ -1063,7 +1059,7 @@ mod tests {
         }));
         assert_eq!(answers(&input), [-0x7fff, 1234, 1, 0]);
         assert_eq!(ask(&input, 1, x), 0, "only port 0 has a pointer");
-        assert_eq!(input_answer(&input, false, 0, pointer, 1, x), 0, "only one touch");
+        assert_eq!(input_answer(&input, 0, pointer, 1, x), 0, "only one touch");
     }
 
     #[test]
@@ -1160,7 +1156,7 @@ mod tests {
         install(state());
         assert_eq!(guarded(7, |_| panic!("boom")), 7);
         // The state survives the caught panic.
-        assert_eq!(with(|s| s.bitmasks), Some(false));
+        assert_eq!(with(|s| s.fresh), Some(false));
         remove();
     }
 }
