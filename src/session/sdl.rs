@@ -179,6 +179,17 @@ pub fn pad_state(gamepad: &Gamepad) -> PadState {
     state
 }
 
+/// The options `core` runs `system`'s Game at `game` with: for a System with two screens, in the
+/// layout chosen in Settings → Display (FR-DS-1, FR-NEW-2).
+fn core_options(
+    ctx: &Ctx,
+    system: &System,
+    core: &CoreInfo,
+    game: &Path,
+) -> Vec<(&'static str, &'static str)> {
+    core.options_for(system, game, ctx.screen_layout(system))
+}
+
 impl Session {
     /// Loads `play`'s Game on its System's Core, on the OpenGL host its [`cores::GlKind`] needs
     /// (see [`open_gl`]), beside the SDL renderer's own window and context `frontend` (`None` on
@@ -215,7 +226,7 @@ impl Session {
         }
         let core_path = cores::installed_path(&ctx.data_dir, core_info);
         let game_path = root.join(&game.rel_path);
-        let options = core_info.options_for(&game_path);
+        let options = core_options(ctx, system, core_info, &game_path);
         // When the Core says why (a missing BIOS, an encrypted dump), that is the reason shown
         // (FR-EMB-14).
         let mut core =
@@ -1333,6 +1344,34 @@ mod tests {
         }
     }
 
+    /// A DS Game starts melonDS DS in the layout chosen for DS in Settings → Display, Large and small
+    /// until one is chosen (FR-DS-1); 3DS's choice is its own.
+    #[test]
+    fn a_ds_game_starts_in_the_layout_chosen_in_settings() {
+        use crate::cores::ScreenLayout;
+
+        let mut ctx = Ctx::empty();
+        let (nds, three_ds) = (systems::by_id("nds").unwrap(), systems::by_id("3ds").unwrap());
+        let game = Path::new("/Games/nds/Game.nds");
+        let options = |ctx: &Ctx| core_options(ctx, nds, &cores::MELONDS_DS, game);
+        assert_eq!(options(&ctx), cores::MELONDS_DS.options);
+        for layout in [
+            ScreenLayout::SideBySide,
+            ScreenLayout::OneScreen,
+            ScreenLayout::LargeAndSmall,
+        ] {
+            ctx.set_screen_layout(nds, layout);
+            ctx.set_screen_layout(three_ds, layout.next());
+            assert_eq!(
+                options(&ctx),
+                cores::MELONDS_DS.options_for(nds, game, layout),
+                "{layout:?}"
+            );
+        }
+        ctx.set_screen_layout(nds, ScreenLayout::SideBySide);
+        assert!(options(&ctx).contains(&("melonds_screen_layout1", "left-right")));
+    }
+
     /// A PS2 Game, `ps2/<file>`, on a Games Root.
     fn ps2_game(file: &str) -> GameRow {
         GameRow {
@@ -1446,7 +1485,7 @@ mod tests {
         };
         fs::create_dir_all(&dirs.save).unwrap();
         let game = root.path().join("ps2").join(elf);
-        let options = cores::LRPS2.options_for(&game);
+        let options = core_options(&ctx, systems::by_id("ps2").unwrap(), &cores::LRPS2, &game);
         let core_path = cores::installed_path(data.path(), &cores::LRPS2);
         match Core::load(&core_path, &game, dirs, &options, gl) {
             Err(e) => eprintln!("LRPS2 without a BIOS: {e}; it said {:?}", e.core_message()),

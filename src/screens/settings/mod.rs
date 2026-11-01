@@ -37,6 +37,8 @@ const ROW_SUB_H: f32 = 92.0;
 const ROW_GAP: f32 = 12.0;
 /// Extra space above a danger row, which stands apart from the rest.
 const DANGER_GAP: f32 = 24.0;
+/// Space above the first row of a group, for its heading.
+const GROUP_H: f32 = 52.0;
 
 /// One row of a section, as it is now.
 #[derive(Debug, Clone, PartialEq)]
@@ -59,6 +61,8 @@ pub struct Row {
     /// Whether `value` is a cycled choice, drawn "‹ value ›" with accent arrows instead of a plain
     /// right-aligned value; its hint is "← →" Change rather than a Confirm verb.
     pub choice: bool,
+    /// The heading of the group of rows this one starts, drawn above it, e.g. Display's "Screens".
+    pub group: Option<&'static str>,
 }
 
 impl Row {
@@ -73,6 +77,15 @@ impl Row {
             verb: "Open",
             inert: false,
             choice: false,
+            group: None,
+        }
+    }
+
+    /// Starts a group of rows headed `name`, set apart from the rows above.
+    pub fn group(self, name: &'static str) -> Row {
+        Row {
+            group: Some(name),
+            ..self
         }
     }
 
@@ -285,6 +298,10 @@ impl Settings {
 
     fn draw_rows(&self, gfx: &mut Gfx<'_>) {
         for (row, (r, i)) in self.rows.iter().zip(row_rects(&self.rows)) {
+            if let Some(name) = row.group {
+                let style = TextStyle::new(14, Weight::Bold, MUTED);
+                gfx.text(RX + 8.0, r.y - 18.0, &name.to_uppercase(), style, Align::Left);
+            }
             let focused = self.focus == Focus::Rows && i == self.row;
             if focused {
                 gfx.fill_round_rect(r, 14.0, SURFACE2);
@@ -343,6 +360,9 @@ fn row_rects(rows: &[Row]) -> Vec<(Rect, usize)> {
     for (i, row) in rows.iter().enumerate() {
         if row.danger && i > 0 {
             y += DANGER_GAP;
+        }
+        if row.group.is_some() {
+            y += GROUP_H;
         }
         let h = if row.sub.is_some() { ROW_SUB_H } else { ROW_H };
         rects.push((Rect::new(RX, y, RW, h), i));
@@ -626,5 +646,13 @@ mod tests {
         let rows = [Row::new("a"), Row::new("b"), Row::new("c").sub("s").danger()];
         let rects: Vec<_> = row_rects(&rows).into_iter().map(|(r, _)| (r.y, r.h)).collect();
         assert_eq!(rects, [(240.0, 76.0), (328.0, 76.0), (440.0, 92.0)]);
+    }
+
+    /// As in `settings_group` in the mockups: the heading's 52 px above the group's first row.
+    #[test]
+    fn a_row_starting_a_group_leaves_room_for_its_heading() {
+        let rows = [Row::new("a").sub("s"), Row::new("b").group("G"), Row::new("c")];
+        let rects: Vec<_> = row_rects(&rows).into_iter().map(|(r, _)| r.y).collect();
+        assert_eq!(rects, [240.0, 396.0, 484.0]);
     }
 }
