@@ -85,6 +85,10 @@ shot m4-ds "$root/cfg.toml" "nexttab,right,right,right,right,right,right,right,c
     --frames 300
 shot m4-psp "$root/cfg.toml" "nexttab,left,left,left,confirm,confirm,confirm" --frames 900
 shot m4-ps1-no-bios "$root/cfg.toml" "nexttab,left,left,left,left,left,confirm,confirm,confirm"
+# M8: DS side by side, chosen in Settings → Display first (each shot has its own library)
+shot m8-ds-side-by-side "$root/cfg.toml" \
+    "settings$(printf ',down%.0s' {1..5}),right,down,right,back,back,nexttab$(printf ',right%.0s' {1..7}),confirm,confirm,confirm" \
+    --frames 300
 # M8: PS2 without a BIOS
 shot m8-ps2-no-bios "$root/cfg.toml" "nexttab,left,left,left,left,confirm,confirm,confirm"
 # M5: the Details Page, the Options Menu, the Favorite replace picker (six Favorites asked for), the
@@ -160,6 +164,8 @@ shot m8-settings-bios-ps2 "$root/cfg.toml" "settings,down,down,right$(printf ',d
 shot m6-settings-controls "$root/cfg.toml" "settings,down,down,down,down,right"
 shot m6-settings-xbox "$root/cfg.toml" "settings,down,down,down,down,right,right"
 shot m6-settings-display "$root/cfg.toml" "settings,down,down,down,down,down,right"
+# M8: Settings Display's Screens group, as in the mockup: the DS layout row switched to Side by side
+shot m8-settings-display-screens "$root/cfg.toml" "settings$(printf ',down%.0s' {1..5}),right,down,right"
 
 # M6: Settings Artwork: the key row with no key set (screenshot mode runs Artwork off, so it shows
 # "Not set"), and the key entry modal with a typed key
