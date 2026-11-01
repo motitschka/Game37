@@ -85,6 +85,8 @@ shot m4-ds "$root/cfg.toml" "nexttab,right,right,right,right,right,right,right,c
     --frames 300
 shot m4-psp "$root/cfg.toml" "nexttab,left,left,left,confirm,confirm,confirm" --frames 900
 shot m4-ps1-no-bios "$root/cfg.toml" "nexttab,left,left,left,left,left,confirm,confirm,confirm"
+# M8: PS2 without a BIOS
+shot m8-ps2-no-bios "$root/cfg.toml" "nexttab,left,left,left,left,confirm,confirm,confirm"
 # M5: the Details Page, the Options Menu, the Favorite replace picker (six Favorites asked for), the
 # Options Menu's slot picker for the SNES Game (m3-pause-saved filled its slot 1), renaming
 shot m5-details "$root/cfg.toml" "nexttab,right,right,confirm,confirm"
@@ -102,18 +104,20 @@ shot m5-rename "$root/cfg.toml" \
 # M6: top bar entries
 shot m6-search-open "$root/cfg.toml" "down,down,search"
 shot m6-settings-open "$root/cfg.toml" "settings"
-# First-run Setup step 2: GameCube, Switch and PlayStation 2 ticked, then every System
+# First-run Setup step 2: GameCube, PlayStation 3 and Switch ticked, then every System
 shot m6-setup-emulators "$root/missing.toml" \
-    "down,confirm,down,right,confirm,up,right,right,right,right,confirm,settings" --missing-emulators switch
+    "down,confirm,down,right,right,right,confirm,up,right,right,confirm,settings" --missing-emulators switch,ps3
 shot m6-setup-emulators-all "$root/missing.toml" "sort,settings" --missing-emulators wii,3ds,wiiu,switch,ps3,ps4
-# First-run Setup step 3: NES, GameCube, Switch and PlayStation 2 ticked, on through step 2, then
+# First-run Setup step 3: NES, GameCube, PlayStation 3 and Switch ticked, on through step 2, then
 # Create folders, under the Games Root that screenshot mode puts in the data dir
 shot m6-setup-folders "$root/missing.toml" \
-    "confirm,down,confirm,down,right,confirm,up,right,right,right,right,confirm,settings,settings,confirm" \
-    --missing-emulators switch
+    "confirm,down,confirm,down,right,right,right,confirm,up,right,right,confirm,settings,settings,confirm" \
+    --missing-emulators switch,ps3
 # First-run Setup step 4: NES and PSP ticked, step 2 passed over, Create folders on step 3, then the
 # Cores, which the smoke data dirs already have, so nothing downloads
 shot m6-setup-cores "$root/missing.toml" "confirm,down,down,right,right,confirm,settings,confirm,settings"
+# M8: the same with NES, PlayStation and PlayStation 2 ticked: a BIOS note line for each
+shot m8-setup-cores-bios "$root/missing.toml" "confirm,down,down,confirm,right,confirm,settings,confirm,settings"
 # First-run Setup step 5: NES ticked, step 2 passed over, Create folders on step 3, on through the
 # Cores on step 4 (already in the smoke data dir, so nothing downloads), to the SteamGridDB key
 # field, typing into it on the keyboard without finishing (so no Config appears: the shots here
@@ -148,6 +152,8 @@ shot m6-settings-about "$root/cfg.toml" "settings$(printf ',down%.0s' {1..6})"
 # M6: Settings BIOS and Cores, each with the focus on its first row (no download starts)
 shot m6-settings-bios "$root/cfg.toml" "settings,down,down,right"
 shot m6-settings-cores "$root/cfg.toml" "settings,down,down,down,right"
+# M8: Settings BIOS with the focus on PlayStation 2's row
+shot m8-settings-bios-ps2 "$root/cfg.toml" "settings,down,down,right$(printf ',down%.0s' {1..13})"
 
 # M6: Settings Controls and Display: the Controls rows, Controls after switching the style to Xbox
 # (its hint glyphs show Xbox labels), and the Display row

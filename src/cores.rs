@@ -104,8 +104,10 @@ pub static PS1_BIOS: BiosRule = BiosRule {
     },
 };
 
-/// PS2's BIOS (LRPS2, FR-NEW-1): the player's own dump, any file name, of 4 to 8 MiB, in
-/// `<Games Root>/bios/pcsx2/bios/`, where LRPS2 looks for it under its system directory.
+/// PS2's BIOS (LRPS2, FR-NEW-1): the player's own dump, any file name, in
+/// `<Games Root>/bios/pcsx2/bios/`, where LRPS2 looks for it under its system directory. The size
+/// bounds are LRPS2's own (`MIN_BIOS_SIZE`, `MAX_BIOS_SIZE` in its `BiosTools.cpp`: 4 and 8 MiB,
+/// both allowed); it then checks the file's contents itself, and only logs when none passes.
 pub static PS2_BIOS: BiosRule = BiosRule {
     folder: "pcsx2/bios",
     files: BiosFiles::Sized {
