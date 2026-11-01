@@ -89,9 +89,12 @@ shot m4-ps1-no-bios "$root/cfg.toml" "nexttab,left,left,left,left,left,confirm,c
 shot m8-ds-side-by-side "$root/cfg.toml" \
     "settings$(printf ',down%.0s' {1..5}),right,down,right,back,back,nexttab$(printf ',right%.0s' {1..7}),confirm,confirm,confirm" \
     --frames 300
-# M8: PS2 without a BIOS; 3DS running ftpd on Azahar, the top screen large and the touch screen small
+# M8: PS2 without a BIOS; 3DS running ftpd on Azahar, the top screen large and the touch screen small;
+# GameCube and Wii running FCE Ultra GX on Dolphin, its menu showing
 shot m8-ps2-no-bios "$root/cfg.toml" "nexttab,left,left,left,left,confirm,confirm,confirm"
 shot m8-3ds "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..9}),confirm,confirm,confirm" --frames 600
+shot m8-gc "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..6}),confirm,confirm,confirm" --frames 600
+shot m8-wii "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..8}),confirm,confirm,confirm" --frames 600
 # M5: the Details Page, the Options Menu, the Favorite replace picker (six Favorites asked for), the
 # Options Menu's slot picker for the SNES Game (m3-pause-saved filled its slot 1), renaming
 shot m5-details "$root/cfg.toml" "nexttab,right,right,confirm,confirm"

@@ -996,6 +996,7 @@ mod tests {
             hw: Some(hw),
             ran: false,
             duped: false,
+            reread_timing: false,
             audio: Vec::new(),
             game_path: c"/game".into(),
             game_data: None,

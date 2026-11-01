@@ -4,6 +4,7 @@
 
 use std::ffi::{c_uint, c_void};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use super::ffi::{
@@ -198,8 +199,16 @@ fn start(api: Api) -> Core {
         save: "/nonexistent/saves".into(),
     };
     let claim = Claim::take().expect("no other Core is loaded");
-    Core::start(claim, api, None, Path::new("/nonexistent/game"), dirs, CoreSetup::default(), None)
-        .unwrap_or_else(|e| panic!("{e}"))
+    Core::start(
+        claim,
+        api,
+        None,
+        Path::new("/nonexistent/game"),
+        dirs,
+        CoreSetup::default(),
+        None,
+    )
+    .unwrap_or_else(|e| panic!("{e}"))
 }
 
 #[test]
@@ -258,7 +267,15 @@ fn a_message_sent_before_loading_is_not_given_as_why_loading_failed() {
         load_game: load_game_fails,
         ..api()
     };
-    let Err(e) = Core::start(claim, api, None, Path::new("/nonexistent/game"), dirs, CoreSetup::default(), None) else {
+    let Err(e) = Core::start(
+        claim,
+        api,
+        None,
+        Path::new("/nonexistent/game"),
+        dirs,
+        CoreSetup::default(),
+        None,
+    ) else {
         panic!("the fake Core refuses every Game");
     };
     assert_eq!(e.core_message(), None, "{e}");
@@ -304,14 +321,75 @@ fn every_port_gets_the_controller_the_core_is_set_up_with() {
         load_game: load_game_noted,
         ..api()
     };
-    let _core = Core::start(claim, api, None, Path::new("/nonexistent/game"), dirs, setup, None)
-        .unwrap_or_else(|e| panic!("{e}"));
+    let _core = Core::start(
+        claim,
+        api,
+        None,
+        Path::new("/nonexistent/game"),
+        dirs,
+        setup,
+        None,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
     // RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 2), as libretro.h builds it.
     let device = (3 << 8) | ffi::RETRO_DEVICE_JOYPAD;
     let expected: Vec<String> = std::iter::once("load_game".to_owned())
         .chain((0..4).map(|port| format!("port {port}: device {device}")))
         .collect();
     assert_eq!(calls(), expected);
+}
+
+/// The frame rate the fake Core's `av_info_now` reports, as `f64` bits.
+static FPS_NOW: AtomicU64 = AtomicU64::new(0);
+
+/// A Core whose frame rate follows the Game (Dolphin's) and changes without it saying so.
+unsafe extern "C" fn av_info_now(av: *mut RetroSystemAvInfo) {
+    // SAFETY: the host passes a valid, writable `retro_system_av_info`.
+    unsafe { av_info(av) };
+    // SAFETY: as above.
+    let av = unsafe { &mut *av };
+    (av.timing.fps, av.timing.sample_rate) = (f64::from_bits(FPS_NOW.load(Ordering::Relaxed)), 32000.0);
+}
+
+/// Set up to reread its timing, a Core's new frame rate and sample rate are taken after the next
+/// frame; otherwise those it gave at load stay.
+#[test]
+fn a_core_set_up_to_reread_its_timing_gets_its_new_rates_after_a_frame() {
+    let _serial = serial();
+    for reread_timing in [true, false] {
+        reset();
+        FPS_NOW.store(50.0f64.to_bits(), Ordering::Relaxed);
+        let dirs = CoreDirs {
+            system: "/nonexistent/system".into(),
+            save: "/nonexistent/saves".into(),
+        };
+        let claim = Claim::take().expect("no other Core is loaded");
+        let setup = CoreSetup {
+            reread_timing,
+            ..Default::default()
+        };
+        let api = Api {
+            get_system_av_info: av_info_now,
+            ..api()
+        };
+        let mut core = Core::start(
+            claim,
+            api,
+            None,
+            Path::new("/nonexistent/game"),
+            dirs,
+            setup,
+            None,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!((core.av_info().fps, core.av_info().sample_rate), (50.0, 32000.0));
+
+        FPS_NOW.store((60000.0f64 / 1001.0).to_bits(), Ordering::Relaxed);
+        core.run_frame(&InputState::default());
+        let expected = if reread_timing { 60000.0 / 1001.0 } else { 50.0 };
+        assert_eq!(core.av_info().fps, expected, "reread_timing {reread_timing}");
+        assert_eq!(core.av_info().base_width, 320, "the geometry stays");
+    }
 }
 
 #[test]

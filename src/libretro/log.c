@@ -5,7 +5,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-enum { RETRO_LOG_WARN = 0 };
+enum { RETRO_LOG_WARN = 2 };
 
 void game37_core_log(int level, const char *fmt, ...)
 {

@@ -260,6 +260,7 @@ impl Session {
         let setup = CoreSetup {
             options: &options,
             device: core_info.port_device(system),
+            reread_timing: core_info.rereads_timing(),
         };
         // When the Core says why (a missing BIOS, an encrypted dump), that is the reason shown
         // (FR-EMB-14).
@@ -1325,8 +1326,8 @@ mod tests {
         fs::create_dir_all(&dirs.system).unwrap();
         fs::create_dir_all(&dirs.save).unwrap();
 
-        let mut core =
-            Core::load(&core_path, &game_path, dirs.clone(), Default::default(), None).unwrap_or_else(|e| panic!("{e}"));
+        let mut core = Core::load(&core_path, &game_path, dirs.clone(), Default::default(), None)
+            .unwrap_or_else(|e| panic!("{e}"));
         let ram = core.save_ram().expect("mGBA's Test Suite Game has save RAM");
         let known: Vec<u8> = (0..ram.len()).map(|i| i as u8).collect();
         ram.copy_from_slice(&known);
@@ -1338,7 +1339,8 @@ mod tests {
         assert_eq!(srm.parent().unwrap(), saves::save_dir(root.path(), "gba"));
         drop(core);
 
-        let mut core = Core::load(&core_path, &game_path, dirs, Default::default(), None).unwrap_or_else(|e| panic!("{e}"));
+        let mut core = Core::load(&core_path, &game_path, dirs, Default::default(), None)
+            .unwrap_or_else(|e| panic!("{e}"));
         let ram = core.save_ram().expect("mGBA's Test Suite Game has save RAM");
         assert!(saves::load(&srm, ram).unwrap());
         assert_eq!(ram, known.as_slice());
@@ -1458,7 +1460,15 @@ mod tests {
         let sdl = sdl3::init().unwrap();
         let video = sdl.video().unwrap();
         let window = video.window("hw", 1280, 720).hidden().build().unwrap();
-        let canvas = sdl3::render::create_renderer(window, Some(c"opengl")).unwrap();
+        let mut canvas = sdl3::render::create_renderer(window, Some(c"opengl")).unwrap();
+        // As the app's window shows it (`app::canvas`): Game37 draws in logical 1920×1080.
+        canvas
+            .set_logical_size(
+                1920,
+                1080,
+                sdl3::sys::render::SDL_RendererLogicalPresentation::LETTERBOX,
+            )
+            .unwrap();
         (sdl, canvas)
     }
 
@@ -1909,8 +1919,10 @@ mod tests {
     }
 
     /// A Games Root holding FCE Ultra GX for `system` (GameCube or Wii), and a data dir with the
-    /// test data's Cores and Dolphin's system files, as [`cores::DOLPHIN_ASSETS`] unpack them. Only
-    /// `Sys` is linked, so that whatever else Dolphin writes there stays in the temp dir.
+    /// test data's Cores and Dolphin's system files, where [`cores::DOLPHIN_ASSETS`] unpack them.
+    /// Only `Sys` is linked: Dolphin writes into its `User/` folder in the Games Root's saves.
+    /// Dolphin keeps the system directory of its first load in a process, so in a test run after
+    /// another Dolphin test, `Sys` is that test's, by then deleted; FCE Ultra GX boots without it.
     fn dolphin_world(system: &str) -> (TempDir, TempDir, Ctx, GameRow) {
         let file = "FCE Ultra GX (Homebrew).dol";
         let root = TempDir::new().unwrap();
@@ -1925,8 +1937,7 @@ mod tests {
             .unwrap();
         let marker = cores::assets_marker(data.path(), &cores::DOLPHIN_ASSETS);
         fs::create_dir_all(marker.parent().unwrap()).unwrap();
-        std::os::unix::fs::symlink(Path::new(TESTDATA).join("data/system/dolphin-emu/Sys"), &marker)
-            .unwrap();
+        std::os::unix::fs::symlink(Path::new(TESTDATA).join("data/system/dolphin-emu/Sys"), &marker).unwrap();
         assert!(cores::is_installed(data.path(), &cores::DOLPHIN));
         let mut ctx = Ctx::empty();
         ctx.games_root = root.path().to_path_buf();
@@ -1954,85 +1965,240 @@ mod tests {
         audio
     }
 
+    /// Holds `pad` on port 0 for 10 ticks, then lets go for 50, so FCE Ultra GX's menu settles.
+    fn press(session: &mut Session, gfx: &mut Gfx<'_>, pad: PadState) {
+        for _ in 0..10 {
+            assert!(!session.tick(gfx, 1.0 / 60.0, &[(0, pad)], Mouse::default(), |_| false));
+        }
+        tick_n(session, gfx, 50);
+    }
+
+    /// Two seconds of Dolphin's sound arrive, stereo at its sample rate. Dolphin sends it from its
+    /// CPU thread, not from `retro_run`.
+    fn assert_sound_at_the_cores_rate(session: &mut Session) {
+        let frames = (2.0 * session.core.av_info().fps).round();
+        let samples = frames_with(session, &Default::default(), frames as usize).len() as f64;
+        let av = session.core.av_info();
+        let expected = frames / av.fps * 2.0 * av.sample_rate;
+        assert!(
+            (samples / expected - 1.0).abs() < 0.1,
+            "{samples} samples in {frames} frames, not about {expected} ({av:?})"
+        );
+    }
+
+    /// Fails if anything under `dir` was made or changed since `since`.
+    fn assert_untouched(dir: &Path, since: std::time::SystemTime) {
+        let meta = fs::symlink_metadata(dir).unwrap();
+        assert!(meta.modified().unwrap() < since, "{} changed", dir.display());
+        if meta.is_dir() {
+            for entry in fs::read_dir(dir).unwrap() {
+                assert_untouched(&entry.unwrap().path(), since);
+            }
+        }
+    }
+
+    /// Dolphin wrote into its `User/` folder in the Games Root's saves for `system`, and nothing
+    /// into the test data it was given.
+    fn assert_dolphin_wrote_only_its_own_folders(root: &Path, system: &str, since: std::time::SystemTime) {
+        assert!(
+            saves::save_dir(root, system).join("User").is_dir(),
+            "Dolphin's User folder in the Games Root"
+        );
+        assert_untouched(&Path::new(TESTDATA).join("data/system/dolphin-emu"), since);
+        assert_untouched(&Path::new(TESTDATA).join("games").join(system), since);
+    }
+
+    /// Save State slot 1 keeps the picture `session` shows now (FR-EMB-5, FR-EMB-6): `mover`
+    /// moves FCE Ultra GX's menu cursor, so the picture changes; loading the slot brings back the
+    /// exact saved picture, not the moved one, and so do slot 1 and the Resume State in a new
+    /// session, Dolphin's second load in the process.
+    fn assert_dolphin_states_round_trip(
+        mut session: Session,
+        gfx: &mut Gfx<'_>,
+        ctx: &Ctx,
+        shot: &Path,
+        game: &GameRow,
+        mover: PadState,
+    ) {
+        let saved = shown_exactly(&mut session, gfx, ctx, shot);
+        session.save_slot(1).unwrap_or_else(|e| panic!("save: {e}"));
+        press(&mut session, gfx, mover);
+        let moved = shown_exactly(&mut session, gfx, ctx, shot);
+        assert!(
+            moved != saved,
+            "the cursor moved the picture away from the saved one"
+        );
+
+        session.load_slot(1).unwrap_or_else(|e| panic!("load: {e}"));
+        tick_n(&mut session, gfx, 30);
+        assert!(
+            shown_exactly(&mut session, gfx, ctx, shot) == saved,
+            "the slot brings back the picture from save time, not the moved one"
+        );
+        session.write_resume();
+        let resume = session.states.resume();
+        drop(session);
+        assert!(
+            fs::metadata(&resume).is_ok_and(|m| m.len() > 0),
+            "the Resume State"
+        );
+
+        let from_slot = Play {
+            game: game.clone(),
+            start: Start::Slot(1),
+        };
+        let mut session = Session::start(&from_slot, ctx, gfx.gl_context(), None, Some(60.0))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(session.start_message, None, "slot 1 restored in a new session");
+        tick_n(&mut session, gfx, 30);
+        assert!(
+            shown_exactly(&mut session, gfx, ctx, shot) == saved,
+            "a new session also restores the saved picture"
+        );
+        press(&mut session, gfx, mover);
+        assert!(
+            shown_exactly(&mut session, gfx, ctx, shot) != saved,
+            "moved again"
+        );
+        let state = fs::read(&resume).unwrap();
+        session
+            .core
+            .unserialize(&state)
+            .unwrap_or_else(|e| panic!("resume: {e}"));
+        tick_n(&mut session, gfx, 30);
+        assert!(
+            shown_exactly(&mut session, gfx, ctx, shot) == saved,
+            "the Resume State also restores the saved picture"
+        );
+    }
+
+    /// GameCube with Dolphin (FR-NEW-3, FR-NEW-4): FCE Ultra GX, a `.dol`, boots through a
+    /// GameCube session beside the opengl renderer and its menu shows on the renderer, 4:3 at
+    /// twice the GameCube's 640×528. Its sound arrives, the d-pad moves its menu, and Save
+    /// States and the Resume State round-trip.
     #[test]
     #[ignore = "needs /home/matei/Game37/.testdata"]
-    fn hw_dolphin_explore() {
+    fn hw_dolphin_plays_fce_ultra_gx_on_gamecube_with_sound_input_and_states() {
         use crate::ui::text::Fonts;
 
         let _serial = serial();
-        for system in ["gc", "wii"] {
-            let (root, data, ctx, game) = dolphin_world(system);
-            let (_sdl, canvas) = offscreen_renderer();
-            let creator = canvas.texture_creator();
-            let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
+        let since = std::time::SystemTime::now();
+        let (root, data, ctx, game) = dolphin_world("gc");
+        let (_sdl, canvas) = offscreen_renderer();
+        let creator = canvas.texture_creator();
+        let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
+        let shot = data.path().join("shot.bmp");
+        let mut session = Session::start(
+            &Play::resume(game.clone()),
+            &ctx,
+            gfx.gl_context(),
+            None,
+            Some(60.0),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        tick_n(&mut session, &mut gfx, 300);
+        assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "booted");
+        let frame = session.core.frame();
+        assert_eq!((frame.width, frame.height), (1280, 1056), "twice 640×528");
+        assert_eq!(session.core.av_info().aspect_ratio, 4.0 / 3.0);
+        assert_sound_at_the_cores_rate(&mut session);
+
+        let mut down = PadState::default();
+        down.press(sdl3::gamepad::Button::DPadDown);
+        assert_dolphin_states_round_trip(session, &mut gfx, &ctx, &shot, &game, down);
+        assert_dolphin_wrote_only_its_own_folders(root.path(), "gc", since);
+    }
+
+    /// Wii with Dolphin (FR-NEW-3, FR-NEW-4): FCE Ultra GX, a `.dol`, boots through a Wii session
+    /// beside the opengl renderer and its menu shows on the renderer, 16:9. The controller is a
+    /// Wii Remote with a Nunchuk: Dolphin asks for the RetroPad buttons only that mapping uses
+    /// (L, R and L2: -, + and shaking the Nunchuk), A on the Wii Remote opens the folder list,
+    /// and the left stick, the Nunchuk's, moves its cursor (on a Wii Remote alone it would tilt
+    /// the remote and leave the cursor). Its sound arrives, and Save States and the Resume State
+    /// round-trip.
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn hw_dolphin_plays_fce_ultra_gx_on_wii_with_the_wii_remote_and_nunchuk_sound_and_states() {
+        use crate::libretro::Button;
+        use crate::ui::text::Fonts;
+
+        let _serial = serial();
+        let since = std::time::SystemTime::now();
+        let (root, data, ctx, game) = dolphin_world("wii");
+        let wii = systems::by_id("wii").unwrap();
+        assert_eq!(
+            cores::for_system(wii).unwrap().port_device(wii),
+            cores::DOLPHIN_WII_REMOTE_AND_NUNCHUK
+        );
+        let (_sdl, canvas) = offscreen_renderer();
+        let creator = canvas.texture_creator();
+        let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
+        let shot = data.path().join("shot.bmp");
+        let mut session = Session::start(
+            &Play::resume(game.clone()),
+            &ctx,
+            gfx.gl_context(),
+            None,
+            Some(60.0),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        tick_n(&mut session, &mut gfx, 300);
+        let booted = shown_exactly(&mut session, &mut gfx, &ctx, &shot);
+        assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "booted");
+        assert_eq!(session.core.av_info().aspect_ratio, 16.0 / 9.0);
+        let queries = session.core.input_queries();
+        for button in [Button::L, Button::R, Button::L2] {
+            let id = (0, crate::libretro::PortDevice::RETROPAD.id(), 0, button as u32);
+            assert!(queries.contains_key(&id), "{button:?}: {queries:?}");
+        }
+        assert_sound_at_the_cores_rate(&mut session);
+
+        // A on the Wii Remote: "Up One Level", to a list the cursor can move in.
+        let mut a = PadState::default();
+        a.press(sdl3::gamepad::Button::East);
+        press(&mut session, &mut gfx, a);
+        assert!(
+            shown_exactly(&mut session, &mut gfx, &ctx, &shot) != booted,
+            "A opened a list"
+        );
+
+        let nunchuk_down = PadState {
+            left_y: i16::MAX,
+            ..Default::default()
+        };
+        assert_dolphin_states_round_trip(session, &mut gfx, &ctx, &shot, &game, nunchuk_down);
+        assert_dolphin_wrote_only_its_own_folders(root.path(), "wii", since);
+    }
+
+    /// Dolphin, one Core for two Systems, loads again and again in one process, as when the
+    /// player quits one Game and starts another: GameCube, then Wii, then GameCube again, each
+    /// showing its Game on the renderer in its own shape, with frames run at the Game's own rate
+    /// (FCE Ultra GX: 50 Hz on GameCube, 59.94 on Wii), as its sound comes. At load, Dolphin
+    /// gives the rate of the Game before, so this needs [`CoreInfo::rereads_timing`].
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn hw_dolphin_loads_again_in_one_process_gamecube_then_wii_then_gamecube() {
+        use crate::ui::text::Fonts;
+
+        let _serial = serial();
+        let (_sdl, canvas) = offscreen_renderer();
+        let creator = canvas.texture_creator();
+        let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
+        for (system, aspect) in [("gc", 4.0 / 3.0), ("wii", 16.0 / 9.0), ("gc", 4.0 / 3.0)] {
+            let (_root, data, ctx, game) = dolphin_world(system);
             let shot = data.path().join("shot.bmp");
-            let mut session =
-                Session::start(&Play::resume(game.clone()), &ctx, gfx.gl_context(), None, Some(60.0))
-                    .unwrap_or_else(|e| panic!("{e}"));
-            eprintln!("{system}: {:?}", session.core.av_info());
-            use crate::libretro::{Button, InputState, Stick};
-            let mut inputs: Vec<(&str, InputState)> = vec![("none", InputState::default())];
-            let mut i = InputState::default();
-            i.set(0, Button::Down, true);
-            inputs.push(("dpad down", i));
-            let mut i = InputState::default();
-            i.set_stick(0, Stick::Left, 0, 32767);
-            inputs.push(("left stick down", i));
-            let mut i = InputState::default();
-            i.set_stick(0, Stick::Right, 0, 20000);
-            inputs.push(("right stick down", i));
-            let mut i = InputState::default();
-            i.set(0, Button::A, true);
-            inputs.push(("A", i));
-            let mut i = InputState::default();
-            i.set_stick(0, Stick::Right, -32767, -32767);
-            inputs.push(("pointer away", i));
-            let mut i = InputState::default();
-            i.set_stick(0, Stick::Right, -32767, -32767);
-            i.set_stick(0, Stick::Left, 0, 32767);
-            inputs.push(("pointer away + left stick down", i));
-            let mut i = InputState::default();
-            i.set_stick(0, Stick::Right, -32767, -32767);
-            i.set(0, Button::Down, true);
-            inputs.push(("pointer away + dpad down", i));
-            let mut i = InputState::default();
-            i.set(0, Button::B, true);
-            inputs.push(("B", i));
+            let mut session = Session::start(&Play::resume(game), &ctx, gfx.gl_context(), None, Some(60.0))
+                .unwrap_or_else(|e| panic!("{system}: {e}"));
             tick_n(&mut session, &mut gfx, 300);
-            for (step, (name, input)) in inputs.iter().enumerate() {
-                let before = session.core.frame().clone();
-                frames_with(&mut session, input, 6);
-                let audio = frames_with(&mut session, &Default::default(), 60);
-                let loud = audio.iter().filter(|s| s.unsigned_abs() > 64).count();
-                let max = audio.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0);
-                let after = session.core.frame();
-                let diff = difference(&sampled(&before, (0, 0, 1280, 1056)), &sampled(after, (0, 0, 1280, 1056)));
-                let f = (session.core.frame().width, session.core.frame().height);
-                tick_n(&mut session, &mut gfx, 1);
-                let colours = shown(&mut session, &mut gfx, &ctx, &shot);
-                eprintln!(
-                    "{system} step {step} {name}: diff {diff:.2}, {} samples, {loud} loud, max {max}, frame {}x{}, {} colours shown",
-                    audio.len(),
-                    f.0,
-                    f.1,
-                    colours.len()
-                );
-                fs::copy(&shot, format!("/home/matei/Game37/.claude/worktrees/wf_a43fc304-930-2/target/scratch/{system}-{step}.bmp")).unwrap();
-                {
-                    let f = session.core.frame();
-                    let mut ppm = format!("P6 {} {} 255\n", f.width, f.height).into_bytes();
-                    for row in f.data.chunks(f.pitch) {
-                        for px in row[..f.width as usize * 4].chunks(4) {
-                            ppm.extend_from_slice(&[px[2], px[1], px[0]]);
-                        }
-                    }
-                    eprintln!("format {:?}", f.format);
-                    fs::write(format!("/home/matei/Game37/.claude/worktrees/wf_a43fc304-930-2/target/scratch/{system}-{step}.ppm"), ppm).unwrap();
-                }
-            }
-            drop(session); eprintln!("{}", fs::read_to_string(root.path().join(format!("saves/{system}/User/Logs/dolphin.log"))).unwrap_or_default());
-            let out = std::process::Command::new("find").arg(root.path()).arg(data.path()).arg("-maxdepth").arg("5").output().unwrap();
-            eprintln!("{}", String::from_utf8_lossy(&out.stdout));
+            assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), system);
+            assert_eq!(session.core.av_info().aspect_ratio, aspect, "{system}");
+            assert_sound_at_the_cores_rate(&mut session);
+            tick_n(&mut session, &mut gfx, 1);
+            assert_eq!(
+                session.fps,
+                session.core.av_info().fps,
+                "{system}: frames at the Game's rate"
+            );
         }
     }
 

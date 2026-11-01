@@ -55,19 +55,24 @@ impl PortDevice {
 }
 
 /// How a Core is set up for a Game: `options` are Core option values, `(key, value)`, it gets
-/// ahead of its own defaults, and `device` is the controller it is told sits in every port.
+/// ahead of its own defaults, and `device` is the controller it is told sits in every port. With
+/// `reread_timing`, the frame rate and sample rate are read from the Core again after every frame
+/// (`retro_get_system_av_info`), for a Core whose rates follow the Game without it ever announcing
+/// a change (`SET_SYSTEM_AV_INFO`).
 #[derive(Debug, Clone, Copy)]
 pub struct CoreSetup<'a> {
     pub options: &'a [(&'a str, &'a str)],
     pub device: PortDevice,
+    pub reread_timing: bool,
 }
 
 impl Default for CoreSetup<'_> {
-    /// The Core's own option values, and a RetroPad in every port.
+    /// The Core's own option values, a RetroPad in every port, and the rates the Core announces.
     fn default() -> Self {
         CoreSetup {
             options: &[],
             device: PortDevice::RETROPAD,
+            reread_timing: false,
         }
     }
 }
@@ -357,6 +362,8 @@ pub struct Core {
     /// `retro_run` has run at least once.
     ran: bool,
     duped: bool,
+    /// [`CoreSetup::reread_timing`].
+    reread_timing: bool,
     audio: Vec<i16>,
     game_path: CString,
     /// The Game's contents when the Core takes them from memory; it may read them until unload.
@@ -439,6 +446,7 @@ impl Core {
             hw: None,
             ran: false,
             duped: false,
+            reread_timing: setup.reread_timing,
             audio: Vec::new(),
             game_path: game_cpath,
             game_data: None,
@@ -522,7 +530,16 @@ impl Core {
             None => run(),
         }
         self.ran = true;
+        let timing = self.reread_timing.then(|| {
+            let mut av = RetroSystemAvInfo::default();
+            // SAFETY: `av` is a valid, writable `retro_system_av_info` for the duration of the call.
+            unsafe { (self.api.get_system_av_info)(&mut av) };
+            av.timing
+        });
         callbacks::with(|s| {
+            if let Some(timing) = timing {
+                (s.av_info.fps, s.av_info.sample_rate) = (timing.fps, timing.sample_rate);
+            }
             self.duped = !s.fresh;
             if s.fresh {
                 std::mem::swap(&mut self.video, &mut s.frame);
