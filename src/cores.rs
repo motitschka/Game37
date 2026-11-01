@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use tempfile::NamedTempFile;
 
+use crate::libretro::Button;
 use crate::systems::System;
 
 /// A libretro Core: its display name, the `.so` file the build server publishes, and what it
@@ -45,21 +46,10 @@ pub struct CoreInfo {
 /// and Game37's swap control (R3, Tab) swaps which screen is large.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TouchScreen {
-    pub swap: ScreenSwap,
-}
-
-/// How Game37's swap control swaps a [`TouchScreen`] Core's screens.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScreenSwap {
-    /// The Core swaps them itself on R3 (melonDS DS), so Tab holds R3.
-    R3,
-    /// The Core shows the screen this option names large, so each press of the swap control sets
-    /// it to the other of its two values while the Game runs (Azahar, whose R3 is the 3DS's HOME
-    /// button and so never reaches it). The first value is the one the Core starts with.
-    Option {
-        key: &'static str,
-        values: [&'static str; 2],
-    },
+    /// The RetroPad button the Core swaps its screens on, which Game37's swap control presses:
+    /// R3 for melonDS DS, L3 for Azahar (its own swap hotkey; it reads no R3). A pad's R3 reaches
+    /// the Core as this button instead.
+    pub swap: Button,
 }
 
 /// How a Core keeps a Game's In-game Saves, all under the save directory it is given,
@@ -330,7 +320,7 @@ pub static MELONDS_DS: CoreInfo = CoreInfo {
     bios: None,
     assets: None,
     saves: InGameSaves::SaveMemory,
-    touch: Some(TouchScreen { swap: ScreenSwap::R3 }),
+    touch: Some(TouchScreen { swap: Button::R3 }),
 };
 pub static PPSSPP: CoreInfo = CoreInfo {
     name: "PPSSPP",
@@ -374,12 +364,7 @@ pub static AZAHAR: CoreInfo = CoreInfo {
     bios: None,
     assets: None,
     saves: InGameSaves::Shared,
-    touch: Some(TouchScreen {
-        swap: ScreenSwap::Option {
-            key: "citra_swap_screen",
-            values: ["Top", "Bottom"],
-        },
-    }),
+    touch: Some(TouchScreen { swap: Button::L3 }),
 };
 
 /// How Azahar lays out the 3DS's two screens (FR-NEW-2): the top screen large and the touch
@@ -1457,16 +1442,11 @@ mod tests {
 
     #[test]
     fn ds_and_3ds_have_a_touch_screen_whose_swap_their_cores_take_differently() {
-        assert_eq!(MELONDS_DS.touch, Some(TouchScreen { swap: ScreenSwap::R3 }));
+        assert_eq!(MELONDS_DS.touch, Some(TouchScreen { swap: Button::R3 }));
         assert_eq!(
             AZAHAR.touch,
-            Some(TouchScreen {
-                swap: ScreenSwap::Option {
-                    key: "citra_swap_screen",
-                    values: ["Top", "Bottom"],
-                },
-            }),
-            "R3 is the 3DS's HOME button in Azahar"
+            Some(TouchScreen { swap: Button::L3 }),
+            "Azahar's own swap hotkey"
         );
         for core in [
             &MESEN,

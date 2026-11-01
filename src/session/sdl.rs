@@ -22,7 +22,7 @@ use super::input::{self, HeldOver, Mouse, PadState, PauseTrigger};
 use super::saves::{self, Tracker};
 use super::states::{self, SLOTS, StatePaths};
 use super::timing::{self, AUDIO_MAX, PlayTimer, Scheduler};
-use crate::cores::{self, CoreInfo, GlKind};
+use crate::cores::{self, CoreInfo, GlKind, TouchScreen};
 use crate::ctx::{self, Ctx, Play, Start};
 use crate::launch::{self, FAILED_TITLE};
 use crate::libretro::{Core, CoreDirs, Frame, GlHost, Stick};
@@ -61,9 +61,9 @@ pub struct Session {
     shown: bool,
     /// Whether the Pause Menu is open over it.
     paused: bool,
-    /// The Game has a touch screen (DS): the mouse touches it, Tab swaps screens, and the mouse
-    /// cursor shows.
-    touch_screen: bool,
+    /// The Game's touch screen (DS, 3DS), if it has one: the mouse touches it, R3 and Tab swap
+    /// screens, and the mouse cursor shows.
+    touch: Option<TouchScreen>,
     /// Whether the left stick also presses the d-pad ([`cores::CoreInfo::stick_is_dpad`]).
     stick_dpad: bool,
     /// How fast the Game really ran, logged when the session ends.
@@ -262,7 +262,7 @@ impl Session {
             timer: PlayTimer::start(Instant::now()),
             shown: true,
             paused: false,
-            touch_screen: std::ptr::eq(core_info, &cores::MELONDS_DS),
+            touch: core_info.touch,
             stick_dpad: core_info.stick_is_dpad(),
             pace: Pace::default(),
             start_message,
@@ -271,7 +271,7 @@ impl Session {
 
     /// Whether the Game has a touch screen the mouse touches, so the mouse cursor shows.
     pub fn touch_screen(&self) -> bool {
-        self.touch_screen
+        self.touch.is_some()
     }
 
     /// The window was hidden or shown: a hidden Game runs no frames and plays no sound, and owes
@@ -326,7 +326,8 @@ impl Session {
         mouse: Mouse,
         down: impl Fn(Scancode) -> bool,
     ) -> bool {
-        let keyboard = input::keyboard_buttons(&down, self.touch_screen);
+        let swap = self.touch.map(|touch| touch.swap);
+        let keyboard = input::keyboard_buttons(&down, swap);
         let esc = down(Scancode::Escape);
         let (mut input, paused) =
             input::frame_input_with(pads, keyboard, esc, &mut self.pause, self.stick_dpad);
@@ -334,9 +335,12 @@ impl Session {
             return true;
         }
         apply_keyboard_stick(&mut input, &down, self.stick_dpad);
+        if let Some(swap) = swap {
+            input::swap_on(&mut input, swap);
+        }
         self.held.mask(&mut input);
         self.follow_av_info();
-        if self.touch_screen {
+        if self.touch.is_some() {
             // Where `draw` puts the frame.
             input.set_pointer(input::touch(timing::fit(self.core.av_info().aspect_ratio), mouse));
         }
@@ -1526,6 +1530,186 @@ mod tests {
 
         session.save_slot(1).unwrap_or_else(|e| panic!("save: {e}"));
         tick_n(&mut session, &mut gfx, 120);
+        session.load_slot(1).unwrap_or_else(|e| panic!("load: {e}"));
+        tick_n(&mut session, &mut gfx, 60);
+        assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "loaded");
+        session.write_resume();
+        let resume = session.states.resume();
+        drop(session);
+        assert!(
+            fs::metadata(&resume).is_ok_and(|m| m.len() > 0),
+            "the Resume State"
+        );
+
+        let from_slot = Play {
+            game,
+            start: Start::Slot(1),
+        };
+        let mut session = Session::start(&from_slot, &ctx, gfx.gl_context(), None, Some(60.0))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(session.start_message, None, "slot 1 restored in a new session");
+        tick_n(&mut session, &mut gfx, 60);
+        assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "from slot 1");
+        let state = fs::read(&resume).unwrap();
+        session
+            .core
+            .unserialize(&state)
+            .unwrap_or_else(|e| panic!("resume: {e}"));
+        tick_n(&mut session, &mut gfx, 60);
+        assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "resumed");
+    }
+
+    /// A 3DS Games Root holding ftpd, and a data dir with the test data's Cores.
+    fn three_ds_world() -> (TempDir, TempDir, Ctx, GameRow) {
+        let file = "ftpd (Homebrew).3dsx";
+        let root = TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join("3ds")).unwrap();
+        fs::copy(
+            Path::new(TESTDATA).join("games/3ds").join(file),
+            root.path().join("3ds").join(file),
+        )
+        .unwrap();
+        let data = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(Path::new(TESTDATA).join("data/cores"), data.path().join("cores"))
+            .unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = root.path().to_path_buf();
+        ctx.data_dir = data.path().to_path_buf();
+        let game = GameRow {
+            id: 1,
+            system: "3ds".into(),
+            rel_path: format!("3ds/{file}"),
+            title: "ftpd".into(),
+            date_added: 0,
+            last_played: None,
+            playtime_secs: 0,
+            favorite: false,
+        };
+        (root, data, ctx, game)
+    }
+
+    /// Azahar's 1920×960 frame with the large/small layout at proportion 3 (`AZAHAR_LAYOUT`): the
+    /// large screen's inside, `(x, y, w, h)`, top left, and the small one's, bottom right, each
+    /// a few pixels in from its edges.
+    const AZAHAR_LARGE: (usize, usize, usize, usize) = (8, 8, 1500, 895);
+    const AZAHAR_SMALL: (usize, usize, usize, usize) = (1524, 640, 388, 287);
+
+    /// The RGB bytes of `area` of an `Xrgb8888` or `Rgba32` frame, sampled on a 96 × 72 grid, so
+    /// that a large and a small screen compare.
+    fn sampled(frame: &Frame, (x, y, w, h): (usize, usize, usize, usize)) -> Vec<u8> {
+        let bpp = frame.format.bytes_per_pixel();
+        let mut out = Vec::with_capacity(96 * 72 * 3);
+        for row in 0..72 {
+            let line = &frame.data[(y + row * h / 72) * frame.pitch..];
+            for col in 0..96 {
+                out.extend_from_slice(&line[(x + col * w / 96) * bpp..][..3]);
+            }
+        }
+        out
+    }
+
+    /// The mean difference per colour byte of two samples.
+    fn difference(a: &[u8], b: &[u8]) -> f64 {
+        let sum: u64 = a.iter().zip(b).map(|(x, y)| u64::from(x.abs_diff(*y))).sum();
+        sum as f64 / a.len() as f64
+    }
+
+    /// Whether the swap put what the small screen showed in `before` on the large one now: the large
+    /// screen looks more like the old small one than like the old large one.
+    fn swapped(before: &Frame, now: &Frame) -> bool {
+        let now_large = sampled(now, AZAHAR_LARGE);
+        let (to_small, to_large) = (
+            difference(&now_large, &sampled(before, AZAHAR_SMALL)),
+            difference(&now_large, &sampled(before, AZAHAR_LARGE)),
+        );
+        eprintln!(
+            "the large screen differs from the old small one by {to_small}, the old large one by {to_large}"
+        );
+        to_small < to_large
+    }
+
+    /// 3DS with Azahar (FR-NEW-2): ftpd boots through a 3DS session on the SDL OpenGL host and its
+    /// picture shows on the renderer; one large and one small screen in a 2:1 frame. The mouse on
+    /// the small screen reaches Azahar as `RETRO_DEVICE_POINTER`; a pad's R3 swaps the screens and
+    /// Tab swaps them back. Save State slot 1 saves and loads, and slot 1 and the Resume State
+    /// restore in the next session (after its first frame, for Azahar's `MUST_INITIALIZE`).
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn hw_azahar_boots_ftpd_on_the_renderer_touches_swaps_and_states_round_trip() {
+        // RETRO_DEVICE_POINTER, and its ids for x, y and the press.
+        const POINTER: u32 = 6;
+        const X: u32 = 0;
+        const Y: u32 = 1;
+        const PRESSED: u32 = 2;
+        use crate::ui::text::Fonts;
+
+        let _serial = serial();
+        let (_root, data, ctx, game) = three_ds_world();
+        let (_sdl, canvas) = offscreen_renderer();
+        let creator = canvas.texture_creator();
+        let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
+        let shot = data.path().join("shot.bmp");
+        let mut session = Session::start(
+            &Play::resume(game.clone()),
+            &ctx,
+            gfx.gl_context(),
+            None,
+            Some(60.0),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        assert!(session.touch_screen(), "the mouse cursor shows");
+        tick_n(&mut session, &mut gfx, 600);
+        assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "booted");
+        let frame = session.core.frame();
+        assert_eq!((frame.width, frame.height), (1920, 960), "large and small at 3");
+
+        // The mouse pressed at the small screen's centre, in Game37's logical coordinates.
+        let picture = timing::fit(session.core.av_info().aspect_ratio);
+        let (x, y, w, h) = AZAHAR_SMALL;
+        let at = (
+            picture.x + (x + w / 2) as f32 * picture.w / 1920.0,
+            picture.y + (y + h / 2) as f32 * picture.h / 960.0,
+        );
+        let mouse = Mouse {
+            at: Some(at),
+            left: true,
+        };
+        let pointer = input::touch(picture, mouse).expect("on the picture");
+        for _ in 0..10 {
+            assert!(!session.tick(&mut gfx, 1.0 / 60.0, &[], mouse, |_| false));
+        }
+        let queries = session.core.input_queries();
+        let asked = |id| queries.get(&(0, POINTER, 0, id)).copied();
+        assert_eq!(asked(PRESSED), Some(1), "the press");
+        assert_eq!(asked(X), Some(pointer.x), "x");
+        assert_eq!(asked(Y), Some(pointer.y), "y");
+        tick_n(&mut session, &mut gfx, 30);
+
+        // R3 on a pad, then Tab: each swaps which screen is large.
+        let before = session.core.frame().clone();
+        let mut r3 = PadState::default();
+        r3.press(sdl3::gamepad::Button::RightStick);
+        for _ in 0..5 {
+            session.tick(&mut gfx, 1.0 / 60.0, &[(0, r3)], Mouse::default(), |_| false);
+        }
+        tick_n(&mut session, &mut gfx, 30);
+        let after_r3 = session.core.frame().clone();
+        assert!(
+            swapped(&before, &after_r3),
+            "R3 put the touch screen on the large one"
+        );
+        let tab = |key| key == input::SWAP_SCREENS_KEY;
+        for _ in 0..5 {
+            session.tick(&mut gfx, 1.0 / 60.0, &[], Mouse::default(), tab);
+        }
+        tick_n(&mut session, &mut gfx, 30);
+        assert!(
+            swapped(&after_r3, session.core.frame()),
+            "Tab put the top screen back on the large one"
+        );
+
+        session.save_slot(1).unwrap_or_else(|e| panic!("save: {e}"));
+        tick_n(&mut session, &mut gfx, 60);
         session.load_slot(1).unwrap_or_else(|e| panic!("load: {e}"));
         tick_n(&mut session, &mut gfx, 60);
         assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "loaded");

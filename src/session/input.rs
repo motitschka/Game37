@@ -172,8 +172,8 @@ fn axis(value: i16) -> i16 {
     value.max(-i16::MAX)
 }
 
-/// Swaps the DS screens from the keyboard: R3, melonDS DS's own "next layout" binding. Tab, which
-/// none of RetroArch's player 1 keys in [`KEYBOARD`] use.
+/// Swaps the DS and 3DS screens from the keyboard, as R3 does on a pad: Tab, which none of
+/// RetroArch's player 1 keys in [`KEYBOARD`] use.
 pub const SWAP_SCREENS_KEY: Scancode = Scancode::Tab;
 
 /// RetroArch's default keyboard layout for player 1.
@@ -192,19 +192,34 @@ const KEYBOARD: [(Scancode, Button); 12] = [
     (Scancode::RShift, Button::Select),
 ];
 
-/// The RetroPad buttons the keyboard holds, given which keys are down; with a `touch_screen` (a
-/// DS Game), [`SWAP_SCREENS_KEY`] holds R3.
-pub fn keyboard_buttons(down: impl Fn(Scancode) -> bool, touch_screen: bool) -> InputState {
+/// The RetroPad buttons the keyboard holds, given which keys are down; in a Game with a touch
+/// screen (DS, 3DS), [`SWAP_SCREENS_KEY`] holds `swap`, the button its Core swaps screens on
+/// ([`crate::cores::TouchScreen::swap`]).
+pub fn keyboard_buttons(down: impl Fn(Scancode) -> bool, swap: Option<Button>) -> InputState {
     let mut input = InputState::default();
     for (key, button) in KEYBOARD {
         if down(key) {
             input.set(0, button, true);
         }
     }
-    if touch_screen && down(SWAP_SCREENS_KEY) {
-        input.set(0, Button::R3, true);
+    if let Some(swap) = swap
+        && down(SWAP_SCREENS_KEY)
+    {
+        input.set(0, swap, true);
     }
     input
+}
+
+/// Game37's swap control on a pad, R3 (FR-DS-2, FR-NEW-2), as `swap`, the button the Core swaps
+/// screens on: on every port a held R3 is let go and `swap` held instead. Azahar swaps on L3;
+/// melonDS DS swaps on R3 itself, so nothing changes for it.
+pub fn swap_on(input: &mut InputState, swap: Button) {
+    for port in 0..MAX_PORTS {
+        if input.is_pressed(port, Button::R3) {
+            input.set(port, Button::R3, false);
+            input.set(port, swap, true);
+        }
+    }
 }
 
 /// The left stick the arrow keys drive, for Systems whose Core reads the stick as analog rather
@@ -576,13 +591,13 @@ mod tests {
         for (key, button) in KEYBOARD {
             let mut want = InputState::default();
             want.set(0, button, true);
-            assert_eq!(keyboard_buttons(|k| k == key, false), want, "{key:?}");
+            assert_eq!(keyboard_buttons(|k| k == key, None), want, "{key:?}");
         }
-        assert!(keyboard_buttons(|k| k == Scancode::X, false).is_pressed(0, Button::A));
-        assert!(keyboard_buttons(|k| k == Scancode::Z, false).is_pressed(0, Button::B));
-        assert!(keyboard_buttons(|k| k == Scancode::RShift, false).is_pressed(0, Button::Select));
+        assert!(keyboard_buttons(|k| k == Scancode::X, None).is_pressed(0, Button::A));
+        assert!(keyboard_buttons(|k| k == Scancode::Z, None).is_pressed(0, Button::B));
+        assert!(keyboard_buttons(|k| k == Scancode::RShift, None).is_pressed(0, Button::Select));
         assert_eq!(
-            keyboard_buttons(|k| k == Scancode::Escape, false),
+            keyboard_buttons(|k| k == Scancode::Escape, None),
             InputState::default()
         );
     }
@@ -604,7 +619,7 @@ mod tests {
         );
 
         // The keyboard's own d-pad press is unaffected, so menus inside games still work.
-        let left = keyboard_buttons(|k| k == Scancode::Left, false);
+        let left = keyboard_buttons(|k| k == Scancode::Left, None);
         assert!(left.is_pressed(0, Button::Left));
     }
 
@@ -612,7 +627,7 @@ mod tests {
     fn pads_play_on_their_ports_and_the_keyboard_joins_port_1() {
         let mut pause = PauseTrigger::default();
         let pads = [(0, pad(&[Pad::South])), (1, pad(&[Pad::East]))];
-        let keys = keyboard_buttons(|k| k == Scancode::X, false);
+        let keys = keyboard_buttons(|k| k == Scancode::X, None);
         let (input, paused) = frame_input(&pads, keys, false, &mut pause);
         assert!(!paused);
         assert!(input.is_pressed(0, Button::B) && input.is_pressed(0, Button::A));
@@ -671,10 +686,35 @@ mod tests {
         let mut r3 = InputState::default();
         r3.set(0, Button::R3, true);
         assert_eq!(SWAP_SCREENS_KEY, Scancode::Tab);
-        assert_eq!(keyboard_buttons(tab, true), r3, "in a DS Game");
-        assert_eq!(keyboard_buttons(tab, false), InputState::default(), "elsewhere");
+        assert_eq!(keyboard_buttons(tab, Some(Button::R3)), r3, "in a DS Game");
+        assert_eq!(keyboard_buttons(tab, None), InputState::default(), "elsewhere");
         assert!(KEYBOARD.iter().all(|(key, _)| *key != SWAP_SCREENS_KEY));
         assert_ne!(SWAP_SCREENS_KEY, Scancode::Escape, "Esc pauses");
+    }
+
+    #[test]
+    fn tab_and_r3_swap_the_3ds_screens_with_l3_and_never_send_r3() {
+        let tab = |k| k == SWAP_SCREENS_KEY;
+        let mut l3 = InputState::default();
+        l3.set(0, Button::L3, true);
+        assert_eq!(keyboard_buttons(tab, Some(Button::L3)), l3, "Tab");
+
+        let mut input = InputState::default();
+        input.set(0, Button::R3, true);
+        input.set(2, Button::R3, true);
+        input.set(2, Button::A, true);
+        swap_on(&mut input, Button::L3);
+        let mut expected = InputState::default();
+        expected.set(0, Button::L3, true);
+        expected.set(2, Button::L3, true);
+        expected.set(2, Button::A, true);
+        assert_eq!(input, expected, "each pad's R3 is L3");
+
+        let mut ds = InputState::default();
+        ds.set(1, Button::R3, true);
+        let before = ds;
+        swap_on(&mut ds, Button::R3);
+        assert_eq!(ds, before, "melonDS DS swaps on R3 itself");
     }
 
     #[test]
