@@ -1,11 +1,14 @@
 //! The libretro Core host: loads a Core (`*_libretro.so`) and a Game, runs frames and captures
 //! their video and audio. Headless: windows, audio devices and input devices are the caller's.
 //!
-//! libretro callbacks carry no context, so the running Core's state lives in a thread-local slot
-//! (see `callbacks`). Only one [`Core`] exists at a time in the process, and it stays on the thread
-//! that loaded it.
+//! libretro callbacks carry no context, so the running Core's state lives in a thread-local slot,
+//! and what a Core may use from threads of its own (input, audio) in process-wide state (see
+//! `callbacks`). Only one [`Core`] exists at a time in the process, and it stays on the thread that
+//! loaded it.
 
 mod callbacks;
+#[cfg(test)]
+mod fake;
 mod ffi;
 mod hw;
 #[cfg(test)]
@@ -324,11 +327,6 @@ impl Core {
         gl: Option<Box<dyn GlHost>>,
     ) -> Result<Core, CoreError> {
         let claim = Claim::take().ok_or(CoreError::AlreadyLoaded)?;
-        let game_cpath = c_path(game_path)?;
-        let mut state = State::new(c_path(&dirs.system)?, c_path(&dirs.save)?);
-        state.overrides = callbacks::option_overrides(options);
-        state.gl_host = gl;
-
         // SAFETY: loading a shared library runs its initialisers. A Core is a plain C library and
         // its initialisers only set up its own statics; this is the trust any frontend places in
         // the Core it was given.
@@ -343,6 +341,24 @@ impl Core {
         if version != ffi::RETRO_API_VERSION {
             return Err(CoreError::ApiVersion(core_path.to_path_buf(), version));
         }
+        Core::start(claim, api, Some(lib), game_path, dirs, options, gl)
+    }
+
+    /// Starts `game_path` on the Core whose entry points are `api`, from `lib` (`None` for a fake
+    /// Core in tests), as [`Core::load`] does once the library is open.
+    fn start(
+        claim: Claim,
+        api: Api,
+        lib: Option<Library>,
+        game_path: &Path,
+        dirs: CoreDirs,
+        options: &[(&str, &str)],
+        gl: Option<Box<dyn GlHost>>,
+    ) -> Result<Core, CoreError> {
+        let game_cpath = c_path(game_path)?;
+        let mut state = State::new(c_path(&dirs.system)?, c_path(&dirs.save)?);
+        state.overrides = callbacks::option_overrides(options);
+        state.gl_host = gl;
 
         callbacks::install(state);
         // SAFETY: the callbacks have the signatures libretro.h declares, never unwind, and find
@@ -370,7 +386,7 @@ impl Core {
             audio: Vec::new(),
             game_path: game_cpath,
             game_data: None,
-            lib: Some(lib),
+            lib,
             _claim: claim,
             _not_send: PhantomData,
         };
@@ -430,7 +446,7 @@ impl Core {
 
     /// Runs the Core for one frame with `input` held.
     pub fn run_frame(&mut self, input: &InputState) -> FrameOutput<'_> {
-        callbacks::with(|s| {
+        callbacks::shared(|s| {
             s.input = *input;
             s.audio.clear();
         });
@@ -447,8 +463,8 @@ impl Core {
                 std::mem::swap(&mut self.video, &mut s.frame);
                 s.fresh = false;
             }
-            std::mem::swap(&mut self.audio, &mut s.audio);
         });
+        callbacks::shared(|s| std::mem::swap(&mut self.audio, &mut s.audio));
         FrameOutput {
             video: &self.video,
             duped: self.duped,
@@ -459,13 +475,13 @@ impl Core {
     /// The input the Core was last given.
     #[cfg(test)]
     pub fn last_input(&self) -> InputState {
-        callbacks::with(|s| s.input).unwrap_or_default()
+        callbacks::shared(|s| s.input).unwrap_or_default()
     }
 
     /// Each input query the Core made, `(port, device, index, id)`, and the last answer to it.
     #[cfg(test)]
     pub fn input_queries(&self) -> std::collections::HashMap<(u32, u32, u32, u32), i16> {
-        callbacks::with(|s| s.queries.clone()).unwrap_or_default()
+        callbacks::shared(|s| s.queries.clone()).unwrap_or_default()
     }
 
     /// The last video frame the Core produced.

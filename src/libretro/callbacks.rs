@@ -1,16 +1,17 @@
-//! The callbacks a Core calls into, and the thread-local state they work on.
+//! The callbacks a Core calls into, and the state they work on.
 //!
 //! libretro callbacks carry no context pointer, so the loaded Core's [`State`] sits in a
-//! thread-local slot. A callback that finds no state (or finds it already borrowed) does nothing
-//! and answers a safe default, and no panic leaves a callback: each one is caught and turned into
-//! that default.
+//! thread-local slot. What the callbacks a Core may call from threads of its own need (input,
+//! audio, the FBO and the OpenGL loader) is process-wide instead. A callback that finds no state
+//! (or finds it already borrowed) does nothing and answers a safe default, and no panic leaves a
+//! callback: each one is caught and turned into that default.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_int, c_uint, c_void};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{PoisonError, RwLock};
+use std::sync::{Mutex, PoisonError, RwLock};
 
 use super::ffi::{
     self, HwGetProcAddressFn, ProcAddress, RetroGameGeometry, RetroHwRenderCallback, RetroSystemAvInfo,
@@ -26,13 +27,10 @@ pub(super) struct State {
     pub system_dir: CString,
     pub save_dir: CString,
     pub av_info: AvInfo,
-    pub input: InputState,
     /// The last frame the Core sent, when `fresh`.
     pub frame: Frame,
     /// A frame arrived since the host last took one.
     pub fresh: bool,
-    /// Interleaved stereo samples since the host last cleared them.
-    pub audio: Vec<i16>,
     /// Each Core option's default value, by key, from `SET_VARIABLES`. Like `overrides`, handed
     /// out as `const char *`, so kept until the Core is unloaded.
     pub options: HashMap<CString, CString>,
@@ -45,9 +43,6 @@ pub(super) struct State {
     /// The Core drew its last frame into the FBO at this size; it is read back into `frame` after
     /// `retro_run`.
     pub hw_size: Option<(u32, u32)>,
-    /// Each input query the Core made, `(port, device, index, id)`, and the last answer to it.
-    #[cfg(test)]
-    pub queries: HashMap<(c_uint, c_uint, c_uint, c_uint), i16>,
 }
 
 impl State {
@@ -57,31 +52,44 @@ impl State {
             system_dir,
             save_dir,
             av_info: AvInfo::default(),
-            input: InputState::default(),
             frame: Frame::default(),
             fresh: false,
-            audio: Vec::new(),
             options: HashMap::new(),
             overrides: HashMap::new(),
             gl_host: None,
             hw: None,
             hw_size: None,
-            #[cfg(test)]
-            queries: HashMap::new(),
         }
     }
+}
+
+/// What the callbacks a Core may call from threads of its own work on: the input it reads and the
+/// audio it sends. Dolphin calls `input_state` and `audio_sample_batch` from its CPU thread.
+#[derive(Default)]
+pub(super) struct Shared {
+    pub input: InputState,
+    /// Interleaved stereo samples since the host last cleared them.
+    pub audio: Vec<i16>,
+    /// Each input query the Core made, `(port, device, index, id)`, and the last answer to it.
+    #[cfg(test)]
+    pub queries: HashMap<(c_uint, c_uint, c_uint, c_uint), i16>,
 }
 
 thread_local! {
     static SLOT: RefCell<Option<State>> = const { RefCell::new(None) };
 }
 
+/// The loaded Core's [`Shared`] state, for every thread; `None` while no Core is loaded.
+static SHARED: Mutex<Option<Shared>> = Mutex::new(None);
+
 pub(super) fn install(state: State) {
     SLOT.with(|slot| *slot.borrow_mut() = Some(state));
+    *SHARED.lock().unwrap_or_else(PoisonError::into_inner) = Some(Shared::default());
 }
 
 pub(super) fn remove() {
     SLOT.with(|slot| slot.borrow_mut().take());
+    SHARED.lock().unwrap_or_else(PoisonError::into_inner).take();
 }
 
 /// Runs `f` on this thread's state; `None` when there is none or it is already in use.
@@ -89,12 +97,33 @@ pub(super) fn with<R>(f: impl FnOnce(&mut State) -> R) -> Option<R> {
     SLOT.with(|slot| slot.try_borrow_mut().ok()?.as_mut().map(f))
 }
 
-/// The body of every callback: `f` on the state, or `default` when there is none or `f` panics.
-fn guarded<R>(default: R, f: impl FnOnce(&mut State) -> R) -> R {
-    panic::catch_unwind(AssertUnwindSafe(|| with(f)))
+/// Runs `f` on the loaded Core's [`Shared`] state, on any thread; `None` when no Core is loaded.
+/// `f` must not call back into anything that takes this state.
+pub(super) fn shared<R>(f: impl FnOnce(&mut Shared) -> R) -> Option<R> {
+    SHARED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_mut()
+        .map(f)
+}
+
+/// `f`'s answer, or `default` when it has none or panics.
+fn caught<R>(default: R, f: impl FnOnce() -> Option<R>) -> R {
+    panic::catch_unwind(AssertUnwindSafe(f))
         .ok()
         .flatten()
         .unwrap_or(default)
+}
+
+/// The body of most callbacks: `f` on the state, or `default` when there is none or `f` panics.
+fn guarded<R>(default: R, f: impl FnOnce(&mut State) -> R) -> R {
+    caught(default, || with(f))
+}
+
+/// The body of the callbacks a Core may call from its own threads: `f` on the [`Shared`] state,
+/// or `default` when no Core is loaded or `f` panics.
+fn guarded_shared<R>(default: R, f: impl FnOnce(&mut Shared) -> R) -> R {
+    caught(default, || shared(f))
 }
 
 /// `retro_environment_t`.
@@ -136,16 +165,17 @@ pub(super) unsafe extern "C" fn video_refresh(
     })
 }
 
+/// `retro_audio_sample_t`, on any thread.
 pub(super) extern "C" fn audio_sample(left: i16, right: i16) {
-    guarded((), |s| s.audio.extend_from_slice(&[left, right]))
+    guarded_shared((), |s| s.audio.extend_from_slice(&[left, right]))
 }
 
-/// `retro_audio_sample_batch_t`.
+/// `retro_audio_sample_batch_t`, on any thread.
 ///
 /// # Safety
 /// `data` points at `frames` interleaved stereo frames, `2 × frames` samples.
 pub(super) unsafe extern "C" fn audio_sample_batch(data: *const i16, frames: usize) -> usize {
-    guarded(0, |s| {
+    guarded_shared(0, |s| {
         if data.is_null() {
             return 0;
         }
@@ -196,8 +226,9 @@ pub(super) unsafe extern "C" fn get_proc_address(sym: *const c_char) -> ProcAddr
 /// The host sets the input before each `retro_run`, so there is nothing to poll.
 pub(super) extern "C" fn input_poll() {}
 
+/// `retro_input_state_t`, on any thread.
 pub(super) extern "C" fn input_state(port: c_uint, device: c_uint, index: c_uint, id: c_uint) -> i16 {
-    guarded(0, |s| {
+    guarded_shared(0, |s| {
         let answer = input_answer(&s.input, port, device, index, id);
         #[cfg(test)]
         s.queries.insert((port, device, index, id), answer);
@@ -847,6 +878,7 @@ mod tests {
 
     #[test]
     fn a_frame_drawn_with_opengl_is_marked_for_readback() {
+        let _serial = crate::libretro::tests::serial();
         install(with_gl());
         // SAFETY: a null frame is a dupe; the HW marker is never dereferenced.
         unsafe { video_refresh(ffi::RETRO_HW_FRAME_BUFFER_VALID, 320, 240, 0) };
@@ -1011,7 +1043,7 @@ mod tests {
         install(state());
         let _remove = Removed;
         // The Core never asked GET_INPUT_BITMASKS (as LRPS2 doesn't), and reads the mask anyway.
-        with(|s| s.input = input);
+        shared(|s| s.input = input);
         assert_eq!(input_state(0, joypad, 0, mask) as u16, 0x8002);
         assert_eq!(input_state(1, joypad, 0, mask), 0);
     }
@@ -1092,7 +1124,9 @@ mod tests {
 
     #[test]
     fn callbacks_fill_the_installed_state() {
+        let _serial = crate::libretro::tests::serial();
         install(state());
+        let _remove = Removed;
         let src = [9u8; 8];
         // SAFETY: `src` is one row of 2 XRGB8888 pixels, and a null frame is a dupe.
         unsafe {
@@ -1109,21 +1143,45 @@ mod tests {
         // SAFETY: `batch` holds 2 stereo frames.
         assert_eq!(unsafe { audio_sample_batch(batch.as_ptr(), 2) }, 2);
         with(|s| {
-            s.input.set(0, Button::Down, true);
             assert!(s.fresh);
             assert_eq!(s.frame.data, src);
             assert_eq!(s.frame.format, PixelFormat::Xrgb8888);
+        });
+        shared(|s| {
+            s.input.set(0, Button::Down, true);
             assert_eq!(s.audio, [1, -1, 2, -2, 3, -3]);
         });
         assert_eq!(
             input_state(0, ffi::RETRO_DEVICE_JOYPAD, 0, Button::Down as c_uint),
             1
         );
-        remove();
+    }
+
+    #[test]
+    fn input_and_audio_reach_the_installed_state_from_any_thread() {
+        let _serial = crate::libretro::tests::serial();
+        install(state());
+        let _remove = Removed;
+        shared(|s| s.input.set(2, Button::A, true));
+        let answer = std::thread::spawn(|| {
+            audio_sample(4, -4);
+            let batch = [5i16, -5];
+            // SAFETY: `batch` holds 1 stereo frame.
+            let taken = unsafe { audio_sample_batch(batch.as_ptr(), 1) };
+            (
+                input_state(2, ffi::RETRO_DEVICE_JOYPAD, 0, Button::A as c_uint),
+                taken,
+            )
+        })
+        .join()
+        .unwrap();
+        assert_eq!(answer, (1, 1), "A held on port 2, as read on another thread");
+        assert_eq!(shared(|s| s.audio.clone()), Some(vec![4, -4, 5, -5]));
     }
 
     #[test]
     fn callbacks_without_state_answer_defaults() {
+        let _serial = crate::libretro::tests::serial();
         remove();
         let mut dupe = false;
         // SAFETY: `dupe` is a valid bool; the batch pointer is never read without state.
@@ -1141,6 +1199,7 @@ mod tests {
 
     #[test]
     fn a_callback_reentering_busy_state_answers_the_default() {
+        let _serial = crate::libretro::tests::serial();
         install(state());
         let mut dupe = false;
         let answer = with(|_| {
@@ -1153,10 +1212,13 @@ mod tests {
 
     #[test]
     fn a_panic_inside_a_callback_becomes_the_default() {
+        let _serial = crate::libretro::tests::serial();
         install(state());
         assert_eq!(guarded(7, |_| panic!("boom")), 7);
+        assert_eq!(guarded_shared(8, |_| panic!("boom")), 8);
         // The state survives the caught panic.
         assert_eq!(with(|s| s.fresh), Some(false));
+        assert_eq!(shared(|s| s.audio.len()), Some(0));
         remove();
     }
 }
