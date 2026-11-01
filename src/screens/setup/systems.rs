@@ -286,7 +286,8 @@ mod tests {
     fn tiles_say_where_each_system_plays() {
         let by_id = |id| SYSTEMS.iter().find(|s| s.id == id).unwrap();
         assert_eq!(plays_in(by_id("nes")), "Plays in Game37");
-        assert_eq!(plays_in(by_id("gc")), "Needs Dolphin");
+        assert_eq!(plays_in(by_id("wiiu")), "Needs Cemu");
+        assert_eq!(plays_in(by_id("gc")), "Plays in Game37");
         assert_eq!(plays_in(by_id("ps4")), "Needs shadPS4");
     }
 }

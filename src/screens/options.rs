@@ -1312,7 +1312,7 @@ mod tests {
     #[test]
     fn save_data_items_are_listed_for_embedded_systems_only() {
         let mut game = world(1).2.remove(0);
-        game.system = "gc".into();
+        game.system = "wiiu".into();
         use Item::*;
         let mut ctx = Ctx::empty();
         ctx.games_root = PathBuf::from("/nonexistent");

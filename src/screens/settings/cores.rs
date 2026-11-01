@@ -18,9 +18,9 @@ use crate::ui::theme::{ACCENT, DIM, LINE, MUTED, SUCCESS, SURFACE, SURFACE2, TEX
 const UPDATE_ALL_H: f32 = 64.0;
 /// The first Core row's top, under Update all.
 const CORES_TOP: f32 = TOP + 72.0;
-/// Eleven Core rows fit between Update all and the hint bar.
-const PITCH: f32 = 62.0;
-const ROW_H: f32 = 58.0;
+/// Twelve Core rows fit between Update all and the hint bar.
+const PITCH: f32 = 58.0;
+const ROW_H: f32 = 54.0;
 const BAR_W: f32 = 240.0;
 
 /// One Core's row.
@@ -289,6 +289,7 @@ mod tests {
             "bsnes",
             "Mupen64Plus-Next",
             "mGBA",
+            "Dolphin",
             "melonDS DS",
             "Azahar",
             "Beetle PSX HW",
@@ -298,6 +299,7 @@ mod tests {
         assert_eq!(labels, expected);
         let systems: Vec<_> = cores.entries.iter().map(|e| e.systems.as_str()).collect();
         assert_eq!(systems[1], "Game Boy, Game Boy Color");
+        assert_eq!(systems[5], "GameCube, Wii");
         for (entry, systems) in cores.entries.iter().zip(&systems) {
             let names: Vec<_> = SYSTEMS
                 .iter()

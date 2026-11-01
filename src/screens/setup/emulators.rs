@@ -152,8 +152,8 @@ fn external(model: &Model) -> impl Iterator<Item = (&'static System, &'static Em
         .filter_map(|system| Some((system, emulators::for_system(system)?)))
 }
 
-/// The command that installs the ticked Systems' missing emulators, each once (GameCube and Wii
-/// share Dolphin) and in System Order; `None` when none are missing.
+/// The command that installs the ticked Systems' missing emulators, each once and in System Order;
+/// `None` when none are missing.
 fn install_command(model: &Model, installed: &emulators::Emulators) -> Option<String> {
     let mut ids: Vec<&str> = Vec::new();
     for (system, _) in external(model) {
@@ -397,39 +397,37 @@ mod tests {
     #[test]
     fn the_step_is_passed_over_both_ways_without_an_external_system() {
         let (mut ctx, calls) = detecting(&[]);
-        let mut setup = ticking(&["nes", "psp"]);
+        let mut setup = ticking(&["nes", "gc", "wii", "psp"]);
         act(&mut setup, &mut ctx, Action::Settings);
         assert_eq!(setup.step(), 3, "on to Make your folders");
         act(&mut setup, &mut ctx, Action::Back);
         assert_eq!(setup.step(), 1);
         assert_eq!(calls.get(), 0, "never shown, so never detected");
 
-        let mut setup = ticking(&["nes", "gc"]);
+        let mut setup = ticking(&["nes", "wiiu"]);
         act(&mut setup, &mut ctx, Action::Settings);
-        assert_eq!(setup.step(), 2, "GameCube needs Dolphin");
+        assert_eq!(setup.step(), 2, "Wii U needs Cemu");
     }
 
     #[test]
     fn the_command_lists_each_missing_emulator_once_in_system_order() {
-        let setup = ticking(&["nes", "gc", "wii", "3ds", "switch", "ps2", "ps3"]);
-        let installed = Emulators::from_installed(["info.cemu.Cemu"]);
+        let setup = ticking(&["nes", "gc", "wii", "wiiu", "3ds", "switch", "ps2", "ps3", "ps4"]);
+        let installed = Emulators::from_installed(["net.shadps4.shadPS4"]);
         assert_eq!(
             install_command(&setup.model, &installed).as_deref(),
-            Some(
-                "flatpak install flathub org.DolphinEmu.dolphin-emu io.github.ryubing.Ryujinx net.rpcs3.RPCS3"
-            ),
-            "PS2 and 3DS play in Game37"
+            Some("flatpak install flathub info.cemu.Cemu io.github.ryubing.Ryujinx net.rpcs3.RPCS3"),
+            "GameCube, Wii, PS2 and 3DS play in Game37"
         );
     }
 
     #[test]
     fn with_nothing_missing_there_is_no_command() {
-        let setup = ticking(&["gc", "ps3"]);
-        let installed = Emulators::from_installed(["org.DolphinEmu.dolphin-emu", "net.rpcs3.RPCS3"]);
+        let setup = ticking(&["wiiu", "ps3"]);
+        let installed = Emulators::from_installed(["info.cemu.Cemu", "net.rpcs3.RPCS3"]);
         assert_eq!(install_command(&setup.model, &installed), None);
 
-        let (mut ctx, _) = detecting(&["org.DolphinEmu.dolphin-emu", "net.rpcs3.RPCS3"]);
-        let mut setup = ticking(&["gc", "ps3"]);
+        let (mut ctx, _) = detecting(&["info.cemu.Cemu", "net.rpcs3.RPCS3"]);
+        let mut setup = ticking(&["wiiu", "ps3"]);
         act(&mut setup, &mut ctx, Action::Settings);
         assert!(!setup.hints().iter().any(|h| h.text == "Check again"));
         assert!(setup.hints().iter().any(|h| h.text == "Continue"));
@@ -440,8 +438,8 @@ mod tests {
 
     #[test]
     fn copy_asks_for_the_command_on_the_clipboard() {
-        let (mut ctx, _) = detecting(&["org.DolphinEmu.dolphin-emu"]);
-        let mut setup = ticking(&["gc", "switch", "ps3"]);
+        let (mut ctx, _) = detecting(&["info.cemu.Cemu"]);
+        let mut setup = ticking(&["wiiu", "switch", "ps3"]);
         act(&mut setup, &mut ctx, Action::Settings);
         assert!(
             setup.hints().iter().any(|h| h.text == "Copy"),

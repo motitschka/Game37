@@ -25,7 +25,7 @@ The single fixed order in which Systems are listed everywhere: Nintendo first, t
 _Avoid_: Console order, carousel order
 
 **Standalone Emulator**:
-A separately installed emulator application (e.g. Dolphin, RPCS3) that Game37 starts for an External System.
+A separately installed emulator application (e.g. Cemu, RPCS3) that Game37 starts for an External System.
 _Avoid_: External emulator, app
 
 **BIOS**:
