@@ -715,6 +715,104 @@ def screen_ds():
     sv.save()
 
 
+# ---------- 3DS layout options (M8, FR-NEW-2) ----------
+#
+# The Azahar Core's screens are native 400x240 (top, 5:3) and 320x240 (bottom/touch, 4:3) - unlike
+# the DS, neither layout below is already 16:9, so each is scaled to fit this 1920x1080 canvas (filling
+# whichever axis hits its limit first) and letterboxed with black bars on the other axis.
+
+
+def _fit_3ds_frame(native_w, native_h):
+    """Uniform scale (and resulting bars) to fit a native-pixel frame into the 1920x1080 canvas."""
+    scale = min(W / native_w, H / native_h)
+    fw, fh = native_w * scale, native_h * scale
+    return scale, fw, fh, (W - fw) / 2, (H - fh) / 2
+
+
+def _3ds_touch_screen(sv, x, y, w, h):
+    """A simplified touch-screen drawing, scaled like screen_ds's map."""
+    sv.add(rect(x, y, w, h, "#E9EDF5"))
+    bar_h = h * 0.12
+    sv.add(rect(x, y, w, bar_h, "#3B4A6B"))
+    if h >= 160:
+        sv.add(text(x + w * 0.05, y + bar_h * 0.68, "TOUCH", max(10, h * 0.05), 700, ls=2))
+    pad = w * 0.05
+    cols, rows = 4, 3
+    gw = (w - pad * (cols + 1)) / cols
+    gh = (h - bar_h - pad * (rows + 1)) / rows
+    for r in range(rows):
+        for c in range(cols):
+            sv.add(rect(x + pad + c * (gw + pad), y + bar_h + pad + r * (gh + pad), gw, gh, "#C7D0E2",
+                        rx=max(2, gw * 0.1)))
+    hx, hy = x + pad + gw + pad, y + bar_h + pad + gh + pad
+    sv.add(rect(hx, hy, gw, gh, "#8FA6D6", rx=max(2, gw * 0.1)))
+    cx, cy, r = hx + gw * 0.6, hy + gh * 0.55, min(gw, gh) * 0.22
+    sv.add(circle(cx, cy, r, "none", stroke="#0B0D12", sw=3), circle(cx, cy, r * 0.2, "#0B0D12"))
+
+
+def _3ds_caption(sv, x, y, title, geometry, tradeoff):
+    sv.add(text(x, y, "The Legend of Zelda: OoT 3D", 30, 800),
+           text(x, y + 34, "Nintendo 3DS  ·  " + title, 17, 500, fill=C["muted"]))
+    sv.add(text(x, y + 74, geometry, 18, 600, fill=C["text"]))
+    sv.add(text(x, y + 102, tradeoff, 16, 500, fill=C["muted"]))
+
+
+def _screen_3ds_large(name, p, bars_note, tradeoff):
+    sv = Svg(name, f"3DS Layout - large screen p={p}")
+    sv.add(rect(0, 0, W, H, "#06070A"))
+    native_w, native_h = 400 * p + 320, 240 * p
+    scale, fw, fh, bx, by = _fit_3ds_frame(native_w, native_h)
+    tw_, th_ = 400 * p * scale, 240 * p * scale
+    scene(sv, bx, by, tw_, th_, night=True)
+    bw_, bh_ = 320 * scale, 240 * scale
+    bx2, by2 = bx + tw_, by + th_ - bh_
+    _3ds_touch_screen(sv, bx2, by2, bw_, bh_)
+    geometry = f"Top {tw_:.0f}×{th_:.0f} · Touch {bw_:.0f}×{bh_:.0f} · bars {bars_note}"
+    _3ds_caption(sv, M, by + 60, f"Large screen, proportion {p}", geometry, tradeoff)
+    sv.save()
+
+
+def screen_3ds_layout_large():
+    _screen_3ds_large("39-3ds-layout-large", 4, "60px top & bottom (2:1 frame)",
+                       "Big top screen; touch screen is small but present and clickable.")
+
+
+def screen_3ds_layout_large_3():
+    _screen_3ds_large("40-3ds-layout-large-3", 3, "≈85px top & bottom",
+                       "Touch screen is noticeably bigger than at proportion 4, at the cost of thicker bars.")
+
+
+def screen_3ds_layout_side():
+    sv = Svg("41-3ds-layout-side", "3DS Layout - side by side")
+    sv.add(rect(0, 0, W, H, "#06070A"))
+    native_w, native_h = 400 + 320, 240
+    scale, fw, fh, bx, by = _fit_3ds_frame(native_w, native_h)
+    tw_, th_ = 400 * scale, 240 * scale
+    scene(sv, bx, by, tw_, th_, night=True)
+    bw_, bh_ = 320 * scale, 240 * scale
+    _3ds_touch_screen(sv, bx + tw_, by, bw_, bh_)
+    geometry = f"Top {tw_:.0f}×{th_:.0f} · Touch {bw_:.0f}×{bh_:.0f} · bars 220px top & bottom (3:1 frame)"
+    _3ds_caption(sv, M, by - 160, "Side by side, equal size", geometry,
+                 "Both screens equally prominent and both touchable, but most of the frame is bars.")
+    sv.save()
+
+
+def screen_3ds_layout_single():
+    sv = Svg("42-3ds-layout-single", "3DS Layout - single screen")
+    sv.add(rect(0, 0, W, H, "#06070A"))
+    native_w, native_h = 400, 240
+    scale, fw, fh, bx, by = _fit_3ds_frame(native_w, native_h)
+    scene(sv, bx, by, fw, fh, night=True)
+    geometry = f"Top {fw:.0f}×{fh:.0f} · bars 60px left & right · touch screen off-screen"
+    _3ds_caption(sv, bx + 48, 140, "Single screen, top shown", geometry,
+                 "Fills 16:9 almost fully, but the touch screen is hidden until R3 swaps it in.")
+    lx = bx + 48
+    wdt = glyph(sv, lx, 300, "R3")
+    sv.add(text(lx + wdt + 16, 307, "Swap to the touch screen (full screen, same size)", 19, 500,
+                fill=C["muted"]))
+    sv.save()
+
+
 # ---------- speedrun timer (M7) ----------
 
 def cs(t):
@@ -1613,6 +1711,7 @@ if __name__ == "__main__":
                screen_controller_test, screen_search, screen_search_controller, screen_search_results, screen_search_empty,
                screen_setup_systems, screen_setup_emulators, screen_setup_folders, screen_setup_cores,
                screen_setup_key, screen_settings_controls, screen_settings_about,
-               screen_pause_restart_confirm]:
+               screen_pause_restart_confirm, screen_3ds_layout_large, screen_3ds_layout_large_3,
+               screen_3ds_layout_side, screen_3ds_layout_single]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))
