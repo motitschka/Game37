@@ -421,7 +421,8 @@ seven sections, down the left:
 - **Controls:** Menu button style (Nintendo, where the right face button confirms; or Xbox or
   PlayStation, where the bottom face button confirms) and Controller test, which exits by holding B.
 - **Display:** Startup window mode (Remember last, Always fullscreen or Always windowed), which applies
-  the next time Game37 starts.
+  the next time Game37 starts; and under Screens, the DS and 3DS layout: Large and small, Side by side
+  or One screen, which applies from the next Game started.
 - **About:** the version, the licence and the paths Game37 uses.
 
 ## Search
@@ -463,8 +464,8 @@ players 1 to 4 in the order they connect. Without a controller, the keyboard pla
 - **Pause Menu:** the Guide button, Select + Start, or Esc. It offers resume, save and load in three
   slots, and quit to the library. Quitting writes a Resume State, so the next launch continues where you
   stopped.
-- **Nintendo DS:** one large and one small screen; R3 swaps them. Tap the touch screen with the mouse,
-  or with a right-stick cursor.
+- **Nintendo DS:** one large and one small screen, unless Settings → Display picks Side by side or One
+  screen; R3 swaps them. Tap the touch screen with the mouse, or with a right-stick cursor.
 - **External Systems:** quit with the emulator's own controls, and Game37 comes back to the front.
 
 ## Where your data lives

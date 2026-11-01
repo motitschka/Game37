@@ -4,12 +4,12 @@ use std::path::PathBuf;
 
 use crate::artwork::Artwork;
 use crate::config::Config;
-use crate::cores::{CoreAssets, CoreInfo, Download};
+use crate::cores::{CoreAssets, CoreInfo, Download, ScreenLayout};
 use crate::emulators::Emulators;
 use crate::library::db::{DbError, GameRow, Library};
 use crate::library::scan;
 use crate::session::input::PadState;
-use crate::systems::SYSTEMS;
+use crate::systems::{SYSTEMS, System};
 use crate::ui::gfx::WindowMode;
 use crate::ui::input::{ButtonStyle, InputKind};
 
@@ -183,6 +183,23 @@ impl Ctx {
         self.window_mode = mode;
         if let Err(e) = self.library.set_window_mode(mode) {
             eprintln!("game37: can't save the window mode: {e}");
+        }
+    }
+
+    /// How `system` shows its two screens (FR-DS-1, FR-NEW-2), as saved; Large and small if it
+    /// can't be read.
+    pub fn screen_layout(&self, system: &System) -> ScreenLayout {
+        self.library.screen_layout(system.id).unwrap_or_else(|e| {
+            eprintln!("game37: can't read the {} layout: {e}", system.short);
+            ScreenLayout::default()
+        })
+    }
+
+    /// Switches how `system` shows its two screens and saves it; it applies from the next Game
+    /// of that System started.
+    pub fn set_screen_layout(&mut self, system: &System, layout: ScreenLayout) {
+        if let Err(e) = self.library.set_screen_layout(system.id, layout) {
+            eprintln!("game37: can't save the {} layout: {e}", system.short);
         }
     }
 

@@ -13,6 +13,7 @@ use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::is_combining_mark;
 
 use super::FoundGame;
+use crate::cores::ScreenLayout;
 use crate::systems;
 use crate::ui::gfx::WindowMode;
 use crate::ui::input::ButtonStyle;
@@ -613,6 +614,20 @@ impl Library {
         self.set_setting("window_mode", mode.id())
     }
 
+    /// How a two-screen System shows its screens (FR-DS-1, FR-NEW-2), by System id; Large and small
+    /// until changed, or if the stored one is unknown.
+    pub fn screen_layout(&self, system: &str) -> Result<ScreenLayout, DbError> {
+        Ok(self
+            .setting(&format!("screen_layout_{system}"))?
+            .as_deref()
+            .and_then(ScreenLayout::from_id)
+            .unwrap_or_default())
+    }
+
+    pub fn set_screen_layout(&self, system: &str, layout: ScreenLayout) -> Result<(), DbError> {
+        self.set_setting(&format!("screen_layout_{system}"), layout.id())
+    }
+
     /// Whether the window was fullscreen when Game37 last quit or F11 last toggled it, for Remember
     /// last; windowed if never stored.
     pub fn last_fullscreen(&self) -> Result<bool, DbError> {
@@ -1122,6 +1137,30 @@ mod tests {
         let lib = Library::open_in_memory().unwrap();
         lib.set_setting("button_style", "sega").unwrap();
         assert_eq!(lib.button_style().unwrap(), ButtonStyle::Nintendo);
+    }
+
+    #[test]
+    fn screen_layouts_default_to_large_and_small_and_round_trip_per_system() {
+        let lib = Library::open_in_memory().unwrap();
+        assert_eq!(lib.screen_layout("nds").unwrap(), ScreenLayout::LargeAndSmall);
+        assert_eq!(lib.screen_layout("3ds").unwrap(), ScreenLayout::LargeAndSmall);
+        for layout in ScreenLayout::ALL {
+            lib.set_screen_layout("nds", layout).unwrap();
+            assert_eq!(lib.screen_layout("nds").unwrap(), layout);
+        }
+        lib.set_screen_layout("3ds", ScreenLayout::SideBySide).unwrap();
+        assert_eq!(
+            lib.screen_layout("nds").unwrap(),
+            ScreenLayout::OneScreen,
+            "each System its own"
+        );
+        assert_eq!(lib.screen_layout("3ds").unwrap(), ScreenLayout::SideBySide);
+        assert_eq!(
+            lib.setting("screen_layout_3ds").unwrap().as_deref(),
+            Some("side_by_side")
+        );
+        lib.set_setting("screen_layout_nds", "top-bottom").unwrap();
+        assert_eq!(lib.screen_layout("nds").unwrap(), ScreenLayout::LargeAndSmall);
     }
 
     #[test]

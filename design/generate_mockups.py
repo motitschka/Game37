@@ -1326,12 +1326,47 @@ def screen_settings_controls():
     y, h = TOP, 92
     r = settings_row(sv, y, h, "Menu button style", sub="Right button confirms, bottom button goes back",
                      focused=True)
+    choice_value(sv, r, y, h, "Nintendo")
+    settings_row(sv, TOP + 104, 76, "Controller test", more=True)
+    hintbar(sv, [(["←", "→"], "Change"), (["B"], "Back")])
+    sv.save()
+
+
+def choice_value(sv, r, y, h, value):
+    """A Settings row's cycled choice, "‹ value ›" in accent, right-aligned at `r`."""
     base = y + h / 2 + 9
-    value = "Nintendo"
     sv.add(text(r, base, "›", 26, 600, fill=C["accent"], anchor="end"),
            text(r - 30, base - 2, value, 20, 600, anchor="end"),
            text(r - 30 - tw(value, 20, 600) - 8, base, "‹", 26, 600, fill=C["accent"], anchor="end"))
-    settings_row(sv, TOP + 104, 76, "Controller test", more=True)
+
+
+# The three screen layouts a two-screen System can show (FR-DS-1, FR-NEW-2), as Settings → Display names
+# them, each with its row's sub-line. Large and small is 08-ds-layout for DS and 40-3ds-layout-large-3
+# for 3DS; side by side is 41-3ds-layout-side; one screen is 42-3ds-layout-single.
+SCREEN_LAYOUTS = {"Large and small": "One screen large, the other small · R3 or Tab swaps them",
+                  "Side by side": "Both screens at the same size · R3 or Tab swaps them",
+                  "One screen": "The top screen alone · R3 or Tab shows the touch screen"}
+# Above the first row of a group of Settings rows: its heading, in the Setup key page's caption style.
+GROUP_H = 52
+
+
+def settings_group(sv, y, name):
+    """A group heading for the Settings rows below `y`; returns the y the group's first row starts at."""
+    sv.add(text(RX + 8, y + GROUP_H - 18, name.upper(), 14, 700, fill=C["muted"], ls=1.5))
+    return y + GROUP_H
+
+
+def screen_settings_display():
+    sv = Svg("43-settings-display", "Settings: Display")
+    settings_page(sv, "Display")
+    y, h = TOP, 92
+    r = settings_row(sv, y, h, "Startup window mode", sub="Applies the next time Game37 starts")
+    choice_value(sv, r, y, h, "Remember last")
+    y = settings_group(sv, y + h + 12, "Screens")
+    for label, layout, focused in [("DS layout", "Side by side", True), ("3DS layout", "Large and small", False)]:
+        r = settings_row(sv, y, h, label, sub=SCREEN_LAYOUTS[layout], focused=focused)
+        choice_value(sv, r, y, h, layout)
+        y += h + 12
     hintbar(sv, [(["←", "→"], "Change"), (["B"], "Back")])
     sv.save()
 
@@ -1734,6 +1769,6 @@ if __name__ == "__main__":
                screen_setup_systems, screen_setup_emulators, screen_setup_folders, screen_setup_cores,
                screen_setup_key, screen_settings_controls, screen_settings_about,
                screen_pause_restart_confirm, screen_3ds_layout_large, screen_3ds_layout_large_3,
-               screen_3ds_layout_side, screen_3ds_layout_single]:
+               screen_3ds_layout_side, screen_3ds_layout_single, screen_settings_display]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))

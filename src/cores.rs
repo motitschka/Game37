@@ -350,16 +350,17 @@ pub static LRPS2: CoreInfo = CoreInfo {
 };
 /// Azahar (FR-NEW-2), with the values its own option list offers: OpenGL, never `Auto` or
 /// Vulkan (Vulkan crashes on AMD, Azahar issue #2742); saves under `<save dir>/Azahar/`; the right
-/// stick as the C-stick only, so Azahar draws no crosshair on the touch screen. The screens are
-/// laid out by [`AZAHAR_LAYOUT`]. Its Save States break on every Core update: a slot that can't
-/// load then says so.
+/// stick both as the C-stick and as a touch cursor Azahar draws on the touch screen, as on DS
+/// (FR-NEW-2). The screens are laid out by the 3DS layout chosen in Settings
+/// ([`screen_layouts`]). Its Save States break on every Core update: a slot that can't load then
+/// says so.
 pub static AZAHAR: CoreInfo = CoreInfo {
     name: "Azahar",
     file: "azahar_libretro.so",
     options: &[
         ("citra_graphics_api", "OpenGL"),
         ("citra_use_libretro_save_path", "LibRetro Default"),
-        ("citra_analog_function", "c_stick"),
+        ("citra_analog_function", "c_stick_and_touchscreen"),
     ],
     bios: None,
     assets: None,
@@ -367,13 +368,135 @@ pub static AZAHAR: CoreInfo = CoreInfo {
     touch: Some(TouchScreen { swap: Button::L3 }),
 };
 
-/// How Azahar lays out the 3DS's two screens (FR-NEW-2): the top screen large and the touch
-/// screen small beside it, the large one three times the small one's size (mockup
-/// `40-3ds-layout-large-3`). The one place the layout is chosen.
-pub const AZAHAR_LAYOUT: &[(&str, &str)] = &[
-    ("citra_layout_option", "large_screen"),
-    ("citra_large_screen_proportion", "3.00"),
-];
+/// How a two-screen System shows its two screens (FR-DS-1, FR-NEW-2), chosen per System in
+/// Settings → Display. R3 swaps the screens in each (FR-DS-2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScreenLayout {
+    /// One screen large, the other small beside it.
+    #[default]
+    LargeAndSmall,
+    /// Both screens next to each other at the same size.
+    SideBySide,
+    /// The top screen alone, filling the display; R3 shows the touch screen instead.
+    OneScreen,
+}
+
+impl ScreenLayout {
+    pub const ALL: [ScreenLayout; 3] = [
+        ScreenLayout::LargeAndSmall,
+        ScreenLayout::SideBySide,
+        ScreenLayout::OneScreen,
+    ];
+
+    /// The name the library's `settings` table stores it under.
+    pub fn id(self) -> &'static str {
+        match self {
+            ScreenLayout::LargeAndSmall => "large_and_small",
+            ScreenLayout::SideBySide => "side_by_side",
+            ScreenLayout::OneScreen => "one_screen",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<ScreenLayout> {
+        ScreenLayout::ALL.into_iter().find(|l| l.id() == id)
+    }
+
+    /// The label its Settings row shows.
+    pub fn label(self) -> &'static str {
+        match self {
+            ScreenLayout::LargeAndSmall => "Large and small",
+            ScreenLayout::SideBySide => "Side by side",
+            ScreenLayout::OneScreen => "One screen",
+        }
+    }
+
+    /// The sub-line its Settings row shows: what the layout looks like, and the swap.
+    pub fn sub(self) -> &'static str {
+        match self {
+            ScreenLayout::LargeAndSmall => "One screen large, the other small · R3 or Tab swaps them",
+            ScreenLayout::SideBySide => "Both screens at the same size · R3 or Tab swaps them",
+            ScreenLayout::OneScreen => "The top screen alone · R3 or Tab shows the touch screen",
+        }
+    }
+
+    /// The next layout in [`ScreenLayout::ALL`], wrapping around.
+    pub fn next(self) -> ScreenLayout {
+        let i = ScreenLayout::ALL.iter().position(|&l| l == self).unwrap_or(0);
+        ScreenLayout::ALL[(i + 1) % ScreenLayout::ALL.len()]
+    }
+
+    /// The previous layout in [`ScreenLayout::ALL`], wrapping around.
+    pub fn prev(self) -> ScreenLayout {
+        let n = ScreenLayout::ALL.len();
+        let i = ScreenLayout::ALL.iter().position(|&l| l == self).unwrap_or(0);
+        ScreenLayout::ALL[(i + n - 1) % n]
+    }
+}
+
+/// The Core options that lay out a two-screen System's screens in each [`ScreenLayout`]. They
+/// replace the same keys in its Core's own `options`, and are added after them otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScreenLayouts {
+    /// Its Settings row, e.g. "DS layout".
+    pub label: &'static str,
+    pub large_and_small: &'static [(&'static str, &'static str)],
+    pub side_by_side: &'static [(&'static str, &'static str)],
+    pub one_screen: &'static [(&'static str, &'static str)],
+}
+
+impl ScreenLayouts {
+    pub fn options(&self, layout: ScreenLayout) -> &'static [(&'static str, &'static str)] {
+        match layout {
+            ScreenLayout::LargeAndSmall => self.large_and_small,
+            ScreenLayout::SideBySide => self.side_by_side,
+            ScreenLayout::OneScreen => self.one_screen,
+        }
+    }
+}
+
+/// DS's layouts on melonDS DS, with its option values. Each has two layouts, so R3, its "next
+/// layout" binding, swaps the screens. Large and small is [`MELONDS_DS`]'s own (FR-DS-1).
+static DS_LAYOUTS: ScreenLayouts = ScreenLayouts {
+    label: "DS layout",
+    large_and_small: &[
+        ("melonds_number_of_screen_layouts", "2"),
+        ("melonds_screen_layout1", "hybrid-top"),
+        ("melonds_screen_layout2", "hybrid-bottom"),
+        ("melonds_hybrid_ratio", "3"),
+        ("melonds_hybrid_small_screen", "one"),
+    ],
+    side_by_side: &[
+        ("melonds_number_of_screen_layouts", "2"),
+        ("melonds_screen_layout1", "left-right"),
+        ("melonds_screen_layout2", "right-left"),
+    ],
+    one_screen: &[
+        ("melonds_number_of_screen_layouts", "2"),
+        ("melonds_screen_layout1", "top"),
+        ("melonds_screen_layout2", "bottom"),
+    ],
+};
+
+/// 3DS's layouts on its Core (Azahar), with its option values (FR-NEW-2). Large and small has the
+/// large screen three times the small one, as on DS; Azahar's own default is four.
+static THREE_DS_LAYOUTS: ScreenLayouts = ScreenLayouts {
+    label: "3DS layout",
+    large_and_small: &[
+        ("citra_layout_option", "large_screen"),
+        ("citra_large_screen_proportion", "3.00"),
+    ],
+    side_by_side: &[("citra_layout_option", "side_by_side")],
+    one_screen: &[("citra_layout_option", "single_screen")],
+};
+
+/// The screen layouts of a System with two screens, or `None` for one with a single screen.
+pub fn screen_layouts(system: &System) -> Option<&'static ScreenLayouts> {
+    match system.id {
+        "nds" => Some(&DS_LAYOUTS),
+        "3ds" => Some(&THREE_DS_LAYOUTS),
+        _ => None,
+    }
+}
 
 /// Which OpenGL host a Core's context must be made on (see [`CoreInfo::gl`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -385,17 +508,29 @@ pub enum GlKind {
 }
 
 impl CoreInfo {
-    /// The option values the Core runs the Game at `game` with: `options`, then those this Core
-    /// reads from the Game's file, or Azahar's screen layout.
-    pub fn options_for(&self, game: &Path) -> Vec<(&'static str, &'static str)> {
+    /// The option values the Core runs `system`'s Game at `game` with: `options`, then those this
+    /// Core reads from the Game's file, then, for a System with two screens, those of its `layout`
+    /// in place of the same keys.
+    pub fn options_for(
+        &self,
+        system: &System,
+        game: &Path,
+        layout: ScreenLayout,
+    ) -> Vec<(&'static str, &'static str)> {
         let own = if std::ptr::eq(self, &MUPEN64PLUS_NEXT) {
             n64_game_options(game)
-        } else if std::ptr::eq(self, &AZAHAR) {
-            AZAHAR_LAYOUT
         } else {
             &[]
         };
-        [self.options, own].concat()
+        let mut options = [self.options, own].concat();
+        let screens = screen_layouts(system).map_or(&[][..], |layouts| layouts.options(layout));
+        for &(key, value) in screens {
+            match options.iter_mut().find(|(k, _)| *k == key) {
+                Some(option) => option.1 = value,
+                None => options.push((key, value)),
+            }
+        }
+        options
     }
 
     /// Which OpenGL host this Core's context must be made on.
@@ -1315,13 +1450,10 @@ mod tests {
             write("pal.v64", &v64(n64_header(b'D'))),
             write("pal.n64", &n64(n64_header(b'U'))),
         ];
+        let n64_system = by_id("n64").unwrap();
+        let options_for = |game| MUPEN64PLUS_NEXT.options_for(n64_system, game, ScreenLayout::default());
         for game in &pal {
-            assert_eq!(
-                MUPEN64PLUS_NEXT.options_for(game),
-                N64_PAL_CROP,
-                "{}",
-                game.display()
-            );
+            assert_eq!(options_for(game), N64_PAL_CROP, "{}", game.display());
         }
         let ntsc = [
             write("ntsc.z64", &n64_header(b'E')),
@@ -1331,24 +1463,134 @@ mod tests {
             dir.path().join("missing.z64"),
         ];
         for game in &ntsc {
-            assert_eq!(MUPEN64PLUS_NEXT.options_for(game), [], "{}", game.display());
+            assert_eq!(options_for(game), [], "{}", game.display());
         }
-        for core in [
-            &MESEN,
-            &BSNES,
-            &SAMEBOY,
-            &MGBA,
-            &BEETLE_PSX_HW,
-            &MELONDS_DS,
-            &PPSSPP,
-            &LRPS2,
-        ] {
-            assert_eq!(core.options_for(&pal[0]), core.options, "{}", core.name);
+        // Every other Core, DS's in its default layout too, runs with its own options alone.
+        for system in SYSTEMS.iter().filter(|s| s.id != "n64" && s.id != "3ds") {
+            if let Some(core) = for_system(system) {
+                let options = core.options_for(system, &pal[0], ScreenLayout::default());
+                assert_eq!(options, core.options, "{}", core.name);
+            }
         }
+        let three_ds = crate::systems::by_id("3ds").unwrap();
         assert_eq!(
-            AZAHAR.options_for(&pal[0]),
-            [AZAHAR.options, AZAHAR_LAYOUT].concat(),
-            "Azahar's own options, then its layout"
+            AZAHAR.options_for(three_ds, &pal[0], ScreenLayout::default()),
+            [AZAHAR.options, THREE_DS_LAYOUTS.large_and_small].concat(),
+            "Azahar's own options, then the 3DS layout's"
+        );
+    }
+
+    #[test]
+    fn screen_layouts_cycle_both_ways_and_round_trip_their_ids() {
+        use ScreenLayout::*;
+        assert_eq!(ScreenLayout::default(), LargeAndSmall);
+        assert_eq!(
+            [LargeAndSmall.next(), SideBySide.next(), OneScreen.next()],
+            [SideBySide, OneScreen, LargeAndSmall]
+        );
+        assert_eq!(
+            [LargeAndSmall.prev(), SideBySide.prev(), OneScreen.prev()],
+            [OneScreen, LargeAndSmall, SideBySide]
+        );
+        for layout in ScreenLayout::ALL {
+            assert_eq!(ScreenLayout::from_id(layout.id()), Some(layout));
+        }
+        assert_eq!(ScreenLayout::from_id("top-bottom"), None);
+    }
+
+    #[test]
+    fn only_ds_and_3ds_have_screen_layouts_each_named_after_its_system() {
+        let with: Vec<_> = SYSTEMS
+            .iter()
+            .filter(|s| screen_layouts(s).is_some())
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(with, ["nds", "3ds"]);
+        for system in SYSTEMS.iter().filter(|s| screen_layouts(s).is_some()) {
+            assert_eq!(
+                screen_layouts(system).unwrap().label,
+                format!("{} layout", system.short)
+            );
+        }
+    }
+
+    /// The options melonDS DS runs a DS Game with in `layout`.
+    fn ds_options(layout: ScreenLayout) -> Vec<(&'static str, &'static str)> {
+        MELONDS_DS.options_for(by_id("nds").unwrap(), Path::new("/Games/nds/Game.nds"), layout)
+    }
+
+    /// Each choice's layouts are melonDS DS's own values (as its `SET_VARIABLES` offers them), two
+    /// each so R3 swaps the screens; only the layout keys change, in place.
+    #[test]
+    fn each_ds_layout_gives_melonds_ds_its_two_layouts() {
+        let with = |layout1, layout2| -> Vec<_> {
+            MELONDS_DS
+                .options
+                .iter()
+                .map(|&(key, value)| match key {
+                    "melonds_screen_layout1" => (key, layout1),
+                    "melonds_screen_layout2" => (key, layout2),
+                    _ => (key, value),
+                })
+                .collect()
+        };
+        assert_eq!(
+            ds_options(ScreenLayout::LargeAndSmall),
+            MELONDS_DS.options,
+            "FR-DS-1"
+        );
+        assert_eq!(
+            ds_options(ScreenLayout::SideBySide),
+            with("left-right", "right-left")
+        );
+        assert_eq!(ds_options(ScreenLayout::OneScreen), with("top", "bottom"));
+        for layout in ScreenLayout::ALL {
+            assert!(ds_options(layout).contains(&("melonds_number_of_screen_layouts", "2")));
+        }
+    }
+
+    /// 3DS's layouts as Azahar's options, whatever Core options they join.
+    #[test]
+    fn each_3ds_layout_gives_azahars_layout_options() {
+        let layouts = screen_layouts(by_id("3ds").unwrap()).unwrap();
+        assert_eq!(
+            layouts.options(ScreenLayout::LargeAndSmall),
+            [
+                ("citra_layout_option", "large_screen"),
+                ("citra_large_screen_proportion", "3.00"),
+            ]
+        );
+        assert_eq!(
+            layouts.options(ScreenLayout::SideBySide),
+            [("citra_layout_option", "side_by_side")]
+        );
+        assert_eq!(
+            layouts.options(ScreenLayout::OneScreen),
+            [("citra_layout_option", "single_screen")]
+        );
+        // On a Core whose own options set a layout, the choice replaces it in place.
+        let core = CoreInfo {
+            options: &[
+                ("citra_layout_option", "default"),
+                ("citra_graphics_api", "OpenGL"),
+            ],
+            ..MELONDS_DS
+        };
+        let game = Path::new("/Games/3ds/Game.3dsx");
+        assert_eq!(
+            core.options_for(by_id("3ds").unwrap(), game, ScreenLayout::OneScreen),
+            [
+                ("citra_layout_option", "single_screen"),
+                ("citra_graphics_api", "OpenGL")
+            ]
+        );
+        assert_eq!(
+            core.options_for(by_id("3ds").unwrap(), game, ScreenLayout::LargeAndSmall),
+            [
+                ("citra_layout_option", "large_screen"),
+                ("citra_graphics_api", "OpenGL"),
+                ("citra_large_screen_proportion", "3.00"),
+            ]
         );
     }
 
@@ -1421,11 +1663,11 @@ mod tests {
             &[
                 ("citra_graphics_api", "OpenGL"),
                 ("citra_use_libretro_save_path", "LibRetro Default"),
-                ("citra_analog_function", "c_stick"),
+                ("citra_analog_function", "c_stick_and_touchscreen"),
             ]
         );
         assert_eq!(
-            AZAHAR_LAYOUT,
+            THREE_DS_LAYOUTS.large_and_small,
             &[
                 ("citra_layout_option", "large_screen"),
                 ("citra_large_screen_proportion", "3.00"),

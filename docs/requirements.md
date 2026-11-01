@@ -112,14 +112,14 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 Built in milestone 8 (ADR 0016, research in [research/m8-newer-cores.md](research/m8-newer-cores.md)).
 
 - **FR-NEW-1** PS2 Games run with the LRPS2 Core, rendering with OpenGL. It needs the player's PS2 BIOS dump, any file name, in `<Games Root>/bios/pcsx2/bios/`; without one, Game37 says so and names that folder (FR-EMB-12). Each Game gets its own memory card.
-- **FR-NEW-2** 3DS Games run with the Azahar Core, rendering with OpenGL: homebrew and decrypted Games. Both screens are shown, the top one large; R3 swaps which screen is large, and the touch screen takes the mouse and a right-stick cursor, as on DS. An encrypted dump gets a message saying it must be decrypted.
+- **FR-NEW-2** 3DS Games run with the Azahar Core, rendering with OpenGL: homebrew and decrypted Games. How the two screens are shown is a choice in Settings → Display, with the same three layouts as DS (FR-DS-1): Large and small (the default, the large screen three times the small one), Side by side, or One screen. R3 swaps the screens, as on DS, and the touch screen takes the mouse and a right-stick cursor. An encrypted dump gets a message saying it must be decrypted.
 - **FR-NEW-3** GameCube and Wii Games run with the Dolphin Core, rendering with OpenGL. Game37 downloads Dolphin's system files with the Core. On Wii, the controller stands in for a Wii Remote.
 - **FR-NEW-4** These Systems also take homebrew in the form their Cores load directly: `.elf` for PS2, `.3dsx` for 3DS, `.dol` and `.elf` for GameCube and Wii.
 
 ### Nintendo DS
 
-- **FR-DS-1** DS shows one large screen and one small screen, the large one three times the size of the small one: together 16:9, so on a 16:9 display the large screen fills the height and the small one the rest of the width.
-- **FR-DS-2** R3 swaps which screen is large.
+- **FR-DS-1** How DS shows its two screens is a choice in Settings → Display, one of three layouts: Large and small (the default), one large screen and one small screen, the large one three times the size of the small one: together 16:9, so on a 16:9 display the large screen fills the height and the small one the rest of the width; Side by side, both screens next to each other at the same size; or One screen, the top screen alone, filling the display. The choice applies from the next Game started.
+- **FR-DS-2** R3 (Tab on the keyboard) swaps the screens in every layout: which one is large, which one is on the left, or which one is shown.
 - **FR-DS-3** The touch screen accepts mouse clicks, and a right-stick cursor with a button to tap.
 
 ### External play
@@ -139,7 +139,7 @@ Built in milestone 8 (ADR 0016, research in [research/m8-newer-cores.md](researc
 
 ### Settings
 
-- **FR-SET-1** Settings contains: SteamGridDB API key, Hidden games, Games Root location, Rescan library, Update/redownload Cores, Controller test, Reset Playtime and stats, BIOS status per System, Startup window mode, Menu button style, About.
+- **FR-SET-1** Settings contains: SteamGridDB API key, Hidden games, Games Root location, Rescan library, Update/redownload Cores, Controller test, Reset Playtime and stats, BIOS status per System, Startup window mode, DS and 3DS screen layout, Menu button style, About.
 
 ### Setup and configuration
 
