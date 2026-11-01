@@ -162,10 +162,11 @@ pub static SYSTEMS: [System; 17] = [
         kind: Kind::Embedded,
         colour: 0xC9302C,
         // What Azahar loads as a Game: cartridge and executable dumps, their z-compressed forms,
-        // and homebrew (.3dsx, .elf, .axf; FR-NEW-4). .cia is an installer for the emulator's own
-        // storage, which Azahar can't load (FR-LIB-5).
+        // their bundles (.bcci, .bcxi: one file holding the dump with its update and DLC, which
+        // Azahar plays as the dump), and homebrew (.3dsx, .elf, .axf; FR-NEW-4). .cia is an
+        // installer for the emulator's own storage, which Azahar can't load (FR-LIB-5).
         extensions: &[
-            "3ds", "cci", "cxi", "3dsx", "app", "elf", "axf", "zcci", "zcxi", "z3dsx",
+            "3ds", "cci", "cxi", "3dsx", "app", "elf", "axf", "zcci", "zcxi", "z3dsx", "bcci", "bcxi",
         ],
         folder_markers: &[],
     },
@@ -325,7 +326,7 @@ mod tests {
     fn three_ds_takes_what_azahar_loads_as_games_but_no_installers() {
         let three_ds = by_id("3ds").unwrap();
         for ext in [
-            "3ds", "cci", "cxi", "3dsx", "app", "elf", "axf", "zcci", "zcxi", "z3dsx",
+            "3ds", "cci", "cxi", "3dsx", "app", "elf", "axf", "zcci", "zcxi", "z3dsx", "bcci", "bcxi",
         ] {
             assert!(three_ds.extensions.contains(&ext), "{ext}");
         }
