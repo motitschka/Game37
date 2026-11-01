@@ -909,6 +909,7 @@ mod tests {
 
     unsafe extern "C" fn fake_set<T>(_: T) {}
     unsafe extern "C" fn fake_nothing() {}
+    unsafe extern "C" fn fake_port_device(_: std::ffi::c_uint, _: std::ffi::c_uint) {}
     unsafe extern "C" fn fake_api_version() -> std::ffi::c_uint {
         1
     }
@@ -970,6 +971,7 @@ mod tests {
             set_audio_sample_batch: fake_set,
             set_input_poll: fake_set,
             set_input_state: fake_set,
+            set_controller_port_device: fake_port_device,
             init: fake_nothing,
             deinit: fake_nothing,
             api_version: fake_api_version,

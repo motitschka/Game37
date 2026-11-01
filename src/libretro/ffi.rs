@@ -158,6 +158,8 @@ pub struct Api {
     pub set_audio_sample_batch: unsafe extern "C" fn(AudioSampleBatchFn),
     pub set_input_poll: unsafe extern "C" fn(InputPollFn),
     pub set_input_state: unsafe extern "C" fn(InputStateFn),
+    /// `retro_set_controller_port_device(port, device)`.
+    pub set_controller_port_device: unsafe extern "C" fn(c_uint, c_uint),
     pub init: unsafe extern "C" fn(),
     pub deinit: unsafe extern "C" fn(),
     pub api_version: unsafe extern "C" fn() -> c_uint,
@@ -195,6 +197,7 @@ impl Api {
             set_audio_sample_batch: sym!("retro_set_audio_sample_batch"),
             set_input_poll: sym!("retro_set_input_poll"),
             set_input_state: sym!("retro_set_input_state"),
+            set_controller_port_device: sym!("retro_set_controller_port_device"),
             init: sym!("retro_init"),
             deinit: sym!("retro_deinit"),
             api_version: sym!("retro_api_version"),

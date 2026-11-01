@@ -17,6 +17,8 @@ static AUDIO_BATCH: Mutex<Option<AudioSampleBatchFn>> = Mutex::new(None);
 static INPUT_STATE: Mutex<Option<InputStateFn>> = Mutex::new(None);
 /// What `input_state` answered the fake Core.
 static ANSWERS: Mutex<Vec<i16>> = Mutex::new(Vec::new());
+/// What the fake Core was asked to do, in order.
+static CALLS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 fn lock<T>(m: &'static Mutex<T>) -> MutexGuard<'static, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -27,10 +29,29 @@ fn reset() {
     *lock(&AUDIO_BATCH) = None;
     *lock(&INPUT_STATE) = None;
     lock(&ANSWERS).clear();
+    lock(&CALLS).clear();
+}
+
+fn note(call: String) {
+    lock(&CALLS).push(call);
+}
+
+fn calls() -> Vec<String> {
+    lock(&CALLS).clone()
 }
 
 unsafe extern "C" fn set_any<T>(_: T) {}
 unsafe extern "C" fn nothing() {}
+unsafe extern "C" fn set_controller_port_device(port: c_uint, device: c_uint) {
+    note(format!("port {port}: device {device}"));
+}
+unsafe extern "C" fn load_game_noted(_: *const RetroGameInfo) -> bool {
+    note("load_game".into());
+    true
+}
+unsafe extern "C" fn run_noted() {
+    note("run".into());
+}
 unsafe extern "C" fn api_version() -> c_uint {
     ffi::RETRO_API_VERSION
 }
@@ -99,6 +120,7 @@ fn api() -> Api {
         set_audio_sample_batch,
         set_input_poll: set_any,
         set_input_state,
+        set_controller_port_device,
         init: nothing,
         deinit: nothing,
         api_version,
@@ -143,4 +165,26 @@ fn a_core_reading_input_and_sending_audio_on_its_own_thread_gets_both_through() 
     input.set(0, Button::A, false);
     core.run_frame(&input);
     assert_eq!(*lock(&ANSWERS), [1, 0], "A let go");
+}
+
+#[test]
+fn every_port_gets_a_retropad_after_the_game_loads_and_before_the_first_frame() {
+    let _serial = serial();
+    reset();
+    let mut core = start(Api {
+        load_game: load_game_noted,
+        run: run_noted,
+        ..api()
+    });
+    core.run_frame(&InputState::default());
+    let joypad = ffi::RETRO_DEVICE_JOYPAD;
+    let expected = [
+        "load_game".to_owned(),
+        format!("port 0: device {joypad}"),
+        format!("port 1: device {joypad}"),
+        format!("port 2: device {joypad}"),
+        format!("port 3: device {joypad}"),
+        "run".to_owned(),
+    ];
+    assert_eq!(calls(), expected);
 }

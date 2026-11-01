@@ -14,7 +14,7 @@ mod hw;
 #[cfg(test)]
 pub(crate) mod tests;
 
-use std::ffi::{CString, c_int};
+use std::ffi::{CString, c_int, c_uint};
 use std::fmt;
 use std::marker::PhantomData;
 use std::os::unix::ffi::OsStrExt;
@@ -421,6 +421,12 @@ impl Core {
             return Err(CoreError::LoadGame(game_path.to_path_buf()));
         }
         core.game_loaded = true;
+        // A RetroPad in every port, as libretro.h assumes; some Cores (Dolphin) set up their
+        // controllers only when told so.
+        for port in 0..MAX_PORTS as c_uint {
+            // SAFETY: the Core is loaded with a Game, and `port` is one it reads input from.
+            unsafe { (core.api.set_controller_port_device)(port, ffi::RETRO_DEVICE_JOYPAD) };
+        }
 
         let mut av = RetroSystemAvInfo::default();
         // SAFETY: `av` is a valid, writable `retro_system_av_info` for the duration of the call.
