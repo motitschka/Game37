@@ -15,7 +15,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
-use crate::cores;
+use crate::cores::{self, BiosRule};
 use crate::ctx::{Ctx, Play};
 use crate::emulators::{self, Emulator, PATH};
 use crate::library::db::GameRow;
@@ -30,7 +30,6 @@ use crate::ui::nav::{Nav, Transition};
 pub const EARLY: Duration = Duration::from_secs(3);
 pub const FAILED_TITLE: &str = "Couldn't start the game";
 const NOT_PLAYABLE_TITLE: &str = "Not playable yet";
-const BIOS_MISSING_TITLE: &str = "PlayStation BIOS missing";
 
 /// What Play on a Game's Details Page does (FR-DET-1): asks to play it when its System's
 /// Core or Standalone Emulator is installed, downloads an Embedded System's Core first when it
@@ -49,15 +48,19 @@ pub fn confirm_play(play: Play, ctx: &mut Ctx) -> Transition {
     if system.kind == Kind::Embedded
         && let Some(core) = cores::for_system(system)
     {
-        if !cores::has_required_bios(&ctx.games_root, core) {
+        if let Some(rule) = core.bios
+            && !cores::has_required_bios(&ctx.games_root, core)
+        {
             return Transition::Push(Box::new(Message::new(
-                BIOS_MISSING_TITLE,
-                missing_bios_message(&ctx.games_root),
+                rule.wording.title,
+                missing_bios_message(&ctx.games_root, rule),
             )));
         }
         if !cores::is_installed(&ctx.data_dir, core) {
-            let screen = if core.system_in_data_dir && !cores::assets_dir(&ctx.data_dir).is_dir() {
-                let assets = (ctx.start_assets_download)(ctx.data_dir.clone());
+            let screen = if let Some(assets) = core.assets
+                && !cores::has_assets(&ctx.data_dir, core)
+            {
+                let assets = (ctx.start_assets_download)(assets, ctx.data_dir.clone());
                 DownloadCore::new_with_assets(play, core, assets)
             } else {
                 let download = (ctx.start_download)(core, ctx.data_dir.clone());
@@ -72,14 +75,10 @@ pub fn confirm_play(play: Play, ctx: &mut Ctx) -> Transition {
     }
 }
 
-/// FR-EMB-12's message for PS1's missing BIOS: the only Core with a `required_bios` list today,
-/// so this wording is PS1-specific rather than generated from the list generically.
-pub(crate) fn missing_bios_message(games_root: &Path) -> String {
-    format!(
-        "PlayStation games need a BIOS file. Put scph5501.bin (North America), scph5502.bin \
-         (Europe) or scph5500.bin (Japan) in {}.",
-        tilde(&games_root.join("bios"), dirs::home_dir().as_deref())
-    )
+/// FR-EMB-12's message for a missing BIOS, in its System's words, naming the folder it goes in.
+pub(crate) fn missing_bios_message(games_root: &Path, rule: &BiosRule) -> String {
+    let dir = tilde(&rule.dir(games_root), dirs::home_dir().as_deref());
+    rule.wording.message.replace("{dir}", &dir)
 }
 
 /// Asks to play `play`'s Game (`Ctx::play` or `Ctx::launch`) and returns `None`, or returns why it
@@ -803,6 +802,21 @@ mod tests {
     }
 
     #[test]
+    fn the_missing_bios_message_is_in_the_systems_words_and_names_its_folder() {
+        let root = Path::new("/srv/Games");
+        assert_eq!(
+            missing_bios_message(root, &cores::PS1_BIOS),
+            "PlayStation games need a BIOS file. Put scph5501.bin (North America), scph5502.bin \
+             (Europe) or scph5500.bin (Japan) in /srv/Games/bios."
+        );
+        assert_eq!(
+            missing_bios_message(root, &cores::PS2_BIOS),
+            "PlayStation 2 games need a BIOS file dumped from your own PlayStation 2. Put it, with \
+             any file name, in /srv/Games/bios/pcsx2/bios."
+        );
+    }
+
+    #[test]
     fn confirm_on_ps1_with_any_bios_file_in_any_case_starts_it() {
         let mut w = world("exit 0");
         w.ctx.data_dir = w._dir.path().join("data");
@@ -844,7 +858,7 @@ mod tests {
         let mut w = world("exit 0");
         w.ctx.data_dir = w._dir.path().join("data");
         touch(&w.ctx.data_dir.join("cores/ppsspp_libretro.so"));
-        fs::create_dir_all(cores::assets_dir(&w.ctx.data_dir)).unwrap();
+        fs::create_dir_all(cores::assets_dir(&w.ctx.data_dir, &cores::PPSSPP_ASSETS)).unwrap();
         let psp = game_of(&w, "psp");
         assert!(matches!(confirm_game(&psp, &mut w.ctx), Transition::None));
         assert_eq!(w.ctx.play.take().map(|p| p.game.system), Some("psp".to_owned()));
@@ -854,8 +868,8 @@ mod tests {
     fn confirm_on_psp_with_assets_already_present_skips_straight_to_the_core_step() {
         let mut w = world("exit 0");
         w.ctx.data_dir = w._dir.path().join("data");
-        fs::create_dir_all(cores::assets_dir(&w.ctx.data_dir)).unwrap();
-        w.ctx.start_assets_download = Box::new(|_| panic!("assets are already installed"));
+        fs::create_dir_all(cores::assets_dir(&w.ctx.data_dir, &cores::PPSSPP_ASSETS)).unwrap();
+        w.ctx.start_assets_download = Box::new(|_, _| panic!("assets are already installed"));
         w.ctx.start_download = Box::new(cores::testing::spawn_failing);
         let psp = game_of(&w, "psp");
         assert!(matches!(confirm_game(&psp, &mut w.ctx), Transition::Push(_)));

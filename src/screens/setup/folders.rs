@@ -416,7 +416,7 @@ mod tests {
         let mut ctx = Ctx::empty();
         ctx.data_dir = root.join("data");
         ctx.start_download = Box::new(|_, _| crate::cores::testing::manual().0);
-        ctx.start_assets_download = Box::new(|_| crate::cores::testing::manual().0);
+        ctx.start_assets_download = Box::new(|_, _| crate::cores::testing::manual().0);
         let mut setup = ticking(root, ids);
         act(&mut setup, &mut ctx, Action::Settings);
         assert_eq!(setup.step(), 3);

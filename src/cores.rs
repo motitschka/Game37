@@ -4,7 +4,6 @@
 //! Cores are never committed (ADR 0004); they are fetched from the libretro build server into
 //! `~/.local/share/game37/cores/` on first use and kept there for later launches.
 
-use std::collections::HashSet;
 use std::fmt;
 use std::fs;
 use std::io;
@@ -30,48 +29,180 @@ pub struct CoreInfo {
     /// `GET_VARIABLE` answers this Core needs ahead of its own defaults, e.g. to turn on hardware
     /// rendering or to lay out Nintendo DS's two screens (FR-DS-1).
     pub options: &'static [(&'static str, &'static str)],
-    /// BIOS file names (lowercase), any one of which in `<Games Root>/bios/` is enough
-    /// (FR-EMB-12). Empty when the Core needs none.
-    pub required_bios: &'static [&'static str],
-    /// Whether this Core's system directory is `<data dir>/system` (replaceable data) rather
-    /// than `<Games Root>/bios` (BIOS files). Only PPSSPP needs this, for its asset files.
-    pub system_in_data_dir: bool,
+    /// The BIOS the Core needs before it can start a Game (FR-EMB-12), or `None` when it needs none.
+    pub bios: Option<&'static BiosRule>,
+    /// Files the Core needs beside its library, downloaded with it, or `None` when it needs none.
+    /// A Core with assets has its system directory under the data dir (see [`system_dir`]).
+    pub assets: Option<&'static CoreAssets>,
 }
+
+/// Where a Core's BIOS goes and which files count as one (FR-EMB-12), with how Game37 words it for
+/// the Core's System.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BiosRule {
+    /// The folder the BIOS goes in, under `<Games Root>/bios/`; empty for that folder itself.
+    pub folder: &'static str,
+    pub files: BiosFiles,
+    pub wording: BiosWording,
+}
+
+/// Which files in a [`BiosRule`]'s folder count as the BIOS. Only regular files count (a symlink
+/// counts by what it points at), so a directory or a dangling symlink never does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BiosFiles {
+    /// Any one of these names (lowercase), matched case-insensitively, as a non-empty file.
+    Named(&'static [&'static str]),
+    /// Any file from `min` to `max` bytes, whatever its name: the Core itself checks that it is
+    /// a real BIOS.
+    Sized { min: u64, max: u64 },
+}
+
+/// What Game37 tells the player about a [`BiosRule`], in its System's words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BiosWording {
+    /// The missing-BIOS message's title.
+    pub title: &'static str,
+    /// The missing-BIOS message shown on Play; `{dir}` stands for the folder.
+    pub message: &'static str,
+    /// What Settings → BIOS and Setup ask the player to put in the folder.
+    pub ask_for: &'static str,
+}
+
+/// PS1's BIOS (Beetle PSX HW): one of the region BIOS files directly in `<Games Root>/bios/`. The
+/// wording names the three region files rather than every name the check accepts.
+pub static PS1_BIOS: BiosRule = BiosRule {
+    folder: "",
+    files: BiosFiles::Named(&[
+        "scph5500.bin",
+        "scph5501.bin",
+        "scph5502.bin",
+        "scph5503.bin",
+        "scph7003.bin",
+        "scph5552.bin",
+    ]),
+    wording: BiosWording {
+        title: "PlayStation BIOS missing",
+        message: "PlayStation games need a BIOS file. Put scph5501.bin (North America), scph5502.bin \
+                  (Europe) or scph5500.bin (Japan) in {dir}.",
+        ask_for: "scph5500.bin, scph5501.bin or scph5502.bin",
+    },
+};
+
+/// PS2's BIOS (LRPS2, FR-NEW-1): the player's own dump, any file name, of 4 to 8 MiB, in
+/// `<Games Root>/bios/pcsx2/bios/`, where LRPS2 looks for it under its system directory.
+pub static PS2_BIOS: BiosRule = BiosRule {
+    folder: "pcsx2/bios",
+    files: BiosFiles::Sized {
+        min: 4 * 1024 * 1024,
+        max: 8 * 1024 * 1024,
+    },
+    wording: BiosWording {
+        title: "PlayStation 2 BIOS missing",
+        message: "PlayStation 2 games need a BIOS file dumped from your own PlayStation 2. Put it, \
+                  with any file name, in {dir}.",
+        ask_for: "your own BIOS dump, any file name,",
+    },
+};
+
+impl BiosRule {
+    /// The folder this BIOS goes in: `<games_root>/bios/<folder>`.
+    pub fn dir(&self, games_root: &Path) -> PathBuf {
+        let bios = games_root.join("bios");
+        if self.folder.is_empty() {
+            bios
+        } else {
+            bios.join(self.folder)
+        }
+    }
+
+    /// The file in [`BiosRule::dir`] that satisfies this rule, named as it is on disk, or `None`.
+    /// With several, a named rule takes the one earliest in its list and a sized rule the first by
+    /// name.
+    pub fn found(&self, games_root: &Path) -> Option<String> {
+        let entries = fs::read_dir(self.dir(games_root)).ok()?;
+        let files = entries.filter_map(|e| e.ok()).filter_map(|entry| {
+            let metadata = fs::metadata(entry.path()).ok().filter(|m| m.is_file())?;
+            Some((entry.file_name().to_string_lossy().into_owned(), metadata.len()))
+        });
+        match self.files {
+            BiosFiles::Named(names) => files
+                .filter(|(name, len)| *len > 0 && names.contains(&name.to_lowercase().as_str()))
+                .map(|(name, _)| name)
+                .min_by_key(|name| names.iter().position(|n| *n == name.to_lowercase())),
+            BiosFiles::Sized { min, max } => files
+                .filter(|(_, len)| (min..=max).contains(len))
+                .map(|(name, _)| name)
+                .min(),
+        }
+    }
+}
+
+/// Files a Core needs in its system directory beside its library, from a zip on the libretro build
+/// server that holds one top folder (FR-EMB-1, FR-NEW-3). That folder unpacks to
+/// `<data dir>/system/<folder>`, the Core's system directory being `<data dir>/system`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CoreAssets {
+    /// How messages name them, e.g. "PPSSPP assets".
+    pub name: &'static str,
+    pub url: &'static str,
+    /// The zip's top folder. Entries outside it are ignored.
+    pub folder: &'static str,
+    /// The folder, inside the unpacked one, whose presence says the assets are installed; empty for
+    /// the unpacked folder itself.
+    pub marker: &'static str,
+}
+
+/// PPSSPP's assets (M4 decision): the `PPSSPP/` folder, about 9 MB.
+pub static PPSSPP_ASSETS: CoreAssets = CoreAssets {
+    name: "PPSSPP assets",
+    url: "https://buildbot.libretro.com/assets/system/PPSSPP.zip",
+    folder: "PPSSPP",
+    marker: "",
+};
+
+/// Dolphin's system files (FR-NEW-3): the `dolphin-emu/` folder, about 15 MB unpacked, which
+/// Dolphin needs as `<system dir>/dolphin-emu/Sys`.
+pub static DOLPHIN_ASSETS: CoreAssets = CoreAssets {
+    name: "Dolphin system files",
+    url: "https://buildbot.libretro.com/assets/system/Dolphin.zip",
+    folder: "dolphin-emu",
+    marker: "Sys",
+};
 
 pub static MESEN: CoreInfo = CoreInfo {
     name: "Mesen",
     file: "mesen_libretro.so",
     options: &[],
-    required_bios: &[],
-    system_in_data_dir: false,
+    bios: None,
+    assets: None,
 };
 pub static BSNES: CoreInfo = CoreInfo {
     name: "bsnes",
     file: "bsnes_libretro.so",
     options: &[],
-    required_bios: &[],
-    system_in_data_dir: false,
+    bios: None,
+    assets: None,
 };
 pub static SAMEBOY: CoreInfo = CoreInfo {
     name: "SameBoy",
     file: "sameboy_libretro.so",
     options: &[],
-    required_bios: &[],
-    system_in_data_dir: false,
+    bios: None,
+    assets: None,
 };
 pub static MGBA: CoreInfo = CoreInfo {
     name: "mGBA",
     file: "mgba_libretro.so",
     options: &[],
-    required_bios: &[],
-    system_in_data_dir: false,
+    bios: None,
+    assets: None,
 };
 pub static MUPEN64PLUS_NEXT: CoreInfo = CoreInfo {
     name: "Mupen64Plus-Next",
     file: "mupen64plus_next_libretro.so",
     options: &[],
-    required_bios: &[],
-    system_in_data_dir: false,
+    bios: None,
+    assets: None,
 };
 
 /// Crops a European (PAL) N64 Game to its picture: such Games draw about 240 lines into the
@@ -119,15 +250,8 @@ pub static BEETLE_PSX_HW: CoreInfo = CoreInfo {
     name: "Beetle PSX HW",
     file: "mednafen_psx_hw_libretro.so",
     options: &[("beetle_psx_hw_renderer", "hardware_gl")],
-    required_bios: &[
-        "scph5500.bin",
-        "scph5501.bin",
-        "scph5502.bin",
-        "scph5503.bin",
-        "scph7003.bin",
-        "scph5552.bin",
-    ],
-    system_in_data_dir: false,
+    bios: Some(&PS1_BIOS),
+    assets: None,
 };
 /// Options chosen for FR-DS-1–3: two hybrid layouts (one large screen, one small), the touch
 /// pointer and joystick cursor both live, and a visible cursor for aiming it.
@@ -149,15 +273,15 @@ pub static MELONDS_DS: CoreInfo = CoreInfo {
         // desktop CPU.
         ("melonds_jit_enable", "disabled"),
     ],
-    required_bios: &[],
-    system_in_data_dir: false,
+    bios: None,
+    assets: None,
 };
 pub static PPSSPP: CoreInfo = CoreInfo {
     name: "PPSSPP",
     file: "ppsspp_libretro.so",
     options: &[],
-    required_bios: &[],
-    system_in_data_dir: true,
+    bios: None,
+    assets: Some(&PPSSPP_ASSETS),
 };
 
 /// Which OpenGL host a Core's context must be made on (see [`CoreInfo::gl`]).
@@ -224,47 +348,51 @@ pub fn installed_path(data_dir: &Path, core: &CoreInfo) -> PathBuf {
     data_dir.join("cores").join(core.file)
 }
 
-/// A Core's own system directory (ADR 0005): `<data dir>/system` for PPSSPP's replaceable
-/// assets, `<Games Root>/bios` for every other Core's BIOS files (FR-LIB-9).
+/// A Core's own system directory (ADR 0005): `<data dir>/system` for a Core with assets, which are
+/// replaceable data, `<Games Root>/bios` for every other Core's BIOS files (FR-LIB-9).
 pub fn system_dir(core: &CoreInfo, data_dir: &Path, games_root: &Path) -> PathBuf {
-    if core.system_in_data_dir {
+    if core.assets.is_some() {
         data_dir.join("system")
     } else {
         games_root.join("bios")
     }
 }
 
-/// Where PPSSPP's assets from `assets_url` unpack to: `<system dir>/PPSSPP`.
-pub fn assets_dir(data_dir: &Path) -> PathBuf {
-    data_dir.join("system").join("PPSSPP")
+/// Where `assets` unpack to: `<data dir>/system/<folder>`, in their Core's system directory.
+pub fn assets_dir(data_dir: &Path, assets: &CoreAssets) -> PathBuf {
+    data_dir.join("system").join(assets.folder)
 }
 
-/// A Core is installed once its library is there and, for PPSSPP, its assets are too.
+/// The folder whose presence says `assets` are installed: their [`CoreAssets::marker`].
+pub fn assets_marker(data_dir: &Path, assets: &CoreAssets) -> PathBuf {
+    let dir = assets_dir(data_dir, assets);
+    if assets.marker.is_empty() {
+        dir
+    } else {
+        dir.join(assets.marker)
+    }
+}
+
+/// Whether `core`'s assets are installed. True when it needs none.
+pub fn has_assets(data_dir: &Path, core: &CoreInfo) -> bool {
+    core.assets
+        .is_none_or(|assets| assets_marker(data_dir, assets).is_dir())
+}
+
+/// A Core is installed once its library is there and its assets, if it has any, are too.
 pub fn is_installed(data_dir: &Path, core: &CoreInfo) -> bool {
-    installed_path(data_dir, core).is_file() && (!core.system_in_data_dir || assets_dir(data_dir).is_dir())
+    installed_path(data_dir, core).is_file() && has_assets(data_dir, core)
 }
 
-/// Whether any of `core`'s `required_bios` names is in `<games_root>/bios/`, matched
-/// case-insensitively, and is a non-empty regular file (so a directory, a dangling symlink or a
-/// zero-byte file never counts). True when the Core needs none.
+/// Whether `core`'s BIOS is in place (see [`BiosRule::found`]). True when the Core needs none.
 pub fn has_required_bios(games_root: &Path, core: &CoreInfo) -> bool {
-    core.required_bios.is_empty() || found_bios(games_root, core).is_some()
+    core.bios.is_none_or(|rule| rule.found(games_root).is_some())
 }
 
-/// The file in `<games_root>/bios/` that satisfies [`has_required_bios`] for `core`, named as it is
-/// on disk. With several, the one earliest in `required_bios`. `None` when there is none, or the
-/// Core needs none.
+/// The file that satisfies `core`'s BIOS rule, named as it is on disk (see [`BiosRule::found`]).
+/// `None` when there is none, or the Core needs none.
 pub fn found_bios(games_root: &Path, core: &CoreInfo) -> Option<String> {
-    let entries = fs::read_dir(games_root.join("bios")).ok()?;
-    let names: HashSet<String> = core.required_bios.iter().map(|n| n.to_string()).collect();
-    entries
-        .filter_map(|e| e.ok())
-        .filter(|entry| {
-            names.contains(&entry.file_name().to_string_lossy().to_lowercase())
-                && fs::metadata(entry.path()).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
-        })
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .min_by_key(|name| core.required_bios.iter().position(|n| *n == name.to_lowercase()))
+    core.bios.and_then(|rule| rule.found(games_root))
 }
 
 /// The libretro build server's URL for a Core's nightly zip.
@@ -300,8 +428,8 @@ type Fetcher = Arc<dyn Fn(&str) -> FetchResult + Send + Sync>;
 /// A cap on a Core's zip size (FR-EMB-2 is for small libretro Cores, not arbitrary downloads).
 const MAX_DOWNLOAD_BYTES: u64 = 100 * 1024 * 1024;
 
-/// A cap on a Core's unzipped size, so a zip bomb can't fill memory or the disk. The real Cores
-/// are under 10 MB.
+/// A cap on a Core's unzipped size, so a zip bomb can't fill memory or the disk. The largest real
+/// Core, Azahar's, is about 47 MB; most are under 25 MB.
 const MAX_CORE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// The size caps a download enforces. A parameter so tests can exercise them with tiny inputs.
@@ -318,17 +446,11 @@ const LIMITS: Limits = Limits {
     core: MAX_CORE_BYTES,
 };
 
-/// Where PPSSPP's assets zip comes from (M4 decision): contains the `PPSSPP/` folder, about
-/// 9 MB, unpacked into `<data dir>/system/`.
-fn assets_url() -> &'static str {
-    "https://buildbot.libretro.com/assets/system/PPSSPP.zip"
-}
-
-/// A cap on the assets zip as downloaded.
+/// A cap on an assets zip as downloaded.
 const MAX_ASSETS_DOWNLOAD_BYTES: u64 = 100 * 1024 * 1024;
 
-/// A cap on the assets unpacked, so a zip bomb can't fill memory or the disk. The real assets
-/// are a few MB.
+/// A cap on assets unpacked, so a zip bomb can't fill memory or the disk. The real assets are
+/// 15 MB at most.
 const MAX_ASSETS_BYTES: u64 = 64 * 1024 * 1024;
 
 /// A Core download running on a background thread. `poll` never blocks; call it every frame.
@@ -386,10 +508,11 @@ impl Download {
         lock(&self.state).clone()
     }
 
-    /// Starts downloading PPSSPP's assets zip into `<data_dir>/system/PPSSPP` on a background
-    /// thread. Only needed for PPSSPP (FR-EMB-1); every other Core needs no assets.
-    pub fn start_assets(data_dir: PathBuf) -> Download {
+    /// Starts downloading a Core's `assets` into [`assets_dir`] on a background thread (FR-EMB-1,
+    /// FR-NEW-3).
+    pub fn start_assets(assets: &'static CoreAssets, data_dir: PathBuf) -> Download {
         Download::spawn_assets_limited(
+            assets,
             data_dir,
             Arc::new(ureq_fetch),
             MAX_ASSETS_DOWNLOAD_BYTES,
@@ -398,11 +521,18 @@ impl Download {
     }
 
     #[cfg(test)]
-    fn spawn_assets(data_dir: PathBuf, fetch: Fetcher) -> Download {
-        Download::spawn_assets_limited(data_dir, fetch, MAX_ASSETS_DOWNLOAD_BYTES, MAX_ASSETS_BYTES)
+    fn spawn_assets(assets: &'static CoreAssets, data_dir: PathBuf, fetch: Fetcher) -> Download {
+        Download::spawn_assets_limited(
+            assets,
+            data_dir,
+            fetch,
+            MAX_ASSETS_DOWNLOAD_BYTES,
+            MAX_ASSETS_BYTES,
+        )
     }
 
     fn spawn_assets_limited(
+        assets: &'static CoreAssets,
         data_dir: PathBuf,
         fetch: Fetcher,
         download_cap: u64,
@@ -418,6 +548,7 @@ impl Download {
         thread::spawn(move || {
             let result = panic::catch_unwind(AssertUnwindSafe(|| {
                 run_assets(
+                    assets,
                     &data_dir,
                     fetch.as_ref(),
                     download_cap,
@@ -429,7 +560,7 @@ impl Download {
             let final_state = match result {
                 Ok(Ok(path)) => DownloadState::Done(path),
                 Ok(Err(message)) => DownloadState::Failed(message),
-                Err(_) => DownloadState::Failed("Couldn't download the PPSSPP assets.".to_owned()),
+                Err(_) => DownloadState::Failed(format!("Couldn't download the {}.", assets.name)),
             };
             *lock(&state_in_thread) = final_state;
         });
@@ -576,11 +707,13 @@ fn temp_file(cores_dir: &Path, core: &CoreInfo, suffix: &str) -> io::Result<Name
         .tempfile_in(cores_dir)
 }
 
-/// Downloads PPSSPP's assets zip and unpacks the entries under `PPSSPP/` into
-/// `<data_dir>/system/PPSSPP`, the same safe way as a Core: a unique temp file and a temp
-/// extraction directory, cleaned up on every path out, with no entry escaping its folder via
-/// `..` or an absolute path, and both the download and the unpacked size capped.
+/// Downloads `assets`' zip and unpacks the entries under its top folder into [`assets_dir`], the
+/// same safe way as a Core: a unique temp file and a temp extraction directory, cleaned up on every
+/// path out, with no entry escaping its folder via `..` or an absolute path, and both the download
+/// and the unpacked size capped. A zip without the assets' marker folder isn't valid, so an install
+/// never succeeds without making them count as installed.
 fn run_assets(
+    assets: &CoreAssets,
     data_dir: &Path,
     fetch: &(dyn Fn(&str) -> FetchResult + Send + Sync),
     download_cap: u64,
@@ -589,110 +722,112 @@ fn run_assets(
     cancel: &AtomicBool,
 ) -> Result<PathBuf, String> {
     let system_dir = data_dir.join("system");
-    fs::create_dir_all(&system_dir).map_err(|e| assets_save_failed(&e))?;
+    fs::create_dir_all(&system_dir).map_err(|e| assets_save_failed(assets, &e))?;
     check_cancel(cancel)?;
 
-    let (mut reader, total) = fetch(assets_url()).map_err(|e| match e {
-        FetchError::Connect => assets_connect_failed(),
-        FetchError::Status(status) => assets_bad_status(status),
+    let (mut reader, total) = fetch(assets.url).map_err(|e| match e {
+        FetchError::Connect => assets_connect_failed(assets),
+        FetchError::Status(status) => assets_bad_status(assets, status),
     })?;
     check_cancel(cancel)?;
 
+    let prefix = format!(".{}-assets", assets.folder.to_lowercase());
     let mut zip_file = tempfile::Builder::new()
-        .prefix(".ppsspp-assets.")
+        .prefix(&format!("{prefix}."))
         .suffix(".zip.part")
         .tempfile_in(&system_dir)
-        .map_err(|e| assets_save_failed(&e))?;
+        .map_err(|e| assets_save_failed(assets, &e))?;
     let mut buf = vec![0u8; CHUNK];
     let mut received: u64 = 0;
     loop {
         check_cancel(cancel)?;
-        let n = reader.read(&mut buf).map_err(|_| assets_incomplete())?;
+        let n = reader.read(&mut buf).map_err(|_| assets_incomplete(assets))?;
         if n == 0 {
             break;
         }
         received += n as u64;
         if received > download_cap {
-            return Err(assets_incomplete());
+            return Err(assets_incomplete(assets));
         }
         zip_file
             .write_all(&buf[..n])
-            .map_err(|e| assets_save_failed(&e))?;
+            .map_err(|e| assets_save_failed(assets, &e))?;
         *lock(state) = DownloadState::Running { received, total };
     }
     drop(reader);
     if let Some(total) = total
         && received < total
     {
-        return Err(assets_incomplete());
+        return Err(assets_incomplete(assets));
     }
 
-    let mut archive = zip::ZipArchive::new(zip_file.as_file()).map_err(|_| assets_incomplete())?;
+    let mut archive = zip::ZipArchive::new(zip_file.as_file()).map_err(|_| assets_incomplete(assets))?;
     let extract_dir = tempfile::Builder::new()
-        .prefix(".ppsspp-assets-extract.")
+        .prefix(&format!("{prefix}-extract."))
         .tempdir_in(&system_dir)
-        .map_err(|e| assets_save_failed(&e))?;
+        .map_err(|e| assets_save_failed(assets, &e))?;
     let mut extracted: u64 = 0;
     let mut files_written: u64 = 0;
     for i in 0..archive.len() {
         check_cancel(cancel)?;
-        let mut entry = archive.by_index(i).map_err(|_| assets_invalid())?;
-        // Only entries under `PPSSPP/`, and never one that escapes the extraction dir.
+        let mut entry = archive.by_index(i).map_err(|_| assets_invalid(assets))?;
+        // Only entries under the top folder, and never one that escapes the extraction dir.
         let Ok(name) = entry.name() else { continue };
-        let Some(rel) = safe_asset_path(&name) else {
+        let Some(rel) = safe_asset_path(assets.folder, &name) else {
             continue;
         };
         let dest = extract_dir.path().join(&rel);
         if entry.is_dir() {
-            fs::create_dir_all(&dest).map_err(|e| assets_save_failed(&e))?;
+            fs::create_dir_all(&dest).map_err(|e| assets_save_failed(assets, &e))?;
             continue;
         }
         if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent).map_err(|e| assets_save_failed(&e))?;
+            fs::create_dir_all(parent).map_err(|e| assets_save_failed(assets, &e))?;
         }
         extracted += entry.size();
         if extracted > assets_cap {
-            return Err(assets_invalid());
+            return Err(assets_invalid(assets));
         }
-        let mut out = fs::File::create(&dest).map_err(|e| assets_save_failed(&e))?;
+        let mut out = fs::File::create(&dest).map_err(|e| assets_save_failed(assets, &e))?;
         let mut capped = (&mut entry).take(assets_cap + 1);
         let mut written: u64 = 0;
         loop {
             check_cancel(cancel)?;
-            let n = capped.read(&mut buf).map_err(|_| assets_incomplete())?;
+            let n = capped.read(&mut buf).map_err(|_| assets_incomplete(assets))?;
             if n == 0 {
                 break;
             }
             written += n as u64;
-            out.write_all(&buf[..n]).map_err(|e| assets_save_failed(&e))?;
+            out.write_all(&buf[..n])
+                .map_err(|e| assets_save_failed(assets, &e))?;
         }
         if written > assets_cap {
-            return Err(assets_invalid());
+            return Err(assets_invalid(assets));
         }
         files_written += 1;
     }
     drop(archive);
     drop(zip_file);
     check_cancel(cancel)?;
-    if files_written == 0 {
-        return Err(assets_invalid());
+    if files_written == 0 || !extract_dir.path().join(assets.marker).is_dir() {
+        return Err(assets_invalid(assets));
     }
 
-    let final_dir = assets_dir(data_dir);
+    let final_dir = assets_dir(data_dir, assets);
     if final_dir.exists() {
-        fs::remove_dir_all(&final_dir).map_err(|e| assets_save_failed(&e))?;
+        fs::remove_dir_all(&final_dir).map_err(|e| assets_save_failed(assets, &e))?;
     }
-    fs::rename(extract_dir.path(), &final_dir).map_err(|e| assets_save_failed(&e))?;
+    fs::rename(extract_dir.path(), &final_dir).map_err(|e| assets_save_failed(assets, &e))?;
     // Already moved to its final place: disarm the temp dir's own cleanup.
     let _ = extract_dir.keep();
     Ok(final_dir)
 }
 
 /// The path under the extraction directory for a zip entry named `name`, or `None` when it is
-/// outside `PPSSPP/` or would escape the extraction directory (a `..` component or an absolute
+/// outside `folder/` or would escape the extraction directory (a `..` component or an absolute
 /// path).
-fn safe_asset_path(name: &str) -> Option<PathBuf> {
-    let rel = name.strip_prefix("PPSSPP/")?;
+fn safe_asset_path(folder: &str, name: &str) -> Option<PathBuf> {
+    let rel = name.strip_prefix(folder)?.strip_prefix('/')?;
     if rel.is_empty() {
         return None;
     }
@@ -706,24 +841,30 @@ fn safe_asset_path(name: &str) -> Option<PathBuf> {
     (!out.as_os_str().is_empty()).then_some(out)
 }
 
-fn assets_connect_failed() -> String {
-    "Couldn't download the PPSSPP assets. Check your internet connection.".to_owned()
+fn assets_connect_failed(assets: &CoreAssets) -> String {
+    format!(
+        "Couldn't download the {}. Check your internet connection.",
+        assets.name
+    )
 }
 
-fn assets_bad_status(status: u16) -> String {
-    format!("The libretro build server couldn't provide the PPSSPP assets (HTTP {status}).")
+fn assets_bad_status(assets: &CoreAssets, status: u16) -> String {
+    format!(
+        "The libretro build server couldn't provide the {} (HTTP {status}).",
+        assets.name
+    )
 }
 
-fn assets_incomplete() -> String {
-    "The PPSSPP assets download was incomplete.".to_owned()
+fn assets_incomplete(assets: &CoreAssets) -> String {
+    format!("The {} download was incomplete.", assets.name)
 }
 
-fn assets_invalid() -> String {
-    "The downloaded PPSSPP assets aren't valid.".to_owned()
+fn assets_invalid(assets: &CoreAssets) -> String {
+    format!("The downloaded {} aren't valid.", assets.name)
 }
 
-fn assets_save_failed(error: &io::Error) -> String {
-    format!("Couldn't save the PPSSPP assets: {error}.")
+fn assets_save_failed(assets: &CoreAssets, error: &io::Error) -> String {
+    format!("Couldn't save the {}: {error}.", assets.name)
 }
 
 fn connect_failed(core: &CoreInfo) -> String {
@@ -839,25 +980,38 @@ pub(crate) mod testing {
         buf
     }
 
-    /// An [`AssetsDownload`]-style `Download` (PPSSPP's assets) that completes with `bytes` as
-    /// the fetched zip's body.
+    /// A `Download` of PPSSPP's assets that completes with `bytes` as the fetched zip's body.
     pub fn spawn_assets(data_dir: PathBuf, bytes: Vec<u8>, total: Option<u64>) -> Download {
+        spawn_assets_of(&PPSSPP_ASSETS, data_dir, bytes, total)
+    }
+
+    /// [`spawn_assets`] for any Core's `assets`.
+    pub fn spawn_assets_of(
+        assets: &'static CoreAssets,
+        data_dir: PathBuf,
+        bytes: Vec<u8>,
+        total: Option<u64>,
+    ) -> Download {
         let fetch: Fetcher = Arc::new(move |_url: &str| {
             Ok((
                 Box::new(Cursor::new(bytes.clone())) as Box<dyn Read + Send>,
                 total,
             ))
         });
-        Download::spawn_assets(data_dir, fetch)
+        Download::spawn_assets(assets, data_dir, fetch)
     }
 
-    /// An assets `Download` that fails to connect as soon as it is polled.
+    /// A `Download` of PPSSPP's assets that fails to connect as soon as it is polled.
     pub fn spawn_assets_failing(data_dir: PathBuf) -> Download {
-        Download::spawn_assets(data_dir, Arc::new(|_url: &str| Err(FetchError::Connect)))
+        Download::spawn_assets(
+            &PPSSPP_ASSETS,
+            data_dir,
+            Arc::new(|_url: &str| Err(FetchError::Connect)),
+        )
     }
 
     /// A zip holding exactly `entries` (`(name, content)`), for assets tests to add entries
-    /// outside `PPSSPP/` or that try to escape it.
+    /// outside the top folder or that try to escape it.
     pub fn assets_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
         let mut buf = Vec::new();
         let mut writer = zip::ZipWriter::new(Cursor::new(&mut buf));
@@ -1119,16 +1273,18 @@ mod tests {
             BEETLE_PSX_HW.options,
             &[("beetle_psx_hw_renderer", "hardware_gl")]
         );
+        assert_eq!(BEETLE_PSX_HW.bios, Some(&PS1_BIOS));
+        assert_eq!(PS1_BIOS.folder, "", "directly in bios/");
         assert_eq!(
-            BEETLE_PSX_HW.required_bios,
-            &[
+            PS1_BIOS.files,
+            BiosFiles::Named(&[
                 "scph5500.bin",
                 "scph5501.bin",
                 "scph5502.bin",
                 "scph5503.bin",
                 "scph7003.bin",
                 "scph5552.bin",
-            ]
+            ])
         );
     }
 
@@ -1147,14 +1303,11 @@ mod tests {
                 ("melonds_jit_enable", "disabled"),
             ]
         );
-        assert!(
-            MELONDS_DS.required_bios.is_empty(),
-            "DS's BIOS is optional (FreeBIOS)"
-        );
+        assert!(MELONDS_DS.bios.is_none(), "DS's BIOS is optional (FreeBIOS)");
     }
 
     #[test]
-    fn only_ppsspp_uses_the_data_dirs_system_directory() {
+    fn only_ppsspp_has_assets_and_uses_the_data_dirs_system_directory() {
         for core in [
             &MESEN,
             &BSNES,
@@ -1164,9 +1317,13 @@ mod tests {
             &BEETLE_PSX_HW,
             &MELONDS_DS,
         ] {
-            assert!(!core.system_in_data_dir, "{}", core.name);
+            assert!(core.assets.is_none(), "{}", core.name);
         }
-        assert!(PPSSPP.system_in_data_dir);
+        assert_eq!(PPSSPP.assets, Some(&PPSSPP_ASSETS));
+        assert_eq!(
+            PPSSPP_ASSETS.url,
+            "https://buildbot.libretro.com/assets/system/PPSSPP.zip"
+        );
     }
 
     #[test]
@@ -1230,6 +1387,51 @@ mod tests {
         assert_eq!(found_bios(root, &BEETLE_PSX_HW).as_deref(), Some("scph5501.bin"));
     }
 
+    /// A sparse file of `len` bytes at `path`, so a multi-MB BIOS stand-in costs no disk.
+    fn file_of(path: &Path, len: u64) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::File::create(path).unwrap().set_len(len).unwrap();
+    }
+
+    const MIB: u64 = 1024 * 1024;
+
+    #[test]
+    fn the_ps2_bios_is_any_file_of_4_to_8_mib_in_bios_pcsx2_bios() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        assert_eq!(PS2_BIOS.dir(root), root.join("bios/pcsx2/bios"));
+        assert_eq!(PS2_BIOS.found(root), None, "no folder");
+
+        file_of(&root.join("bios/ps2-bios.bin"), 4 * MIB);
+        assert_eq!(PS2_BIOS.found(root), None, "not in its sub-folder");
+        file_of(&root.join("bios/pcsx2/bios/small.bin"), 4 * MIB - 1);
+        file_of(&root.join("bios/pcsx2/bios/large.bin"), 8 * MIB + 1);
+        fs::create_dir_all(root.join("bios/pcsx2/bios/folder.bin")).unwrap();
+        assert_eq!(PS2_BIOS.found(root), None, "too small, too large, a folder");
+
+        file_of(&root.join("bios/pcsx2/bios/My Dump.BIN"), 4 * MIB);
+        assert_eq!(PS2_BIOS.found(root).as_deref(), Some("My Dump.BIN"), "any name");
+        file_of(&root.join("bios/pcsx2/bios/b.rom"), 8 * MIB);
+        assert_eq!(
+            PS2_BIOS.found(root).as_deref(),
+            Some("My Dump.BIN"),
+            "with several, the first by name"
+        );
+        fs::remove_file(root.join("bios/pcsx2/bios/My Dump.BIN")).unwrap();
+        assert_eq!(
+            PS2_BIOS.found(root).as_deref(),
+            Some("b.rom"),
+            "8 MiB is in range"
+        );
+    }
+
+    #[test]
+    fn the_ps1_bios_folder_is_bios_itself() {
+        let root = Path::new("/Games");
+        assert_eq!(PS1_BIOS.dir(root), root.join("bios"));
+        assert_eq!(PS1_BIOS.dir(root).as_os_str(), "/Games/bios", "no trailing slash");
+    }
+
     #[test]
     fn ppsspp_is_installed_only_once_its_library_and_its_assets_are_both_there() {
         let dir = tempfile::tempdir().unwrap();
@@ -1239,7 +1441,7 @@ mod tests {
         touch(&installed_path(&data_dir, &PPSSPP));
         assert!(!is_installed(&data_dir, &PPSSPP), "library only");
 
-        fs::create_dir_all(assets_dir(&data_dir)).unwrap();
+        fs::create_dir_all(assets_dir(&data_dir, &PPSSPP_ASSETS)).unwrap();
         assert!(is_installed(&data_dir, &PPSSPP));
     }
 
@@ -1283,7 +1485,7 @@ mod tests {
             DownloadState::Running { .. } => None,
         });
 
-        assert_eq!(path, assets_dir(&data_dir));
+        assert_eq!(path, assets_dir(&data_dir, &PPSSPP_ASSETS));
         assert_eq!(fs::read(path.join("flash0/font/a.pgf")).unwrap(), b"font data");
         assert_eq!(fs::read(path.join("README.txt")).unwrap(), b"readme");
         assert!(!path.join("other.txt").exists());
@@ -1325,7 +1527,7 @@ mod tests {
         });
 
         assert_eq!(message, "The downloaded PPSSPP assets aren't valid.");
-        assert!(!assets_dir(&data_dir).exists());
+        assert!(!assets_dir(&data_dir, &PPSSPP_ASSETS).exists());
     }
 
     #[test]
@@ -1344,11 +1546,103 @@ mod tests {
             message,
             "Couldn't download the PPSSPP assets. Check your internet connection."
         );
-        assert!(!assets_dir(&data_dir).exists());
+        assert!(!assets_dir(&data_dir, &PPSSPP_ASSETS).exists());
         let leftover = fs::read_dir(data_dir.join("system"))
             .map(|entries| entries.count())
             .unwrap_or(0);
         assert_eq!(leftover, 0, "no temp files left in system/");
+    }
+
+    fn wait_for_assets_result(download: &mut Download) -> Result<PathBuf, String> {
+        wait_for_assets(|| match download.poll() {
+            DownloadState::Done(path) => Some(Ok(path)),
+            DownloadState::Failed(m) => Some(Err(m)),
+            DownloadState::Running { .. } => None,
+        })
+    }
+
+    #[test]
+    fn dolphins_system_files_unpack_to_their_own_folder_and_nothing_escapes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().join("data");
+        let zip = testing::assets_zip(&[
+            ("dolphin-emu/license.txt", b"license"),
+            ("dolphin-emu/Sys/GC/font.bin", b"font"),
+            ("dolphin-emu/../evil.txt", b"escape attempt"),
+            ("dolphin-emu//abs.txt", b"absolute"),
+            (
+                "dolphin-emu-extra/near.txt",
+                b"a folder that only starts the same",
+            ),
+            ("PPSSPP/other.txt", b"another Core's assets"),
+        ]);
+        let mut download = testing::spawn_assets_of(&DOLPHIN_ASSETS, data_dir.clone(), zip, None);
+
+        let path = wait_for_assets_result(&mut download).unwrap();
+
+        assert_eq!(path, data_dir.join("system/dolphin-emu"));
+        assert_eq!(fs::read(path.join("license.txt")).unwrap(), b"license");
+        assert_eq!(fs::read(path.join("Sys/GC/font.bin")).unwrap(), b"font");
+        assert!(assets_marker(&data_dir, &DOLPHIN_ASSETS).is_dir());
+        let mut system: Vec<_> = fs::read_dir(data_dir.join("system"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        system.sort();
+        assert_eq!(system, ["dolphin-emu"], "nothing else in system/, no temp files");
+        let mut unpacked: Vec<_> = fs::read_dir(&path)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        unpacked.sort();
+        assert_eq!(unpacked, ["Sys", "license.txt"]);
+        assert!(!dir.path().join("evil.txt").exists() && !data_dir.join("evil.txt").exists());
+        assert!(!Path::new("/abs.txt").exists());
+    }
+
+    #[test]
+    fn assets_without_their_marker_folder_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().to_owned();
+        let zip = testing::assets_zip(&[("dolphin-emu/license.txt", b"but no Sys")]);
+        let mut download = testing::spawn_assets_of(&DOLPHIN_ASSETS, data_dir.clone(), zip, None);
+
+        let message = wait_for_assets_result(&mut download).unwrap_err();
+
+        assert_eq!(message, "The downloaded Dolphin system files aren't valid.");
+        assert!(!assets_dir(&data_dir, &DOLPHIN_ASSETS).exists());
+        assert_eq!(fs::read_dir(data_dir.join("system")).unwrap().count(), 0);
+    }
+
+    /// A Core with both new kinds of requirement, as LRPS2's BIOS and Dolphin's system files.
+    static NEEDS_BOTH: CoreInfo = CoreInfo {
+        name: "Test",
+        file: "test_libretro.so",
+        options: &[],
+        bios: Some(&PS2_BIOS),
+        assets: Some(&DOLPHIN_ASSETS),
+    };
+
+    #[test]
+    fn a_core_with_a_folder_bios_and_marked_assets_checks_both() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().join("data");
+        let root = dir.path().join("Games");
+        assert_eq!(system_dir(&NEEDS_BOTH, &data_dir, &root), data_dir.join("system"));
+
+        touch(&installed_path(&data_dir, &NEEDS_BOTH));
+        fs::create_dir_all(assets_dir(&data_dir, &DOLPHIN_ASSETS)).unwrap();
+        assert!(
+            !is_installed(&data_dir, &NEEDS_BOTH),
+            "the folder without its Sys"
+        );
+        fs::create_dir_all(data_dir.join("system/dolphin-emu/Sys")).unwrap();
+        assert!(is_installed(&data_dir, &NEEDS_BOTH));
+
+        assert!(!has_required_bios(&root, &NEEDS_BOTH));
+        file_of(&root.join("bios/pcsx2/bios/scph39001.bin"), 4 * MIB);
+        assert!(has_required_bios(&root, &NEEDS_BOTH));
+        assert_eq!(found_bios(&root, &NEEDS_BOTH).as_deref(), Some("scph39001.bin"));
     }
 
     #[test]
