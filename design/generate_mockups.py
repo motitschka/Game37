@@ -363,7 +363,7 @@ def console_card(sv, cx, cy, size, sysid, opacity=1.0):
 WARN = "#FFB020"
 # The Standalone Emulator of each External System; every other System is Embedded.
 EMULATORS = {"gc": "Dolphin", "wii": "Dolphin", "3ds": "Azahar", "wiiu": "Cemu", "switch": "Ryubing",
-             "ps2": "PCSX2", "ps3": "RPCS3", "ps4": "shadPS4"}
+             "ps3": "RPCS3", "ps4": "shadPS4"}
 
 
 def screen_carousel(focus="3ds", missing={"wiiu": "Cemu"}, games=12):
@@ -1054,6 +1054,11 @@ def screen_settings_library():
     sv.save()
 
 
+# What Settings → BIOS asks for where a System's Core needs a BIOS and none is there.
+BIOS_MISSING = {"ps1": "Missing: put scph5500.bin, scph5501.bin or scph5502.bin in ~/Games/bios/",
+                "ps2": "Missing: put your own BIOS dump, any file name, in ~/Games/bios/pcsx2/bios/"}
+
+
 def screen_settings_bios():
     sv = Svg("18-settings-bios", "Settings: BIOS")
     settings_page(sv, "BIOS")
@@ -1069,11 +1074,10 @@ def screen_settings_bios():
             sv.add(rect(RX + 16, y, RW - 32, 1, C["line"]))
         base = y + pitch / 2 + 7
         sv.add(text(RX + 32, base, name, 19, 700 if focused else 500))
-        if sysid == "ps1":
+        if sysid in BIOS_MISSING:
             sv.add(circle(status_x + 11, base - 6, 11, WARN),
                    text(status_x + 11, base - 1, "!", 15, 800, fill=C["bg"], anchor="middle"),
-                   text(status_x + 32, base, "Missing: put scph5500.bin, scph5501.bin or scph5502.bin in "
-                                          "~/Games/bios/", 18, 500, fill=WARN))
+                   text(status_x + 32, base, BIOS_MISSING[sysid], 18, 500, fill=WARN))
         elif sysid in EMULATORS:
             sv.add(text(status_x, base, f"Handled by {EMULATORS[sysid]}", 18, 500, fill=C["muted"]))
         else:
@@ -1086,7 +1090,7 @@ def screen_settings_bios():
 CORES = [("Mesen", ["nes"], "Installed"), ("SameBoy", ["gb", "gbc"], "Installed"), ("bsnes", ["snes"], "Installed"),
          ("Mupen64Plus-Next", ["n64"], 45), ("mGBA", ["gba"], "Installed"),
          ("melonDS DS", ["nds"], "Not downloaded"), ("Beetle PSX HW", ["ps1"], "Failed"),
-         ("PPSSPP", ["psp"], "Not downloaded")]
+         ("LRPS2", ["ps2"], "Not downloaded"), ("PPSSPP", ["psp"], "Not downloaded")]
 
 
 def screen_settings_cores():
@@ -1374,7 +1378,7 @@ SETUP_STEPS = 5
 SETUP_W = 1200  # width of the lists and boxes below the title, left-aligned at M
 # The Standalone Emulator each External System needs; every other System is Embedded.
 EXTERNAL = {"gc": "Dolphin", "wii": "Dolphin", "3ds": "Azahar", "wiiu": "Cemu", "switch": "Ryubing",
-            "ps2": "PCSX2", "ps3": "RPCS3", "ps4": "shadPS4"}
+            "ps3": "RPCS3", "ps4": "shadPS4"}
 SETUP_TICKED = ["nes", "snes", "gba", "gc", "switch", "ps1", "ps2", "psp"]  # in System Order
 
 
@@ -1483,7 +1487,7 @@ def screen_setup_emulators():
     sv = Svg("27-setup-emulators", "First-run Setup: emulators")
     setup_frame(sv, 2, "Install the emulators", "These Systems run in their own emulator, installed with Flatpak.")
     rows = [("gc", "org.DolphinEmu.dolphin-emu", True), ("switch", "io.github.ryubing.Ryujinx", False),
-            ("ps2", "net.pcsx2.PCSX2", False)]
+            ("ps3", "net.rpcs3.RPCS3", False)]
     for i, (sysid, app_id, installed) in enumerate(rows):
         x, y = M, 296 + i * 112
         sv.add(rect(x, y, SETUP_W, 96, C["surface"], rx=14, stroke=C["line"], sw=1))
@@ -1545,33 +1549,48 @@ def screen_setup_cores():
     setup_frame(sv, 4, "Download the Cores",
                 "Embedded Systems play inside Game37 with a libretro Core from the libretro buildbot.")
     rows = [("nes", "Mesen", "installed"), ("snes", "bsnes", "downloaded"), ("gba", "mGBA", 0.45),
-            ("ps1", "Beetle PSX HW", "waiting"), ("psp", "PPSSPP  ·  plus PPSSPP's assets", "waiting")]
+            ("ps1", "Beetle PSX HW", "waiting"), ("ps2", "LRPS2", "waiting"),
+            ("psp", "PPSSPP  ·  plus PPSSPP's assets", "waiting")]
+    # Up to five rows in one column; more go into two, the bar under the state.
+    one = len(rows) <= 5
+    per_col = len(rows) if one else -(-len(rows) // 2)
+    w = SETUP_W if one else (SETUP_W - 24) / 2
     for i, (sysid, core, state) in enumerate(rows):
-        x, y = M, 296 + i * 96
-        sv.add(rect(x, y, SETUP_W, 84, C["surface"], rx=14, stroke=C["line"], sw=1))
+        col, row = divmod(i, per_col)
+        x, y = M + col * (w + 24), 296 + row * 96
+        sv.add(rect(x, y, w, 84, C["surface"], rx=14, stroke=C["line"], sw=1))
         system_chip(sv, x + 22, y + 20, 44, sysid)
         sv.add(text(x + 90, y + 38, SYS[sysid][1], 22, 700), text(x + 90, y + 64, core, 17, 500, fill=C["muted"]))
-        bx, bw, r = x + 520, 440, x + SETUP_W - 28
-        if state != "installed":
-            sv.add(rect(bx, y + 37, bw, 10, C["surface2"], rx=5))
-        if state == "installed":
-            sv.add(text(r, y + 49, "Installed", 19, 600, fill=C["muted"], anchor="end"),
-                   check_path(r - tw("Installed", 19, 600) * 1.1 - 30, y + 35, C["muted"]))
-        elif state == "downloaded":
-            sv.add(rect(bx, y + 37, bw, 10, C["ahead"], rx=5),
-                   text(r, y + 49, "Downloaded", 19, 600, fill=C["ahead"], anchor="end"),
-                   check_path(r - tw("Downloaded", 19, 600) * 1.1 - 30, y + 35, C["ahead"]))
-        elif state == "waiting":
-            sv.add(text(r, y + 49, "Waiting", 19, 600, fill=C["dim"], anchor="end"))
+        r = x + w - 28
+        if one:
+            bx, by, bw, ty = x + 520, y + 37, 440, y + 49
         else:
-            sv.add(rect(bx, y + 37, bw * state, 10, C["accent"], rx=5),
-                   text(r, y + 49, f"{round(state * 100)}%", 19, 700, anchor="end"))
-    ny = 796
-    sv.add(rect(M, ny, SETUP_W, 64, WARN, rx=14, opacity=0.1),
-           rect(M, ny, SETUP_W, 64, "none", rx=14, stroke=WARN, sw=2, opacity=0.55),
-           circle(M + 34, ny + 32, 15, WARN), text(M + 34, ny + 39, "!", 19, 800, fill=C["bg"], anchor="middle"),
-           text(M + 64, ny + 39, "PlayStation needs a BIOS file: put scph5500.bin, scph5501.bin or scph5502.bin "
-                                 "in ~/Games/bios/.", 19, 500, fill=WARN))
+            bx, by, ty = x + 350, y + 54, y + 38
+            bw = r - bx
+        if state != "installed":
+            sv.add(rect(bx, by, bw, 10, C["surface2"], rx=5))
+        if state == "installed":
+            sv.add(text(r, ty, "Installed", 19, 600, fill=C["muted"], anchor="end"),
+                   check_path(r - tw("Installed", 19, 600) * 1.1 - 30, ty - 14, C["muted"]))
+        elif state == "downloaded":
+            sv.add(rect(bx, by, bw, 10, C["ahead"], rx=5),
+                   text(r, ty, "Downloaded", 19, 600, fill=C["ahead"], anchor="end"),
+                   check_path(r - tw("Downloaded", 19, 600) * 1.1 - 30, ty - 14, C["ahead"]))
+        elif state == "waiting":
+            sv.add(text(r, ty, "Waiting", 19, 600, fill=C["dim"], anchor="end"))
+        else:
+            sv.add(rect(bx, by, bw * state, 10, C["accent"], rx=5),
+                   text(r, ty, f"{round(state * 100)}%", 19, 700, anchor="end"))
+    # One line for each ticked System whose Core needs a BIOS, in System Order.
+    notes = ["PlayStation needs a BIOS file: put scph5500.bin, scph5501.bin or scph5502.bin in ~/Games/bios/.",
+             "PlayStation 2 needs a BIOS file: put your own BIOS dump, any file name, in "
+             "~/Games/bios/pcsx2/bios/."]
+    ny, nh = 296 + per_col * 96 + 20, 64 + 34 * (len(notes) - 1)
+    sv.add(rect(M, ny, SETUP_W, nh, WARN, rx=14, opacity=0.1),
+           rect(M, ny, SETUP_W, nh, "none", rx=14, stroke=WARN, sw=2, opacity=0.55),
+           circle(M + 34, ny + 32, 15, WARN), text(M + 34, ny + 39, "!", 19, 800, fill=C["bg"], anchor="middle"))
+    for k, note in enumerate(notes):
+        sv.add(text(M + 64, ny + 39 + 34 * k, note, 19, 500, fill=WARN))
     setup_buttons(sv, [("Back", "normal"), ("Continue", "disabled")])
     hintbar(sv, [(["B"], "Back")])
     sv.save()
