@@ -601,7 +601,7 @@ mod tests {
 
     #[test]
     fn play_on_the_details_page_launches_an_external_game_whose_emulator_is_installed() {
-        let (_dir, mut ctx, game) = world("gc", "gc/Zelda.iso");
+        let (_dir, mut ctx, game) = world("wiiu", "wiiu/Zelda.wua");
         let mut page = DetailsPage::new(game.clone(), &ctx);
         let play = (PLAY.x + 10.0, PLAY.y + 10.0);
         page.handle(Input::Pointer(Pointer::Click { x: play.0, y: play.1 }), &mut ctx);
@@ -617,7 +617,7 @@ mod tests {
 
     #[test]
     fn options_y_confirm_on_options_or_a_right_click_on_the_details_page_opens_its_options_menu() {
-        let (_dir, mut ctx, game) = world("gc", "gc/Zelda.iso");
+        let (_dir, mut ctx, game) = world("wiiu", "wiiu/Zelda.wua");
         let mut page = DetailsPage::new(game, &ctx);
         let opens = |t: Transition| matches!(t, Transition::Push(m) if m.is_modal() && m.title() == "Zelda");
         assert!(opens(act(&mut page, &mut ctx, Action::Options)), "Y");
@@ -645,7 +645,7 @@ mod tests {
 
     #[test]
     fn hiding_the_game_from_the_details_pages_options_menu_pops_the_page_too() {
-        let (_dir, mut ctx, game) = world("gc", "gc/Zelda.iso");
+        let (_dir, mut ctx, game) = world("wiiu", "wiiu/Zelda.wua");
         let mut page = DetailsPage::new(game.clone(), &ctx);
         let Transition::Push(mut menu) = act(&mut page, &mut ctx, Action::Options) else {
             panic!("Y should open the Options Menu");
@@ -664,16 +664,16 @@ mod tests {
 
     #[test]
     fn the_details_page_leaves_once_its_game_is_hidden_or_gone_from_its_folder() {
-        let (_dir, mut ctx, game) = world("gc", "gc/Zelda.iso");
+        let (_dir, mut ctx, game) = world("wiiu", "wiiu/Zelda.wua");
         let mut page = DetailsPage::new(game.clone(), &ctx);
         assert!(matches!(page.tick(&mut ctx), Transition::None));
         ctx.library.set_hidden(game.id, true).unwrap();
         ctx.revision += 1;
         assert!(matches!(page.tick(&mut ctx), Transition::Pop), "hidden");
 
-        let (_dir, mut ctx, game) = world("gc", "gc/Zelda.iso");
+        let (_dir, mut ctx, game) = world("wiiu", "wiiu/Zelda.wua");
         let mut page = DetailsPage::new(game, &ctx);
-        ctx.library.sync_system("gc", &[], 1).unwrap();
+        ctx.library.sync_system("wiiu", &[], 1).unwrap();
         ctx.revision += 1;
         assert!(
             matches!(act(&mut page, &mut ctx, Action::Right), Transition::Pop),
@@ -715,7 +715,7 @@ mod tests {
 
     #[test]
     fn details_playtime_and_last_played_refresh_when_the_library_changes_after_a_play() {
-        let (_dir, mut ctx, game) = world("gc", "gc/Zelda.iso");
+        let (_dir, mut ctx, game) = world("wiiu", "wiiu/Zelda.wua");
         let mut page = DetailsPage::new(game.clone(), &ctx);
         assert_eq!(stat(&page, "PLAYTIME").as_deref(), Some("—"));
         assert_eq!(stat(&page, "LAST PLAYED").as_deref(), Some("Never"));
@@ -740,7 +740,7 @@ mod tests {
         assert_eq!(keys, ["PLAYTIME", "LAST PLAYED", "SAVE STATES", "ADDED", "SIZE"]);
         assert_eq!(stat(&page, "SAVE STATES").as_deref(), Some("2 of 3"));
 
-        let (_dir, ctx, game) = world("gc", "gc/Zelda.iso");
+        let (_dir, ctx, game) = world("wiiu", "wiiu/Zelda.wua");
         let page = DetailsPage::new(game, &ctx);
         let keys: Vec<_> = page.stats().into_iter().map(|(k, _)| k).collect();
         assert_eq!(keys, ["PLAYTIME", "LAST PLAYED", "ADDED", "SIZE"]);
@@ -778,7 +778,7 @@ mod tests {
 
     #[test]
     fn details_input_never_waits_for_the_size_which_shows_once_measured() {
-        let (_dir, mut ctx, game) = world("gc", "gc/Zelda.iso");
+        let (_dir, mut ctx, game) = world("wiiu", "wiiu/Zelda.wua");
         // A measurement that hasn't finished: its sender is still held.
         let (tx, rx) = mpsc::channel();
         let mut page = DetailsPage::with_size(game, &ctx, rx);
@@ -803,7 +803,7 @@ mod tests {
 
     #[test]
     fn a_size_that_cant_be_measured_shows_a_dash() {
-        let (_dir, mut ctx, game) = world("gc", "gc/Zelda.iso");
+        let (_dir, mut ctx, game) = world("wiiu", "wiiu/Zelda.wua");
         let (tx, rx) = mpsc::channel();
         let mut page = DetailsPage::with_size(game, &ctx, rx);
         drop(tx);
@@ -868,7 +868,11 @@ mod tests {
     #[test]
     fn opens_in_names_the_standalone_emulator_or_the_core() {
         let by_id = |id| systems::by_id(id).unwrap();
-        assert_eq!(opens_in(by_id("gc")).as_deref(), Some("Opens in Dolphin"));
+        assert_eq!(opens_in(by_id("wiiu")).as_deref(), Some("Opens in Cemu"));
+        assert_eq!(
+            opens_in(by_id("gc")).as_deref(),
+            Some("Opens in Game37 · Dolphin core")
+        );
         assert_eq!(
             opens_in(by_id("snes")).as_deref(),
             Some("Opens in Game37 · bsnes core")

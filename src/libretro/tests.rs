@@ -8,7 +8,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use tempfile::TempDir;
 
-use super::{Core, CoreDirs, CoreError, Frame, InputState, PixelFormat};
+use super::{Core, CoreDirs, CoreError, CoreSetup, Frame, InputState, PixelFormat};
 use crate::systems;
 
 const TESTDATA: &str = "/home/matei/Game37/.testdata";
@@ -86,7 +86,7 @@ fn load(case: &Case, dirs: &TempDir) -> Result<Core, CoreError> {
         system: dirs.path().join("system"),
         save: dirs.path().join("saves"),
     };
-    Core::load(&core, &game, dirs, &[], None)
+    Core::load(&core, &game, dirs, CoreSetup::default(), None)
 }
 
 fn run(core: &mut Core, frames: usize) -> (Frame, usize) {
@@ -229,7 +229,10 @@ fn ds_touch_reaches_melonds_ds_and_r3_swaps_the_screens() {
             system: dirs.path().join("system"),
             save: dirs.path().join("saves"),
         },
-        &options,
+        CoreSetup {
+            options: &options,
+            ..Default::default()
+        },
         None,
     )
     .unwrap_or_else(|e| panic!("{e}"));
@@ -321,7 +324,10 @@ fn each_ds_layout_shows_its_screens_and_r3_swaps_them() {
                 system: dirs.path().join("system"),
                 save: dirs.path().join("saves"),
             },
-            &options,
+            CoreSetup {
+                options: &options,
+                ..Default::default()
+            },
             None,
         )
         .unwrap_or_else(|e| panic!("{layout:?}: {e}"));
@@ -428,7 +434,7 @@ fn a_core_that_cannot_load_a_game_says_why_in_the_error() {
         save: dir.path().join("saves"),
     };
     let game = dir.path().join("Game.bin");
-    match Core::load(&fake_core(dir.path()), &game, dirs, &[], None) {
+    match Core::load(&fake_core(dir.path()), &game, dirs, CoreSetup::default(), None) {
         Err(e) => {
             assert_eq!(e.core_message(), Some(FAKE_MESSAGE));
             assert!(matches!(e, CoreError::LoadGame(ref path, _) if *path == game));

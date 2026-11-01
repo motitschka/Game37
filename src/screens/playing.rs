@@ -98,13 +98,13 @@ impl Screen for Playing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emulators::{DOLPHIN, SHADPS4};
+    use crate::emulators::{CEMU, SHADPS4};
 
     #[test]
     fn says_how_to_come_back_and_to_close_emulators_that_stay_open() {
         assert_eq!(
-            text("Zelda", &DOLPHIN),
-            "Zelda is running in Dolphin. Quit it with Dolphin's own controls to come back here."
+            text("Zelda", &CEMU),
+            "Zelda is running in Cemu. Quit it with Cemu's own controls to come back here."
         );
         assert_eq!(
             text("Bloodborne", &SHADPS4),

@@ -33,6 +33,50 @@ pub use hw::{GlHost, GlRequest};
 /// Ports a Core can read input from.
 pub const MAX_PORTS: usize = 4;
 
+/// The controller a Core is told sits in a port (`retro_set_controller_port_device`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PortDevice(c_uint);
+
+impl PortDevice {
+    /// The RetroPad, which libretro.h assumes in every port.
+    pub const RETROPAD: PortDevice = PortDevice(ffi::RETRO_DEVICE_JOYPAD);
+
+    /// A controller a Core defines itself on top of the RetroPad, its `id`th
+    /// (`RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, id)`): the Core reads it as a RetroPad and maps
+    /// it to that controller.
+    pub const fn retropad_subclass(id: c_uint) -> PortDevice {
+        PortDevice(((id + 1) << ffi::RETRO_DEVICE_TYPE_SHIFT) | ffi::RETRO_DEVICE_JOYPAD)
+    }
+
+    /// The id libretro.h gives the device.
+    pub fn id(self) -> c_uint {
+        self.0
+    }
+}
+
+/// How a Core is set up for a Game: `options` are Core option values, `(key, value)`, it gets
+/// ahead of its own defaults, and `device` is the controller it is told sits in every port. With
+/// `reread_timing`, the frame rate and sample rate are read from the Core again after every frame
+/// (`retro_get_system_av_info`), for a Core whose rates follow the Game without it ever announcing
+/// a change (`SET_SYSTEM_AV_INFO`).
+#[derive(Debug, Clone, Copy)]
+pub struct CoreSetup<'a> {
+    pub options: &'a [(&'a str, &'a str)],
+    pub device: PortDevice,
+    pub reread_timing: bool,
+}
+
+impl Default for CoreSetup<'_> {
+    /// The Core's own option values, a RetroPad in every port, and the rates the Core announces.
+    fn default() -> Self {
+        CoreSetup {
+            options: &[],
+            device: PortDevice::RETROPAD,
+            reread_timing: false,
+        }
+    }
+}
+
 /// `RTLD_NOW | RTLD_LOCAL`, plus glibc's `RTLD_NODELETE`: a Core's code stays mapped after it is
 /// unloaded. Cores may leave threads behind (bsnes's OpenMP workers in libgomp) that crash the
 /// process once the code they run is unmapped. Loading the same Core again reuses the mapping, and
@@ -318,6 +362,8 @@ pub struct Core {
     /// `retro_run` has run at least once.
     ran: bool,
     duped: bool,
+    /// [`CoreSetup::reread_timing`].
+    reread_timing: bool,
     audio: Vec<i16>,
     game_path: CString,
     /// The Game's contents when the Core takes them from memory; it may read them until unload.
@@ -333,14 +379,13 @@ fn c_path(path: &Path) -> Result<CString, CoreError> {
 }
 
 impl Core {
-    /// Loads the Core at `core_path` and starts `game_path` on it. `options` are Core option
-    /// values, `(key, value)`, the Core gets ahead of its own defaults. With a `gl` host, a Core may
-    /// render with OpenGL (`SET_HW_RENDER`); without one it is refused.
+    /// Loads the Core at `core_path` and starts `game_path` on it, set up as `setup` says. With a
+    /// `gl` host, a Core may render with OpenGL (`SET_HW_RENDER`); without one it is refused.
     pub fn load(
         core_path: &Path,
         game_path: &Path,
         dirs: CoreDirs,
-        options: &[(&str, &str)],
+        setup: CoreSetup<'_>,
         gl: Option<Box<dyn GlHost>>,
     ) -> Result<Core, CoreError> {
         let claim = Claim::take().ok_or(CoreError::AlreadyLoaded)?;
@@ -358,7 +403,7 @@ impl Core {
         if version != ffi::RETRO_API_VERSION {
             return Err(CoreError::ApiVersion(core_path.to_path_buf(), version));
         }
-        Core::start(claim, api, Some(lib), game_path, dirs, options, gl)
+        Core::start(claim, api, Some(lib), game_path, dirs, setup, gl)
     }
 
     /// Starts `game_path` on the Core whose entry points are `api`, from `lib` (`None` for a fake
@@ -369,12 +414,12 @@ impl Core {
         lib: Option<Library>,
         game_path: &Path,
         dirs: CoreDirs,
-        options: &[(&str, &str)],
+        setup: CoreSetup<'_>,
         gl: Option<Box<dyn GlHost>>,
     ) -> Result<Core, CoreError> {
         let game_cpath = c_path(game_path)?;
         let mut state = State::new(c_path(&dirs.system)?, c_path(&dirs.save)?);
-        state.overrides = callbacks::option_overrides(options);
+        state.overrides = callbacks::option_overrides(setup.options);
         state.gl_host = gl;
 
         callbacks::install(state);
@@ -401,6 +446,7 @@ impl Core {
             hw: None,
             ran: false,
             duped: false,
+            reread_timing: setup.reread_timing,
             audio: Vec::new(),
             game_path: game_cpath,
             game_data: None,
@@ -444,11 +490,11 @@ impl Core {
             ));
         }
         core.game_loaded = true;
-        // A RetroPad in every port, as libretro.h assumes; some Cores (Dolphin) set up their
-        // controllers only when told so.
+        // The controller in every port, a RetroPad as libretro.h assumes unless the Core has its
+        // own; some Cores (Dolphin) set up their controllers only when told so.
         for port in 0..MAX_PORTS as c_uint {
             // SAFETY: the Core is loaded with a Game, and `port` is one it reads input from.
-            unsafe { (core.api.set_controller_port_device)(port, ffi::RETRO_DEVICE_JOYPAD) };
+            unsafe { (core.api.set_controller_port_device)(port, setup.device.id()) };
         }
 
         let mut av = RetroSystemAvInfo::default();
@@ -484,7 +530,16 @@ impl Core {
             None => run(),
         }
         self.ran = true;
+        let timing = self.reread_timing.then(|| {
+            let mut av = RetroSystemAvInfo::default();
+            // SAFETY: `av` is a valid, writable `retro_system_av_info` for the duration of the call.
+            unsafe { (self.api.get_system_av_info)(&mut av) };
+            av.timing
+        });
         callbacks::with(|s| {
+            if let Some(timing) = timing {
+                (s.av_info.fps, s.av_info.sample_rate) = (timing.fps, timing.sample_rate);
+            }
             self.duped = !s.fresh;
             if s.fresh {
                 std::mem::swap(&mut self.video, &mut s.frame);

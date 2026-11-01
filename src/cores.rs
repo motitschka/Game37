@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use tempfile::NamedTempFile;
 
-use crate::libretro::Button;
+use crate::libretro::{Button, PortDevice};
 use crate::systems::System;
 
 /// A libretro Core: its display name, the `.so` file the build server publishes, and what it
@@ -401,6 +401,37 @@ pub static AZAHAR: CoreInfo = CoreInfo {
         tap_with: Button::L3,
     }),
 };
+/// Dolphin (FR-NEW-3), for GameCube and Wii, with the values its own option list offers: its one
+/// hardware renderer, which Game37 hosts with OpenGL; twice the original resolution; shaders
+/// compiled in the background with Dolphin's ubershaders drawing meanwhile, so a new effect
+/// doesn't stutter. Its CPU thread stays on its own (dual core): Game37 takes the audio and input
+/// it sends from there. Its on-screen messages are off: Dolphin draws them into the Game's
+/// picture (at every start, for seconds, which OpenGL driver it runs on). Its frame rate is read
+/// again after every frame ([`CoreInfo::rereads_timing`]). Dolphin's system files come with it
+/// ([`DOLPHIN_ASSETS`]); its own files, such as GameCube memory cards and the Wii's NAND, go in a
+/// `User/` folder in the System's save folder. On Wii the controller is a Wii Remote with a
+/// Nunchuk ([`CoreInfo::port_device`]).
+pub static DOLPHIN: CoreInfo = CoreInfo {
+    name: "Dolphin",
+    file: "dolphin_libretro.so",
+    options: &[
+        ("dolphin_renderer", "Hardware"),
+        ("dolphin_efb_scale", "2"),
+        ("dolphin_shader_compilation_mode", "2"),
+        ("dolphin_main_cpu_thread", "enabled"),
+        ("dolphin_osd_enabled", "disabled"),
+    ],
+    bios: None,
+    assets: Some(&DOLPHIN_ASSETS),
+    saves: InGameSaves::Shared,
+    touch: None,
+};
+
+/// Dolphin's Wii Remote with a Nunchuk (`RETRO_DEVICE_WIIMOTE_NC` in its `Input.cpp`): what most
+/// Wii Games play with. The left stick is the Nunchuk's stick and the right stick points the
+/// Wii Remote at the screen; the face buttons are A, B, C and Z. Dolphin's plain RetroPad on Wii
+/// is a Wii Remote alone, whose left stick tilts it.
+pub const DOLPHIN_WII_REMOTE_AND_NUNCHUK: PortDevice = PortDevice::retropad_subclass(2);
 
 /// How a two-screen System shows its two screens (FR-DS-1, FR-NEW-2), chosen per System in
 /// Settings → Display. R3 swaps the screens in each (FR-DS-2).
@@ -577,11 +608,30 @@ impl CoreInfo {
     }
 
     /// Whether the left stick also presses the d-pad: for Systems without an analog stick. N64,
-    /// PSP, PS2 and 3DS have one, so their Cores read it as analog only.
+    /// GameCube, Wii (the Nunchuk's), PSP, PS2 and 3DS have one, so their Cores read it as analog
+    /// only.
     pub fn stick_is_dpad(&self) -> bool {
-        ![&MUPEN64PLUS_NEXT, &PPSSPP, &LRPS2, &AZAHAR]
+        ![&MUPEN64PLUS_NEXT, &PPSSPP, &LRPS2, &AZAHAR, &DOLPHIN]
             .iter()
             .any(|core| std::ptr::eq(self, *core))
+    }
+
+    /// Whether Game37 reads this Core's frame rate and sample rate again after every frame
+    /// ([`crate::libretro::CoreSetup::reread_timing`]): Dolphin's follow the Game's video mode but
+    /// are never announced, and at load they are those of the Game it ran before in the process
+    /// (a Wii Game after a 50 Hz GameCube one would run at 50 frames a second).
+    pub fn rereads_timing(&self) -> bool {
+        std::ptr::eq(self, &DOLPHIN)
+    }
+
+    /// The controller this Core is told sits in each port for `system`'s Games: a RetroPad, but on
+    /// Wii Dolphin's Wii Remote with a Nunchuk.
+    pub fn port_device(&self, system: &System) -> PortDevice {
+        if std::ptr::eq(self, &DOLPHIN) && system.id == "wii" {
+            DOLPHIN_WII_REMOTE_AND_NUNCHUK
+        } else {
+            PortDevice::RETROPAD
+        }
     }
 }
 
@@ -596,6 +646,7 @@ pub fn for_system(system: &System) -> Option<&'static CoreInfo> {
         "n64" => Some(&MUPEN64PLUS_NEXT),
         "ps1" => Some(&BEETLE_PSX_HW),
         "nds" => Some(&MELONDS_DS),
+        "gc" | "wii" => Some(&DOLPHIN),
         "3ds" => Some(&AZAHAR),
         "ps2" => Some(&LRPS2),
         "psp" => Some(&PPSSPP),
@@ -1415,14 +1466,40 @@ mod tests {
     }
 
     #[test]
-    fn only_n64_psp_ps2_and_3ds_read_the_left_stick_as_analog_only() {
+    fn only_n64_gamecube_wii_psp_ps2_and_3ds_read_the_left_stick_as_analog_only() {
         assert!(!MUPEN64PLUS_NEXT.stick_is_dpad());
+        assert!(!DOLPHIN.stick_is_dpad());
         assert!(!PPSSPP.stick_is_dpad());
         assert!(!LRPS2.stick_is_dpad());
         assert!(!AZAHAR.stick_is_dpad());
         for core in [&MESEN, &BSNES, &SAMEBOY, &MGBA, &BEETLE_PSX_HW, &MELONDS_DS] {
             assert!(core.stick_is_dpad(), "{}", core.name);
         }
+    }
+
+    /// FR-NEW-3: on Wii the controller stands in for a Wii Remote, with a Nunchuk; everywhere
+    /// else it is a RetroPad. Only Dolphin needs its timing reread.
+    #[test]
+    fn dolphin_gets_a_wii_remote_and_nunchuk_on_wii_and_its_timing_reread() {
+        for system in &crate::systems::SYSTEMS {
+            let Some(core) = for_system(system) else { continue };
+            let expected = if system.id == "wii" {
+                DOLPHIN_WII_REMOTE_AND_NUNCHUK
+            } else {
+                PortDevice::RETROPAD
+            };
+            assert_eq!(core.port_device(system), expected, "{}", system.id);
+            assert_eq!(core.rereads_timing(), core.name == "Dolphin", "{}", system.id);
+        }
+        assert_eq!(
+            DOLPHIN_WII_REMOTE_AND_NUNCHUK.id(),
+            (3 << 8) | 1,
+            "RETRO_DEVICE_WIIMOTE_NC"
+        );
+        assert!(std::ptr::eq(
+            for_system(crate::systems::by_id("gc").unwrap()).unwrap(),
+            &DOLPHIN
+        ));
     }
 
     /// A big-endian (.z64) N64 Game file header with `country` at 0x3E.

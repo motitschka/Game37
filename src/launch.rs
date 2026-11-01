@@ -404,7 +404,7 @@ pub fn record(ctx: &mut Ctx, game_id: i64, ended_at: i64, elapsed: Duration) {
 mod tests {
     use super::*;
     use crate::ctx::Start;
-    use crate::emulators::{CEMU, DOLPHIN, RPCS3, RYUBING, SHADPS4};
+    use crate::emulators::{CEMU, RPCS3, RYUBING, SHADPS4};
     use crate::library::FoundGame;
     use crate::library::db::SortOrder;
     use crate::screens::{Home, Stub};
@@ -429,11 +429,7 @@ mod tests {
     #[test]
     fn each_emulator_gets_its_fullscreen_command() {
         let g = "/home/ann/Games/x/My Game.iso";
-        let cases: [(&Emulator, &[&str]); 5] = [
-            (
-                &DOLPHIN,
-                &["-b", "-C", "Dolphin.Display.Fullscreen=True", "-e", g],
-            ),
+        let cases: [(&Emulator, &[&str]); 4] = [
             (&CEMU, &["-f", "-g", g]),
             (&RYUBING, &[g, "--fullscreen"]),
             (&RPCS3, &["--no-gui", "--fullscreen", g]),
@@ -512,10 +508,10 @@ mod tests {
             game_file(&RPCS3, &dir.path().join("Game"), None),
             Err("Its folder has no PS3_GAME/USRDIR/EBOOT.BIN or USRDIR/EBOOT.BIN.".to_owned())
         );
-        let gone = dir.path().join("gone.iso");
+        let gone = dir.path().join("gone.nsp");
         assert_eq!(
-            game_file(&DOLPHIN, &gone, Some(dir.path())),
-            Err("~/gone.iso isn't there any more.".to_owned())
+            game_file(&RYUBING, &gone, Some(dir.path())),
+            Err("~/gone.nsp isn't there any more.".to_owned())
         );
     }
 
@@ -550,14 +546,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ctx = Ctx::empty();
         ctx.games_root = dir.path().join("Games");
-        touch(&ctx.games_root.join("gc/Zelda.iso"));
+        touch(&ctx.games_root.join("wiiu/Zelda.wua"));
         let found = FoundGame {
-            system: "gc",
-            rel_path: "gc/Zelda.iso".into(),
+            system: "wiiu",
+            rel_path: "wiiu/Zelda.wua".into(),
             title: "Zelda".into(),
         };
-        ctx.library.sync_system("gc", &[found], 0).unwrap();
-        let game = ctx.library.system_games("gc", SortOrder::AZ).unwrap().remove(0);
+        ctx.library.sync_system("wiiu", &[found], 0).unwrap();
+        let game = ctx.library.system_games("wiiu", SortOrder::AZ).unwrap().remove(0);
         let nav = Nav::with_tabs(vec![
             ("Home", Box::new(Home::new())),
             ("Consoles", Box::new(Stub::new("Consoles"))),
@@ -592,7 +588,7 @@ mod tests {
         fn row(&self) -> GameRow {
             self.ctx
                 .library
-                .system_games("gc", SortOrder::AZ)
+                .system_games("wiiu", SortOrder::AZ)
                 .unwrap()
                 .remove(0)
         }
@@ -617,7 +613,7 @@ mod tests {
     }
 
     fn kill_on_drop(w: &World) -> KillOnDrop {
-        KillOnDrop(w._dir.path().join("data/logs/org.DolphinEmu.dolphin-emu.log"))
+        KillOnDrop(w._dir.path().join("data/logs/info.cemu.Cemu.log"))
     }
 
     #[test]
@@ -639,11 +635,11 @@ mod tests {
         let mut w = world("echo oops >&2; exit 3");
         assert!(w.start());
         let text = w.wait().unwrap_err();
-        let log = w._dir.path().join("data/logs/org.DolphinEmu.dolphin-emu.log");
+        let log = w._dir.path().join("data/logs/info.cemu.Cemu.log");
         assert_eq!(
             text,
             format!(
-                "Dolphin couldn't start Zelda.\nIt stopped with exit code 3.\nDetails are in {}",
+                "Cemu couldn't start Zelda.\nIt stopped with exit code 3.\nDetails are in {}",
                 log.display()
             )
         );
@@ -682,7 +678,7 @@ mod tests {
     #[test]
     fn a_missing_game_file_does_not_launch() {
         let mut w = world("exit 0");
-        fs::remove_file(w.ctx.games_root.join("gc/Zelda.iso")).unwrap();
+        fs::remove_file(w.ctx.games_root.join("wiiu/Zelda.wua")).unwrap();
         assert!(!w.start());
         assert!(!w.launcher.is_running());
         assert_eq!(w.nav.top().title(), "Couldn't start the game");

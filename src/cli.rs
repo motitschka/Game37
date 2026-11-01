@@ -370,9 +370,9 @@ mod tests {
             Some(&emulators::RPCS3)
         );
         assert_eq!(
-            emulators.missing(systems::by_id("gc").unwrap()),
+            emulators.missing(systems::by_id("switch").unwrap()),
             None,
-            "Dolphin isn't named"
+            "Switch isn't named"
         );
     }
 
@@ -403,5 +403,9 @@ mod tests {
         assert!(err.contains("Embedded"), "PS2 plays in Game37: {err}");
         let err = parse(shot_args("--screenshot o.bmp --missing-emulators 3ds")).unwrap_err();
         assert!(err.contains("Embedded"), "3DS plays in Game37: {err}");
+        for id in ["gc", "wii"] {
+            let err = parse(shot_args(&format!("--screenshot o.bmp --missing-emulators {id}"))).unwrap_err();
+            assert!(err.contains("Embedded"), "{id} plays in Game37: {err}");
+        }
     }
 }
