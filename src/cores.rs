@@ -34,6 +34,22 @@ pub struct CoreInfo {
     /// Files the Core needs beside its library, downloaded with it, or `None` when it needs none.
     /// A Core with assets has its system directory under the data dir (see [`system_dir`]).
     pub assets: Option<&'static CoreAssets>,
+    /// How it keeps a Game's In-game Saves.
+    pub saves: InGameSaves,
+}
+
+/// How a Core keeps a Game's In-game Saves, all under the save directory it is given,
+/// `<Games Root>/saves/<system>/` (FR-EMB-7, FR-EMB-15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InGameSaves {
+    /// It hands over its save memory, which Game37 keeps in the Game's `.srm`
+    /// ([`crate::session::saves::srm_path`]).
+    SaveMemory,
+    /// It writes them itself, into files every Game of the System shares (PPSSPP's `SAVEDATA`
+    /// folder, a console's NAND): no Game has a save file of its own to delete.
+    Shared,
+    /// It writes them itself, one file per Game: `<save dir>/<Game file stem>.<extension>`.
+    PerGame { extension: &'static str },
 }
 
 /// Where a Core's BIOS goes and which files count as one (FR-EMB-12), with how Game37 words it for
@@ -175,6 +191,7 @@ pub static MESEN: CoreInfo = CoreInfo {
     options: &[],
     bios: None,
     assets: None,
+    saves: InGameSaves::SaveMemory,
 };
 pub static BSNES: CoreInfo = CoreInfo {
     name: "bsnes",
@@ -182,6 +199,7 @@ pub static BSNES: CoreInfo = CoreInfo {
     options: &[],
     bios: None,
     assets: None,
+    saves: InGameSaves::SaveMemory,
 };
 pub static SAMEBOY: CoreInfo = CoreInfo {
     name: "SameBoy",
@@ -189,6 +207,7 @@ pub static SAMEBOY: CoreInfo = CoreInfo {
     options: &[],
     bios: None,
     assets: None,
+    saves: InGameSaves::SaveMemory,
 };
 pub static MGBA: CoreInfo = CoreInfo {
     name: "mGBA",
@@ -196,6 +215,7 @@ pub static MGBA: CoreInfo = CoreInfo {
     options: &[],
     bios: None,
     assets: None,
+    saves: InGameSaves::SaveMemory,
 };
 pub static MUPEN64PLUS_NEXT: CoreInfo = CoreInfo {
     name: "Mupen64Plus-Next",
@@ -203,6 +223,7 @@ pub static MUPEN64PLUS_NEXT: CoreInfo = CoreInfo {
     options: &[],
     bios: None,
     assets: None,
+    saves: InGameSaves::SaveMemory,
 };
 
 /// Crops a European (PAL) N64 Game to its picture: such Games draw about 240 lines into the
@@ -252,6 +273,7 @@ pub static BEETLE_PSX_HW: CoreInfo = CoreInfo {
     options: &[("beetle_psx_hw_renderer", "hardware_gl")],
     bios: Some(&PS1_BIOS),
     assets: None,
+    saves: InGameSaves::SaveMemory,
 };
 /// Options chosen for FR-DS-1–3: two hybrid layouts (one large screen, one small), the touch
 /// pointer and joystick cursor both live, and a visible cursor for aiming it.
@@ -275,6 +297,7 @@ pub static MELONDS_DS: CoreInfo = CoreInfo {
     ],
     bios: None,
     assets: None,
+    saves: InGameSaves::SaveMemory,
 };
 pub static PPSSPP: CoreInfo = CoreInfo {
     name: "PPSSPP",
@@ -282,6 +305,7 @@ pub static PPSSPP: CoreInfo = CoreInfo {
     options: &[],
     bios: None,
     assets: Some(&PPSSPP_ASSETS),
+    saves: InGameSaves::Shared,
 };
 
 /// Which OpenGL host a Core's context must be made on (see [`CoreInfo::gl`]).
@@ -318,12 +342,6 @@ impl CoreInfo {
     /// and PSP have one, so their Cores read it as analog only.
     pub fn stick_is_dpad(&self) -> bool {
         !(std::ptr::eq(self, &MUPEN64PLUS_NEXT) || std::ptr::eq(self, &PPSSPP))
-    }
-
-    /// Whether the Core keeps a Game's In-game Saves in files of its own under the save directory
-    /// rather than handing over its save memory, so the Game has no `.srm` Game37 could delete.
-    pub fn keeps_own_saves(&self) -> bool {
-        std::ptr::eq(self, &PPSSPP)
     }
 }
 
@@ -1621,6 +1639,7 @@ mod tests {
         options: &[],
         bios: Some(&PS2_BIOS),
         assets: Some(&DOLPHIN_ASSETS),
+        saves: InGameSaves::SaveMemory,
     };
 
     #[test]

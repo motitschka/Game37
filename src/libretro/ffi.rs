@@ -28,6 +28,7 @@ pub const RETRO_AV_ENABLE_AUDIO: c_int = 1 << 1;
 
 const EXPERIMENTAL: c_uint = 0x10000;
 pub const ENV_GET_CAN_DUPE: c_uint = 3;
+pub const ENV_SET_MESSAGE: c_uint = 6;
 pub const ENV_GET_SYSTEM_DIRECTORY: c_uint = 9;
 pub const ENV_SET_PIXEL_FORMAT: c_uint = 10;
 pub const ENV_SET_INPUT_DESCRIPTORS: c_uint = 11;
@@ -48,6 +49,16 @@ pub const ENV_SET_HW_SHARED_CONTEXT: c_uint = 44 | EXPERIMENTAL;
 pub const ENV_GET_AUDIO_VIDEO_ENABLE: c_uint = 47 | EXPERIMENTAL;
 pub const ENV_GET_INPUT_BITMASKS: c_uint = 51 | EXPERIMENTAL;
 pub const ENV_GET_PREFERRED_HW_RENDER: c_uint = 56;
+pub const ENV_GET_MESSAGE_INTERFACE_VERSION: c_uint = 59;
+pub const ENV_SET_MESSAGE_EXT: c_uint = 60;
+
+/// `enum retro_log_level`, but for `RETRO_LOG_INFO` (1).
+pub const RETRO_LOG_DEBUG: c_int = 0;
+pub const RETRO_LOG_WARN: c_int = 2;
+pub const RETRO_LOG_ERROR: c_int = 3;
+
+/// `enum retro_message_target`: a message meant only for the log.
+pub const RETRO_MESSAGE_TARGET_LOG: c_int = 2;
 
 /// `RETRO_SERIALIZATION_QUIRK_*`, set by a Core in `SET_SERIALIZATION_QUIRKS`.
 pub const RETRO_SERIALIZATION_QUIRK_INCOMPLETE: u64 = 1 << 0;
@@ -121,6 +132,27 @@ pub type LogPrintfFn = unsafe extern "C" fn(level: c_int, fmt: *const c_char, ..
 #[repr(C)]
 pub struct RetroLogCallback {
     pub log: LogPrintfFn,
+}
+
+/// `struct retro_message`: `SET_MESSAGE`'s text and how many frames to show it for.
+#[repr(C)]
+pub struct RetroMessage {
+    pub msg: *const c_char,
+    pub frames: c_uint,
+}
+
+/// `struct retro_message_ext`: `SET_MESSAGE_EXT`'s text, how long to show it in milliseconds,
+/// and how.
+#[repr(C)]
+pub struct RetroMessageExt {
+    pub msg: *const c_char,
+    pub duration: c_uint,
+    pub priority: c_uint,
+    pub level: c_int,
+    pub target: c_int,
+    /// `type`: notification, status or progress.
+    pub kind: c_int,
+    pub progress: i8,
 }
 
 unsafe extern "C" {

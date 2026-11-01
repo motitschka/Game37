@@ -89,23 +89,19 @@ pub enum SaveData {
 
 impl SaveData {
     /// The files deleting it removes for the Game whose states are at `states` and whose In-game
-    /// Save is `srm`, in the order they go. The Resume State goes before the In-game Save, so a
-    /// failure in between never leaves one over a new save file.
-    pub fn paths(self, states: &StatePaths, srm: &Path) -> Vec<PathBuf> {
+    /// Save is the file `save` (`None` when its Core keeps In-game Saves every Game shares, which
+    /// stay), in the order they go. The Resume State goes before the In-game Save, so a failure in
+    /// between never leaves one over a new save file.
+    pub fn paths(self, states: &StatePaths, save: Option<&Path>) -> Vec<PathBuf> {
         let slots = || (1..=SLOTS).flat_map(|n| [states.slot(n), states.thumb(n)]);
+        // A Resume State holds the old save memory: resuming would bring the old progress back
+        // and write it over the new save file.
+        let resume_and_save = || [states.resume()].into_iter().chain(save.map(Path::to_path_buf));
         match self {
             SaveData::ResumeState => vec![states.resume()],
             SaveData::SaveStates => slots().collect(),
-            SaveData::InGameSave => vec![
-                // A Resume State holds the old save memory: resuming would bring the old progress
-                // back and write it over the new save file.
-                states.resume(),
-                srm.to_path_buf(),
-            ],
-            SaveData::Everything => [states.resume(), srm.to_path_buf()]
-                .into_iter()
-                .chain(slots())
-                .collect(),
+            SaveData::InGameSave => resume_and_save().collect(),
+            SaveData::Everything => resume_and_save().chain(slots()).collect(),
         }
     }
 }
@@ -113,8 +109,8 @@ impl SaveData {
 /// Deletes `what` for good: exactly the files [`SaveData::paths`] names, no folder and nothing
 /// else. A file that isn't there is fine. Stops at the first file that can't be deleted, and
 /// returns the error, naming it.
-pub fn delete(what: SaveData, states: &StatePaths, srm: &Path) -> Result<(), String> {
-    for path in what.paths(states, srm) {
+pub fn delete(what: SaveData, states: &StatePaths, save: Option<&Path>) -> Result<(), String> {
+    for path in what.paths(states, save) {
         match fs::remove_file(&path) {
             Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
@@ -362,7 +358,7 @@ mod tests {
                     fill(&p, &srm)
                 })
                 .collect();
-            delete(what, &p, &srm).unwrap();
+            delete(what, &p, Some(&srm)).unwrap();
             for path in &mine {
                 assert_eq!(
                     path.exists(),
@@ -375,7 +371,7 @@ mod tests {
                 assert!(path.exists(), "{what:?} deleted {}", path.display());
             }
             assert!(root.join("states/nds").is_dir() && root.join("saves/nds").is_dir());
-            delete(what, &p, &srm).expect("deleting what is already gone is fine");
+            delete(what, &p, Some(&srm)).expect("deleting what is already gone is fine");
         }
     }
 
@@ -386,10 +382,28 @@ mod tests {
         let p = StatePaths::new(dir.path(), "nds", rel);
         let srm = saves::srm_path(dir.path(), "nds", rel);
         fill(&p, &srm);
-        delete(SaveData::InGameSave, &p, &srm).unwrap();
+        delete(SaveData::InGameSave, &p, Some(&srm)).unwrap();
         assert!(!srm.exists());
         assert!(!p.resume().exists(), "resuming would bring the old save back");
         assert!(p.slot(1).exists(), "the Save States stay");
+    }
+
+    #[test]
+    fn everything_leaves_in_game_saves_a_core_keeps_for_every_game() {
+        let dir = tempfile::tempdir().unwrap();
+        let rel = Path::new("psp/G.iso");
+        let p = StatePaths::new(dir.path(), "psp", rel);
+        let shared = dir.path().join("saves/psp/PSP/SAVEDATA/ULUS00001/DATA.BIN");
+        saves::write(&shared, b"x").unwrap();
+        let mut all = vec![p.resume()];
+        all.extend((1..=SLOTS).flat_map(|n| [p.slot(n), p.thumb(n)]));
+        assert_eq!(SaveData::Everything.paths(&p, None), all);
+        for path in &all {
+            saves::write(path, b"x").unwrap();
+        }
+        delete(SaveData::Everything, &p, None).unwrap();
+        assert!(all.iter().all(|path| !path.exists()));
+        assert!(shared.exists(), "the Core's own saves stay");
     }
 
     #[test]
@@ -401,7 +415,7 @@ mod tests {
         // A folder where the Resume State would be: `remove_file` refuses it.
         fs::create_dir_all(p.resume()).unwrap();
         saves::write(&srm, b"x").unwrap();
-        let e = delete(SaveData::InGameSave, &p, &srm).unwrap_err();
+        let e = delete(SaveData::InGameSave, &p, Some(&srm)).unwrap_err();
         assert!(e.contains("T.resume.state couldn't be deleted"), "{e}");
         assert!(srm.exists(), "the In-game Save stays while the Resume State does");
     }

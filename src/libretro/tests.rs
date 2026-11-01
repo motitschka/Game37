@@ -326,3 +326,41 @@ fn difference(a: &[u8], b: &[u8]) -> f64 {
     let sum: u64 = a.iter().zip(b).map(|(x, y)| u64::from(x.abs_diff(*y))).sum();
     sum as f64 / a.len() as f64
 }
+
+/// What the fake Core (`fake_core.c`) says before it fails to load a Game.
+pub(crate) const FAKE_MESSAGE: &str = "The fake Core needs a BIOS.";
+
+/// Builds the fake Core (`fake_core.c`) into `dir` with the system C compiler (`$CC`, else `cc`)
+/// and returns its path. It needs no test data, so tests using it run by default.
+pub(crate) fn fake_core(dir: &Path) -> PathBuf {
+    let (source, library) = (dir.join("fake_core.c"), dir.join("fake_libretro.so"));
+    std::fs::write(&source, include_str!("fake_core.c")).unwrap();
+    let cc = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
+    let built = std::process::Command::new(&cc)
+        .args(["-shared", "-fPIC", "-o"])
+        .args([&library, &source])
+        .status()
+        .unwrap_or_else(|e| panic!("can't run {}: {e}", cc.to_string_lossy()));
+    assert!(built.success(), "the fake Core didn't build");
+    library
+}
+
+/// A Core that says why it can't load a Game (FR-EMB-14): the load error carries its words.
+#[test]
+fn a_core_that_cannot_load_a_game_says_why_in_the_error() {
+    let _serial = serial();
+    let dir = TempDir::new().unwrap();
+    let dirs = CoreDirs {
+        system: dir.path().join("system"),
+        save: dir.path().join("saves"),
+    };
+    let game = dir.path().join("Game.bin");
+    match Core::load(&fake_core(dir.path()), &game, dirs, &[], None) {
+        Err(e) => {
+            assert_eq!(e.core_message(), Some(FAKE_MESSAGE));
+            assert!(matches!(e, CoreError::LoadGame(ref path, _) if *path == game));
+            assert!(e.to_string().contains(FAKE_MESSAGE), "{e}");
+        }
+        Ok(_) => panic!("the fake Core loads no Game"),
+    }
+}
