@@ -4,7 +4,7 @@ Requirements for v1, plus the speedrun timer (FR-RUN), which follows v1 in miles
 
 ## Systems
 
-The table is in **System Order**: Nintendo first, then Sony, each by European release date. This order is used everywhere Systems are listed (see FR-CAR-8).
+The table is in **System Order**: Nintendo first, then Sony, each by European release date. This order is used everywhere Systems are listed (see FR-CAR-8). PS2, 3DS, GameCube and Wii became Embedded in milestone 8 (ADR 0016); before, they were External in PCSX2, Azahar and Dolphin.
 
 | System | Folder | Year (EU) | Kind | Played with |
 |---|---|---|---|---|
@@ -14,14 +14,14 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 | Nintendo 64 | `n64` | 1997 | Embedded | Mupen64Plus-Next core |
 | Game Boy Color | `gbc` | 1998 | Embedded | SameBoy core |
 | Game Boy Advance | `gba` | 2001 | Embedded | mGBA core |
-| GameCube | `gc` | 2002 | External | Dolphin |
+| GameCube | `gc` | 2002 | Embedded | Dolphin core |
 | Nintendo DS | `nds` | 2005 | Embedded | melonDS DS core |
-| Wii | `wii` | 2006 | External | Dolphin |
-| 3DS | `3ds` | 2011 | External | Azahar |
+| Wii | `wii` | 2006 | Embedded | Dolphin core |
+| 3DS | `3ds` | 2011 | Embedded | Azahar core |
 | Wii U | `wiiu` | 2012 | External | Cemu |
 | Switch | `switch` | 2017 | External | Ryubing |
 | PlayStation | `ps1` | 1995 | Embedded | Beetle PSX HW core |
-| PlayStation 2 | `ps2` | 2000 | External | PCSX2 |
+| PlayStation 2 | `ps2` | 2000 | Embedded | LRPS2 core |
 | PSP | `psp` | 2005 | Embedded | PPSSPP core |
 | PlayStation 3 | `ps3` | 2007 | External | RPCS3 |
 | PlayStation 4 | `ps4` | 2013 | External | shadPS4 |
@@ -91,7 +91,7 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 
 ### Embedded play
 
-- **FR-EMB-1** Game37 loads Cores and supports libretro OpenGL hardware rendering, so all nine Embedded Systems run in v1.
+- **FR-EMB-1** Game37 loads Cores and supports libretro OpenGL hardware rendering, so every Embedded System runs inside it: nine in v1, thirteen from milestone 8.
 - **FR-EMB-2** Game37 downloads each Core from the libretro build server the first time it is needed and stores it under `~/.local/share/game37/cores/`.
 - **FR-EMB-3** The Pause Menu opens with the Guide button, with Select+Start, or with Esc.
 - **FR-EMB-4** The Pause Menu offers: resume, save to slot, load from slot, restart, and quit to library.
@@ -104,6 +104,17 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 - **FR-EMB-11** There is no fast-forward.
 - **FR-EMB-12** If a required BIOS is missing, Game37 says which file to place in which folder instead of failing silently.
 - **FR-EMB-13** European (PAL) N64 Games are cropped to their picture, without the PAL frame's black borders.
+- **FR-EMB-14** When a Core reports why it couldn't start or run a Game (a missing BIOS, an encrypted dump), Game37 shows that reason instead of only saying the Game couldn't start.
+- **FR-EMB-15** Cores that keep their own In-game Saves (memory cards, NAND, SD card files) write them under `<Games Root>/saves/<system>/`. Delete save data removes a Game's own save file where the Core keeps one per Game, and otherwise says the In-game Save is kept by the Core.
+
+### PS2, 3DS, GameCube and Wii
+
+Built in milestone 8 (ADR 0016, research in [research/m8-newer-cores.md](research/m8-newer-cores.md)).
+
+- **FR-NEW-1** PS2 Games run with the LRPS2 Core, rendering with OpenGL. It needs the player's PS2 BIOS dump, any file name, in `<Games Root>/bios/pcsx2/bios/`; without one, Game37 says so and names that folder (FR-EMB-12). Each Game gets its own memory card.
+- **FR-NEW-2** 3DS Games run with the Azahar Core, rendering with OpenGL: homebrew and decrypted Games. Both screens are shown, the top one large; R3 swaps which screen is large, and the touch screen takes the mouse and a right-stick cursor, as on DS. An encrypted dump gets a message saying it must be decrypted.
+- **FR-NEW-3** GameCube and Wii Games run with the Dolphin Core, rendering with OpenGL. Game37 downloads Dolphin's system files with the Core. On Wii, the controller stands in for a Wii Remote.
+- **FR-NEW-4** These Systems also take homebrew in the form their Cores load directly: `.elf` for PS2, `.3dsx` for 3DS, `.dol` and `.elf` for GameCube and Wii.
 
 ### Nintendo DS
 
@@ -116,7 +127,7 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 - **FR-EXT-1** Game37 starts the System's Standalone Emulator with the Game, fullscreen where the emulator supports it.
 - **FR-EXT-2** Game37 stays open in the background and becomes active again when the emulator exits.
 - **FR-EXT-3** Players quit External Systems with the emulator's own controls. Game37 provides no kill combo.
-- **FR-EXT-4** Standalone Emulators for Embedded Systems (Mesen, bsnes, SameBoy, mGBA, melonDS, RMG, PPSSPP, DuckStation, ares), and Eden, stay installed but are never used or shown by Game37.
+- **FR-EXT-4** Standalone Emulators for Embedded Systems (Mesen, bsnes, SameBoy, mGBA, melonDS, RMG, PPSSPP, DuckStation, ares, and from milestone 8 PCSX2, Azahar and Dolphin), and Eden, stay installed but are never used or shown by Game37.
 
 ### Controls and window
 

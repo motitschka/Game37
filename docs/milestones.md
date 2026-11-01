@@ -1,6 +1,6 @@
 # Game37 Milestones
 
-The build order for v1 (M1–M6), the road from the first beta to version 1.0 (B1–B3), and then the speedrun timer (M7, version 1.1). Each milestone leaves Game37 runnable and builds on the one before it. Story and requirement IDs refer to [user-stories.md](user-stories.md) and [requirements.md](requirements.md).
+The build order for v1 (M1–M6), PS2, 3DS, GameCube and Wii inside Game37 (M8, a 0.2.0 beta), the road from the first beta to version 1.0 (B1–B3), and then the speedrun timer (M7, version 1.1). Each milestone leaves Game37 runnable and builds on the one before it. Story and requirement IDs refer to [user-stories.md](user-stories.md) and [requirements.md](requirements.md).
 
 Testing uses free, legal homebrew games and test ROMs, never commercial game files. Nothing from `~/Games/` is ever committed.
 
@@ -120,6 +120,26 @@ Testing uses free, legal homebrew games and test ROMs, never commercial game fil
 **Done when**
 - A fresh user account with no Config goes from First-run Setup to playing a homebrew game by following only the in-app steps and the README.
 - Search finds Games with both the keyboard and the controller.
+
+## M8 — PS2, 3DS, GameCube and Wii inside Game37 (0.2.0 beta)
+
+**Goal:** The four newer Systems that still need a standalone emulator and can run as libretro Cores play inside Game37, like the older ones: LRPS2 for PS2, Azahar for 3DS, Dolphin for GameCube and Wii (ADR 0016, research in [research/m8-newer-cores.md](research/m8-newer-cores.md)). The owner's order: PS2 and 3DS first, then Wii and GameCube. The standalone emulators PCSX2, Azahar and Dolphin are replaced. It ships as 0.2.0-beta.1, before the road to 1.0.
+
+**Scope**
+- **E1 Frontend groundwork**, what all three Cores need: the joypad mask answered without `GET_INPUT_BITMASKS`; audio and input callbacks that work from a Core's own threads; serialization quirks (a first `retro_run` before restoring a state); `retro_set_controller_port_device`; Core messages shown to the player (FR-EMB-14); Cores that keep their own In-game Saves (FR-EMB-15); per-Core BIOS rules beyond a list of file names, with wording per System; a general Core assets download (PPSSPP's and Dolphin's); Core options that can change during play; touch and screen swap for any two-screen Core.
+- **E2 PS2** (FR-NEW-1, FR-NEW-4): the LRPS2 Core with OpenGL, per-Game memory cards, the PS2 BIOS folder in Settings → BIOS and Setup, the missing-BIOS message; PS2 becomes Embedded and PCSX2 is no longer used.
+- **E3 3DS** (FR-NEW-2, FR-NEW-4): the Azahar Core with OpenGL, its two-screen layout (mockup first), touch and R3 swap, the encrypted-dump message; 3DS becomes Embedded and Azahar the emulator is no longer used.
+- **E4 Wii and GameCube** (FR-NEW-3, FR-NEW-4): the Dolphin Core with OpenGL and its system files, the Wii Remote on the controller; both become Embedded and Dolphin the emulator is no longer used.
+- **E5 Release 0.2.0-beta.1:** version, changelog, README (Systems table, BIOS, what changed for these Systems), the release checks.
+
+**Delivers:** FR-EMB-14, FR-EMB-15, FR-NEW-1–4 · FR-EMB-1 (thirteen Systems) · FR-EXT-4
+
+**Done when**
+- A homebrew test program (`.testdata/`) boots and shows a picture on each of the four Systems in a real-Core test that checks the picture as the renderer shows it; PS2 with the owner's BIOS. Save, load and Resume State round-trip on each.
+- PS2 without a BIOS shows the message naming `bios/pcsx2/bios/`.
+- 3DS touch and R3 swap work with a controller and a mouse.
+- Every earlier check still passes (tests, real-Core tests, smoke shots), and Setup no longer offers PCSX2, Azahar or Dolphin.
+- On the owner's machine: a real Game of each System plays at full speed with sound (manual check).
 
 ## Road to 1.0
 
