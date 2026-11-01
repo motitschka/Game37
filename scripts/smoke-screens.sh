@@ -85,8 +85,9 @@ shot m4-ds "$root/cfg.toml" "nexttab,right,right,right,right,right,right,right,c
     --frames 300
 shot m4-psp "$root/cfg.toml" "nexttab,left,left,left,confirm,confirm,confirm" --frames 900
 shot m4-ps1-no-bios "$root/cfg.toml" "nexttab,left,left,left,left,left,confirm,confirm,confirm"
-# M8: PS2 without a BIOS
+# M8: PS2 without a BIOS; 3DS running ftpd on Azahar, the top screen large and the touch screen small
 shot m8-ps2-no-bios "$root/cfg.toml" "nexttab,left,left,left,left,confirm,confirm,confirm"
+shot m8-3ds "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..9}),confirm,confirm,confirm" --frames 600
 # M5: the Details Page, the Options Menu, the Favorite replace picker (six Favorites asked for), the
 # Options Menu's slot picker for the SNES Game (m3-pause-saved filled its slot 1), renaming
 shot m5-details "$root/cfg.toml" "nexttab,right,right,confirm,confirm"
