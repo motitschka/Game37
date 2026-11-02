@@ -57,8 +57,8 @@ The story in brackets stays open on GitHub until its checks pass.
 - [ ] 3DS: touch with the mouse, and with the right-stick cursor tapping with L3.
 - [ ] DS and 3DS: R3 on a pad and Tab on the keyboard swap the screens in each layout (Large and small,
       Side by side, One screen), chosen in Settings → Display.
-- [ ] Wii: a real Wii Game plays with the Wii Remote and Nunchuk (left stick the Nunchuk's, right
-      stick pointing the Wii Remote, face buttons A, B, C and Z).
+- [ ] Wii: a real Wii Game plays with the Wii Remote and Nunchuk, buttons mapped as in the README's
+      Playing section.
 - [ ] PS2: loading a Save State in a real Game brings back the saved moment (on a still screen, a
       button press brings the picture back: a known LRPS2 bug).
 - [ ] PS2: Delete save data on a Game deletes its memory card in `~/Games/saves/ps2/`, and the

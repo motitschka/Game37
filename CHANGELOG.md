@@ -10,7 +10,8 @@ place of their Flatpak emulators. Thirteen Systems are Embedded now; only Wii U 
 - **PS2, 3DS, GameCube and Wii play inside Game37,** with the Pause Menu, Save States, a Resume State
   and Playtime: PS2 with the LRPS2 Core, 3DS with the Azahar Core, GameCube and Wii with the Dolphin
   Core. Each Core downloads the first time you play its System, and all of them render with OpenGL.
-- **PS2:** needs a BIOS dumped from your own PS2, with any file name, in `<Games Root>/bios/pcsx2/bios/`.
+- **PS2:** needs a BIOS dumped from your own PS2, with any file name (a 4 to 8 MB file), in
+  `<Games Root>/bios/pcsx2/bios/`.
   Without one, a PS2 Game says so and names that folder. Settings → BIOS has a PS2 row, and Setup's
   BIOS note names every ticked System that needs a BIOS. Each Game gets its own memory card in
   `<Games Root>/saves/ps2/`, named after the Game's file (`Okami.iso` gets `Okami.ps2`), which Game37
@@ -24,9 +25,8 @@ place of their Flatpak emulators. Thirteen Systems are Embedded now; only Wii U 
   screens. The mouse touches the touch screen; the right stick moves a cursor that taps with R2 on DS
   and with L3 on 3DS, where R2 is the ZR button.
 - **GameCube and Wii:** the Dolphin Core downloads Dolphin's system files with it. Both take `.dol` and
-  `.elf` homebrew besides disc images. On Wii the controller is a Wii Remote with a Nunchuk: the left
-  stick is the Nunchuk's stick, the right stick points the Wii Remote at the screen, and the face
-  buttons are A, B, C and Z.
+  `.elf` homebrew besides disc images. On Wii the controller is a Wii Remote with a Nunchuk; see the
+  README's Playing section for the full button mapping.
 
 ### Changed
 - **Upgrading from 0.1:** PS2, 3DS, GameCube and Wii Games no longer open in the PCSX2, Azahar or

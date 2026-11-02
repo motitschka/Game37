@@ -23,9 +23,9 @@
 
 ---
 
-Game37 plays the older Systems itself, from NES to PSP, through libretro Cores inside its own window.
-Newer Systems, from GameCube to PS4, are handed to their Standalone Emulators. Drop your games into one
-folder and browse them all from a single console-style menu, with a controller or with mouse and
+Game37 plays thirteen Systems itself, from NES to PS2, 3DS and Wii, through libretro Cores inside its
+own window. Wii U, Switch, PS3 and PS4 are handed to their Standalone Emulators. Drop your games into
+one folder and browse them all from a single console-style menu, with a controller or with mouse and
 keyboard.
 
 <p align="center">
@@ -46,7 +46,7 @@ all work. Please [report what breaks](https://github.com/motitschka/Game37/issue
 | Milestone | What it brings | State |
 |---|---|---|
 | M1 Skeleton | Library scanning, Home and Shelves, Carousel, Console Pages | Done |
-| M2 External launching | Standalone Emulators for the 8 newer Systems, Playtime | Done |
+| M2 External launching | Standalone Emulators for the 8 newer Systems (4 since 0.2.0), Playtime | Done |
 | M3 Embedded player | libretro Cores, Pause Menu, Save States, In-game Saves | Done |
 | M4 OpenGL rendering | N64, DS, PS1 and PSP inside Game37 | Done |
 | M5 Artwork, Details Page, Options Menu | SteamGridDB covers, per-Game page and actions | Done |
@@ -377,8 +377,8 @@ After Setup, or once it's done:
 - **The PS1 BIOS.** Put one of `scph5500.bin`, `scph5501.bin`, `scph5502.bin`, `scph5503.bin`,
   `scph7003.bin` or `scph5552.bin` in the Games Root's `bios/` folder. Game37 tells you which file is
   missing if there is none, in Settings → BIOS too.
-- **The PS2 BIOS.** Dump the BIOS from your own PS2 and put it, with any file name, in the Games
-  Root's `bios/pcsx2/bios/` folder (`~/Games/bios/pcsx2/bios/` by default). Without one, a PS2 Game
+- **The PS2 BIOS.** Dump the BIOS from your own PS2 and put it, with any file name (a 4 to 8 MB file),
+  in the Games Root's `bios/pcsx2/bios/` folder (`~/Games/bios/pcsx2/bios/` by default). Without one, a PS2 Game
   says so and names that folder; Settings → BIOS has a PS2 row, and Setup's BIOS note names every
   ticked System that needs a BIOS. No other Embedded System needs one: the Dolphin Core downloads
   Dolphin's system files for GameCube and Wii with it, and 3DS plays without the 3DS's system files.
@@ -474,15 +474,42 @@ players 1 to 4 in the order they connect. Without a controller, the keyboard pla
 | Start / Select | Enter / Right Shift |
 | R3 (DS and 3DS: swap screens) | Tab |
 
+The keyboard has no L2, R2, L3 or R3. On GameCube it can't reach the L and R triggers (Q, which maps to
+L, does nothing); on Wii it has no HOME, can't shake the Wii Remote or Nunchuk, and can't point the Wii
+Remote (Dolphin points with the right stick, and Game37 gives a Core without a touch screen no mouse).
+GameCube and Wii need a controller for those.
+
 - **Pause Menu:** the Guide button, Select + Start, or Esc. It offers resume, save and load in three
   slots, and quit to the library. Quitting writes a Resume State, so the next launch continues where you
   stopped.
 - **Nintendo DS and 3DS:** one large and one small screen, unless Settings → Display picks Side by side
   or One screen; R3, or Tab on the keyboard, swaps them (in One screen, it shows the touch screen
   instead). Touch the touch screen with the mouse, or move a cursor with the right stick and tap with
-  R2 on DS or L3 on 3DS (the 3DS's R2 is its ZR button).
-- **Wii:** the controller is a Wii Remote with a Nunchuk: the left stick is the Nunchuk's stick, the
-  right stick points the Wii Remote at the screen, and the face buttons are A, B, C and Z.
+  R2 on DS or L3 on 3DS (the 3DS's R2 is its ZR button); on 3DS the right stick is also the C-Stick.
+- **Wii:** the controller is a Wii Remote with a Nunchuk:
+
+  | Pad button | Wii function |
+  |---|---|
+  | Right face button (A) | A |
+  | Bottom face button (B) | B |
+  | Top face button (X) | Nunchuk C |
+  | Left face button (Y) | Nunchuk Z |
+  | L | − |
+  | R | + |
+  | Start | 1 |
+  | Select | 2 |
+  | R3 | HOME |
+  | R2 | Shake the Wii Remote |
+  | L2 | Shake the Nunchuk |
+  | D-pad | The Wii Remote's d-pad |
+  | Left stick | The Nunchuk's stick |
+  | Right stick | The pointer (absolute: it recentres when let go) |
+  | L3 | Nothing |
+
+  Select + Start (2 + 1) together open the Pause Menu rather than reaching the Game.
+- **GameCube:** the pad maps as printed, except R is Z; L2 and R2 are the L and R triggers held all the
+  way down; L3 and R3 are L and R pressed lightly; L and Select do nothing; the left stick is the
+  Control Stick and the right stick is the C-Stick.
 - **External Systems:** quit with the emulator's own controls, and Game37 comes back to the front.
 
 ## Where your data lives
@@ -504,8 +531,8 @@ players 1 to 4 in the order they connect. Without a controller, the keyboard pla
 
 `secrets.toml` only exists once you've added a SteamGridDB API key, from Setup, Settings → Artwork, or
 by hand; it sits next to the Config and is kept at mode 600. The menu settings you change in Settings →
-Controls and Settings → Display (the button style and the window mode) live in `library.db`, not in the
-Config.
+Controls and Settings → Display (the button style, the window mode and the DS and 3DS screen layouts)
+live in `library.db`, not in the Config.
 
 All your progress lives in the Games Root, so copying `~/Games` backs up games, saves and states in one
 go. Cores and cached Artwork download again if deleted, but back up `library.db` too if you want to keep
@@ -522,6 +549,9 @@ a second at most.
 - PSP needs an X display (XWayland on GNOME): the PPSSPP Core doesn't start on Wayland's EGL. Without
   one, Game37 shows a message instead.
 - N64 rendering is only confirmed with test programs so far, not with a real game.
+- New Super Mario Bros. and Zelda: Phantom Hourglass can freeze on DS
+  ([#42](https://github.com/motitschka/Game37/issues/42)). Use Start from power-on to continue from your
+  In-game Save.
 - Ryubing and shadPS4 stay open in their own game list when a game stops, so Playtime keeps
   counting until you close the emulator's window.
 - Embedded Systems render with OpenGL only, not Vulkan, so some PS2, 3DS, GameCube and Wii Games may
@@ -539,7 +569,8 @@ a second at most.
   Menu says which Core keeps them.
 - Saves made in the PCSX2, Azahar or Dolphin Flatpaks aren't moved into Game37.
 - Two Games in the same folder with the same name but different extensions share their save files. On
-  PS2 that goes for two Games with the same file name in any folders: they share one memory card.
+  PS2, Games whose file names match apart from the extension share one memory card, whatever their
+  folders, and Delete save data leaves a shared card alone.
 - Hiding a Game also removes it from Favorites.
 - When SteamGridDB has no Artwork for a Game, Game37 remembers that and doesn't ask again unless you
   rename the Game.
