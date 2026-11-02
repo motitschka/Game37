@@ -81,7 +81,8 @@ Details are in [docs/milestones.md](docs/milestones.md), and the current state i
 - **Details Page:** selecting a Game opens it, with its hero image, Playtime, last played, Save States,
   file and size. Play starts it from there.
 - **Options Menu:** on any Game, add it to your five Favorites, start it from a Save State slot, choose
-  its Artwork, rename it (the file keeps its name), hide it, or show its file in the file manager.
+  its Artwork, rename it (the file keeps its name), hide it, or show its file in the file manager. A Wii
+  Game also has a Controller row: Wii Remote and Nunchuk, or Classic Controller.
 
 ## Systems
 
@@ -488,7 +489,8 @@ GameCube and Wii need a controller for those.
   or One screen; R3, or Tab on the keyboard, swaps them (in One screen, it shows the touch screen
   instead). Touch the touch screen with the mouse, or move a cursor with the right stick and tap with
   L3; on 3DS the right stick is also the C-Stick. On DS, holding R2 blows into the microphone.
-- **Wii:** the controller is a Wii Remote with a Nunchuk:
+- **Wii:** the controller is a Wii Remote with a Nunchuk, unless the Game's Options Menu sets its
+  Controller to Classic Controller (from the Game's next start):
 
   | Pad button | Wii function |
   |---|---|
@@ -509,6 +511,28 @@ GameCube and Wii need a controller for those.
   | L3 | Nothing |
 
   Select + Start (2 + 1) together open the Pause Menu rather than reaching the Game.
+
+  With the Classic Controller the pad maps to it by position, button for button:
+
+  | Pad button | Classic Controller |
+  |---|---|
+  | Right face button (A) | a |
+  | Bottom face button (B) | b |
+  | Top face button (X) | x |
+  | Left face button (Y) | y |
+  | L / R | L / R |
+  | L2 / R2 | ZL / ZR |
+  | Start | + |
+  | Select | − |
+  | R3 | HOME |
+  | D-pad | +Control Pad |
+  | Left stick / right stick | Left stick / right stick |
+  | L3 | Nothing |
+
+  Select + Start (− and +) together open the Pause Menu. Mario Kart Wii then plays much like Mario Kart
+  8 Deluxe on a Switch controller: left stick steers, A accelerates, B brakes and reverses, R hops and
+  drifts, L uses an item, X looks behind, and + pauses. Unlike Mario Kart 8 Deluxe, ZR looks behind
+  rather than drifting, ZL does nothing, and tricks and wheelies are on the d-pad.
 - **GameCube:** the pad maps as printed, except R is Z; L2 and R2 are the L and R triggers held all the
   way down; L3 and R3 are L and R pressed lightly; L and Select do nothing; the left stick is the
   Control Stick and the right stick is the C-Stick.
@@ -565,7 +589,7 @@ a second at most.
   as the 3DS's system files aren't supported. The Azahar Core's Save States break with every update of
   the Core: a slot that can't load says so.
 - GameCube and Wii: Games on more than one disc can't change discs yet. Wii plays with the Wii Remote
-  and Nunchuk only.
+  and Nunchuk, or the Classic Controller; not the Wii Remote alone, held sideways, or the Wii Wheel.
 - Delete save data doesn't delete a PSP, 3DS, GameCube or Wii Game's In-game Save: the PPSSPP, Azahar
   and Dolphin Cores keep them in their own files, which every Game of the System shares, and the Options
   Menu says which Core keeps them.

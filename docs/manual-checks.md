@@ -64,6 +64,10 @@ The story in brackets stays open on GitHub until its checks pass.
       Side by side, One screen), chosen in Settings → Display.
 - [ ] Wii: a real Wii Game plays with the Wii Remote and Nunchuk, buttons mapped as in the README's
       Playing section.
+- [ ] Wii: Mario Kart Wii with its Controller set to Classic Controller in its Options Menu: the Game
+      shows the Classic Controller's controls; A accelerates, B brakes, R drifts, L uses an item, X
+      looks behind, the left stick steers, and + pauses. Set back to Wii Remote and Nunchuk, the next
+      start plays with those again.
 - [ ] PS2: loading a Save State in a real Game brings back the saved moment (on a still screen, a
       button press brings the picture back: a known LRPS2 bug).
 - [ ] PS2: Delete save data on a Game deletes its memory card in `~/Games/saves/ps2/`, and the

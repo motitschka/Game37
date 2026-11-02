@@ -2,6 +2,13 @@
 
 ## 0.2.0-beta.2 (unreleased)
 
+### New
+- **Classic Controller on Wii:** a Wii Game's Options Menu has a Controller row, Wii Remote and Nunchuk
+  (the default, as before) or Classic Controller, kept per Game from its next start. With the Classic
+  Controller the pad maps to it button for button (L2 and R2 are ZL and ZR, R3 is HOME), so Mario
+  Kart Wii plays like Mario Kart 8 Deluxe: A accelerates, B brakes, R drifts, L uses an item and X
+  looks behind. See the README's Playing section for the full mapping.
+
 ### Changed
 - **Switch controllers on PS1, PS2 and PSP:** a controller with Nintendo letters (Switch Pro
   Controller, Joy-Con pair) maps its face buttons by letter in PlayStation Games: A is ✕, B is ○, X is
