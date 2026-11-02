@@ -16,13 +16,14 @@ way, and what's still open.
 | M4 OpenGL hardware rendering | Done, reviewed, regression-checked | `m4-opengl` | Yes |
 | M5 Artwork, Details Page, Options Menu | Done, reviewed twice, regression-checked | `m5-artwork` | Yes |
 | M6 Settings, search, First-run Setup | Done, reviewed (three reviewers, then a second round), regression-checked | `m6-settings` | Yes |
-| M8 PS2, 3DS, GameCube and Wii inside Game37 | Built, reviewed, full real-Core and smoke run green; E5 release 0.2.0-beta.1 (version, changelog, README) ready and waiting for the owner to publish it | `m8-newer-systems` | No |
+| M8 PS2, 3DS, GameCube and Wii inside Game37 | Done, reviewed, regression-checked; released as 0.2.0-beta.1 (2026-11-02); the owner's manual checks are still to do | `m8-newer-systems` | Yes |
 | M7 Speedrun timer (1.1) | Specified 2026-10-21, on hold until the owner asks | | |
 
 Each milestone branch builds on the previous one. `main` has everything through M6 (merged on
-2026-10-26), plus the M7 spec, the license and the README: v1 is complete. Start M7 from `main`, on
-a new branch `m7-…`. M8 (ADR 0016) is built on `m8-newer-systems`; it goes into `main` with the
-owner's OK, after its manual checks in [manual-checks.md](manual-checks.md#7-ps2-3ds-gamecube-and-wii-inside-game37-m8-020-beta1).
+2026-10-26), plus the M7 spec, the license and the README: v1 is complete. M8 (ADR 0016), built on
+`m8-newer-systems`, went into `main` on 2026-11-02 and shipped as 0.2.0-beta.1; its manual checks are
+in [manual-checks.md](manual-checks.md#7-ps2-3ds-gamecube-and-wii-inside-game37-m8-020-beta1). Start
+M7 from `main`, on a new branch `m7-…`.
 
 ## Code map
 
