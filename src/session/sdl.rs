@@ -349,6 +349,9 @@ impl Session {
         if !paused {
             self.pause = PauseTrigger::default();
             self.held = HeldOver::default();
+            if let Some(touch) = &mut self.touch {
+                touch.resume();
+            }
         }
         self.sync_audio();
     }
@@ -1913,6 +1916,105 @@ mod tests {
             .unwrap_or_else(|e| panic!("resume: {e}"));
         tick_n(&mut session, &mut gfx, 60);
         assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "resumed");
+    }
+
+    /// 3DS swaps its screens in Side by side and One screen too (FR-DS-2, FR-NEW-2), not only
+    /// Large and small: Side by side (720×240, the top screen's 400 width beside the touch
+    /// screen's 320) puts the touch screen on the left; One screen (either screen at its own
+    /// size) shows the other one, through `citra_swap_screen`, checked on the real Core's
+    /// picture, and Tab swaps each back.
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn hw_azahar_swaps_the_screens_in_side_by_side_and_one_screen_layouts() {
+        use crate::cores::ScreenLayout;
+        use crate::ui::text::Fonts;
+
+        let _serial = serial();
+        let press_r3 = |session: &mut Session, gfx: &mut Gfx<'_>| {
+            let mut r3 = PadState::default();
+            r3.press(sdl3::gamepad::Button::RightStick);
+            for _ in 0..5 {
+                session.tick(gfx, 1.0 / 60.0, &[(0, r3)], Mouse::default(), |_| false);
+            }
+            tick_n(session, gfx, 30);
+        };
+        let press_tab = |session: &mut Session, gfx: &mut Gfx<'_>| {
+            let tab = |key| key == input::SWAP_SCREENS_KEY;
+            for _ in 0..5 {
+                session.tick(gfx, 1.0 / 60.0, &[], Mouse::default(), tab);
+            }
+            tick_n(session, gfx, 30);
+        };
+
+        // Side by side: R3 puts the touch screen (the old right half) on the left; Tab swaps it
+        // back.
+        {
+            let (_root, _data, mut ctx, game) = three_ds_world();
+            ctx.set_screen_layout(systems::by_id("3ds").unwrap(), ScreenLayout::SideBySide);
+            let (_sdl, canvas) = offscreen_renderer();
+            let creator = canvas.texture_creator();
+            let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
+            let mut session = Session::start(&Play::resume(game), &ctx, gfx.gl_context(), None, Some(60.0))
+                .unwrap_or_else(|e| panic!("{e}"));
+            tick_n(&mut session, &mut gfx, 600);
+            let before = session.core.frame().clone();
+            assert_eq!(
+                (before.width, before.height),
+                (720, 240),
+                "the top and touch screens side by side"
+            );
+            let right_before = sampled(&before, (400, 0, 320, 240));
+
+            press_r3(&mut session, &mut gfx);
+            let after = session.core.frame().clone();
+            assert_eq!((after.width, after.height), (720, 240), "still side by side");
+            let (left_after, left_before) = (
+                sampled(&after, (0, 0, 400, 240)),
+                sampled(&before, (0, 0, 400, 240)),
+            );
+            assert!(
+                difference(&left_after, &right_before) < difference(&left_after, &left_before),
+                "R3 put the touch screen on the left"
+            );
+
+            press_tab(&mut session, &mut gfx);
+            let back = sampled(session.core.frame(), (0, 0, 400, 240));
+            assert!(
+                difference(&back, &left_before) < difference(&back, &right_before),
+                "Tab put the top screen back on the left"
+            );
+        }
+
+        // One screen: R3 shows the other screen, at its own size (400×240 for the top, 320×240
+        // for the touch screen); Tab shows the first one again.
+        {
+            let (_root, _data, mut ctx, game) = three_ds_world();
+            ctx.set_screen_layout(systems::by_id("3ds").unwrap(), ScreenLayout::OneScreen);
+            let (_sdl, canvas) = offscreen_renderer();
+            let creator = canvas.texture_creator();
+            let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
+            let mut session = Session::start(&Play::resume(game), &ctx, gfx.gl_context(), None, Some(60.0))
+                .unwrap_or_else(|e| panic!("{e}"));
+            tick_n(&mut session, &mut gfx, 600);
+            let before = session.core.frame().clone();
+            assert_eq!((before.width, before.height), (400, 240), "the top screen alone");
+
+            press_r3(&mut session, &mut gfx);
+            let after = session.core.frame().clone();
+            assert_eq!(
+                (after.width, after.height),
+                (320, 240),
+                "R3 shows the touch screen, at its own size"
+            );
+
+            press_tab(&mut session, &mut gfx);
+            let back = session.core.frame().clone();
+            assert_eq!(
+                (back.width, back.height),
+                (400, 240),
+                "Tab shows the top screen again"
+            );
+        }
     }
 
     /// An encrypted 3DS dump (FR-NEW-2, FR-EMB-14): Azahar refuses it, and the message the player

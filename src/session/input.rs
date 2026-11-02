@@ -226,6 +226,12 @@ impl TouchControls {
         }
     }
 
+    /// Marks the swap control as held over a pause: one still down when play resumes must be let
+    /// go before it swaps again, as `HeldOver` does for the rest of the pad.
+    pub fn resume(&mut self) {
+        self.held = true;
+    }
+
     /// Takes the touch controls out of a frame's `input` and `tab`, whether Tab is down, and puts
     /// in what the Core takes for them. Each pad's `tap_with` is let go and `tap` held instead;
     /// each pad's R3 is let go, and with [`Swap::Button`] that button held while the swap control
@@ -780,6 +786,38 @@ mod tests {
         let (input, change) = touch_frame(&mut controls, holding(0, &[Button::L3, Button::R3]), false);
         assert_eq!(input, holding(0, &[Button::R3]), "the tap, not the swap");
         assert_eq!(change, swap("Bottom"));
+    }
+
+    /// A swap control held over a pause (R3, or Tab) must be let go before it swaps again on
+    /// resume, as `HeldOver` holds back the rest of the pad: `resume` marks it held so the frame
+    /// that resumes play, with the control still down, swaps nothing.
+    #[test]
+    fn a_swap_control_held_over_a_pause_swaps_nothing_until_let_go() {
+        let swap = |value| Some(("citra_swap_screen", value));
+
+        for tab in [false, true] {
+            let mut controls = TouchControls::new(crate::cores::AZAHAR.touch.unwrap());
+            let held = || {
+                if tab {
+                    InputState::default()
+                } else {
+                    holding(0, &[Button::R3])
+                }
+            };
+
+            // Resuming with the control still down from the Pause Menu swaps nothing.
+            controls.resume();
+            let (_, change) = touch_frame(&mut controls, held(), tab);
+            assert_eq!(change, None, "still held from before the pause");
+            let (_, change) = touch_frame(&mut controls, held(), tab);
+            assert_eq!(change, None, "still held, a frame later");
+
+            // Letting go, then pressing again, swaps once.
+            let (_, change) = touch_frame(&mut controls, InputState::default(), false);
+            assert_eq!(change, None, "let go");
+            let (_, change) = touch_frame(&mut controls, held(), tab);
+            assert_eq!(change, swap("Bottom"), "a new press swaps");
+        }
     }
 
     /// DS on melonDS DS (FR-DS-2, FR-DS-3), as before: R3 and Tab hold R3, its Next Screen

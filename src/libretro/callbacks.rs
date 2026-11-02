@@ -1032,8 +1032,12 @@ mod tests {
             get_variable(&mut s, "citra_swap_screen").as_deref(),
             Some("Bottom")
         );
-        // SAFETY: the value handed out before the change is kept until the Core is unloaded.
-        assert_eq!(unsafe { CStr::from_ptr(before.value) }, c"Top", "still readable");
+        // The value handed out before the change is kept until the Core is unloaded, not freed:
+        // checked on the pointer itself, not by reading through it.
+        assert!(
+            s.replaced.iter().any(|v| v.as_ptr() == before.value),
+            "the old value is kept in `replaced`, not dropped"
+        );
 
         s.set_option("citra_swap_screen", "Top");
         s.set_option("only_ours", "on");
