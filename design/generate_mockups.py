@@ -605,7 +605,7 @@ def screen_options_wii():
     its choice cycled with Left and Right (or A) and kept for the Game from its next start."""
     sv = Svg("44-options-menu-wii", "Options Menu: Wii Game")
     items = OPTIONS_ITEMS[:4] + [(None, "Controller", WII_CONTROLLERS[1])] + OPTIONS_ITEMS[4:]
-    options_panel(sv, game("Mario Kart Wii", "wii", "6h 15m"), "WII  ·  6h 15m played", items, 4,
+    options_panel(sv, game("Mario Kart Wii", "wii", "6h 15m"), "Wii  ·  6h 15m played", items, 4,
                   [(["←", "→"], "Change"), (["B"], "Close")])
     sv.save()
 

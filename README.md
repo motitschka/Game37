@@ -490,7 +490,8 @@ GameCube and Wii need a controller for those.
   instead). Touch the touch screen with the mouse, or move a cursor with the right stick and tap with
   L3; on 3DS the right stick is also the C-Stick. On DS, holding R2 blows into the microphone.
 - **Wii:** the controller is a Wii Remote with a Nunchuk, unless the Game's Options Menu sets its
-  Controller to Classic Controller (from the Game's next start):
+  Controller to Classic Controller (from the Game's next start; a Resume State or Save State keeps
+  the controller it was made with, so after changing it, start the Game with Start from power-on):
 
   | Pad button | Wii function |
   |---|---|

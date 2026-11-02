@@ -7,7 +7,12 @@
   (the default, as before) or Classic Controller, kept per Game from its next start. With the Classic
   Controller the pad maps to it button for button (L2 and R2 are ZL and ZR, R3 is HOME), so Mario
   Kart Wii plays like Mario Kart 8 Deluxe: A accelerates, B brakes, R drifts, L uses an item and X
-  looks behind. See the README's Playing section for the full mapping.
+  looks behind. See the README's Playing section for the full mapping. A Resume State or Save State
+  keeps the controller it was made with, so after changing it, start the Game with Start from power-on.
+
+### Upgrading
+- This version adds a column to the library database (`library.db`); 0.2.0-beta.1 can't open the
+  library any more once this version has.
 
 ### Changed
 - **Switch controllers on PS1, PS2 and PSP:** a controller with Nintendo letters (Switch Pro

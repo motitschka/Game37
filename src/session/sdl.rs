@@ -2663,7 +2663,8 @@ mod tests {
     /// its Classic Controller (Pro) device, and Dolphin then asks for what that mapping reads: the
     /// RetroPad's L, R, L2 and R2 as buttons (L, R, ZL and ZR), but neither the mouse nor L3, which
     /// only its Wii Remote mappings use, nor the analog L2 and R2 its plain Classic Controller reads
-    /// for L and R. A, the Classic Controller's a, opens FCE Ultra GX's folder list.
+    /// for L and R; those queries are what pin the device. A then opens FCE Ultra GX's folder list (as
+    /// it would with the Nunchuk too): the Game takes input.
     #[test]
     #[ignore = "needs /home/matei/Game37/.testdata"]
     fn hw_dolphin_plays_fce_ultra_gx_on_wii_with_the_classic_controller() {

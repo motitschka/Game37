@@ -68,6 +68,9 @@ The story in brackets stays open on GitHub until its checks pass.
       shows the Classic Controller's controls; A accelerates, B brakes, R drifts, L uses an item, X
       looks behind, the left stick steers, and + pauses. Set back to Wii Remote and Nunchuk, the next
       start plays with those again.
+- [ ] Wii: on a Game with a Resume State made with the Wii Remote and Nunchuk, switch its Controller to
+      Classic Controller and press Play: note what the Game does (it resumes with the Nunchuk state);
+      then Start from power-on: the Classic Controller works from the title screen.
 - [ ] PS2: loading a Save State in a real Game brings back the saved moment (on a still screen, a
       button press brings the picture back: a known LRPS2 bug).
 - [ ] PS2: Delete save data on a Game deletes its memory card in `~/Games/saves/ps2/`, and the
