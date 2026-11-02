@@ -14,7 +14,8 @@ The story in brackets stays open on GitHub until its checks pass.
 
 ## 2. Embedded play
 
-- [ ] Each of the 9 Embedded Systems runs a Game at full speed, with audio that doesn't crackle. (US-22)
+- [ ] Each of the 9 Embedded Systems from v1 runs a Game at full speed, with audio that doesn't
+      crackle; the other four are in section 7. (US-22)
 - [ ] N64 shows a picture with a real Game (the test demo stays black). (US-22)
 - [ ] PS1 runs with your BIOS in `~/Games/bios/`. (US-22)
 - [ ] Two pads control players 1 and 2. (US-26)
@@ -48,3 +49,17 @@ The story in brackets stays open on GitHub until its checks pass.
 - [ ] Typing in Search with a real keyboard, and Ctrl+V paste. (US-21)
 - [ ] "Show file in file manager" opens Nautilus with the file selected. (US-16)
 - [ ] Moving the Games Root in Settings while Game37 runs, and the watcher following it.
+
+## 7. PS2, 3DS, GameCube and Wii inside Game37 (M8, 0.2.0-beta.1)
+
+- [ ] A real Game of each of PS2, 3DS, GameCube and Wii plays at full speed, with sound that doesn't
+      crackle; PS2 with your BIOS in `~/Games/bios/pcsx2/bios/`.
+- [ ] 3DS: touch with the mouse, and with the right-stick cursor tapping with L3.
+- [ ] DS and 3DS: R3 on a pad and Tab on the keyboard swap the screens in each layout (Large and small,
+      Side by side, One screen), chosen in Settings → Display.
+- [ ] Wii: a real Wii Game plays with the Wii Remote and Nunchuk (left stick the Nunchuk's, right
+      stick pointing the Wii Remote, face buttons A, B, C and Z).
+- [ ] PS2: loading a Save State in a real Game brings back the saved moment (on a still screen, a
+      button press brings the picture back: a known LRPS2 bug).
+- [ ] PS2: Delete save data on a Game deletes its memory card in `~/Games/saves/ps2/`, and the
+      next start makes a new formatted one.
