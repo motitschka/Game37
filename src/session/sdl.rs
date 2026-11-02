@@ -22,10 +22,11 @@ use super::input::{self, FaceLetters, HeldOver, Mouse, PadState, PauseTrigger, T
 use super::saves::{self, Tracker};
 use super::states::{self, SLOTS, StatePaths};
 use super::timing::{self, AUDIO_MAX, PlayTimer, Scheduler};
-use crate::cores::{self, CoreInfo, GlKind};
+use crate::cores::{self, CoreInfo, GlKind, WiiController};
 use crate::ctx::{self, Ctx, Play, Start};
 use crate::launch::{self, FAILED_TITLE};
-use crate::libretro::{Core, CoreDirs, CoreSetup, Frame, GlHost, Stick};
+use crate::library::db::GameRow;
+use crate::libretro::{Core, CoreDirs, CoreSetup, Frame, GlHost, PortDevice, Stick};
 use crate::screens::message::Message;
 use crate::screens::pause::{PauseMenu, Request, SlotInfo};
 use crate::systems::{self, System};
@@ -206,6 +207,20 @@ fn core_options(
     core.options_for(system, game, ctx.screen_layout(system))
 }
 
+/// The controller `core` is told sits in each port for `game`, of `system`: on Wii the one chosen
+/// for the Game in its Options Menu (FR-NEW-3), which a library error leaves at the default.
+fn port_device(ctx: &Ctx, system: &System, core: &CoreInfo, game: &GameRow) -> PortDevice {
+    let wii = if system.id == "wii" {
+        ctx.library.wii_controller(game.id).unwrap_or_else(|e| {
+            eprintln!("game37: can't read {}'s controller: {e}", game.title);
+            WiiController::default()
+        })
+    } else {
+        WiiController::default()
+    };
+    core.port_device(system, wii)
+}
+
 /// Why [`Session::start`] failed: the title to show it under, besides [`FAILED_TITLE`] for most
 /// failures, and the message.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -279,7 +294,7 @@ impl Session {
         let options = core_options(ctx, system, core_info, &game_path);
         let setup = CoreSetup {
             options: &options,
-            device: core_info.port_device(system),
+            device: port_device(ctx, system, core_info, game),
             reread_timing: core_info.rereads_timing(),
             address_window: core_info.needs_address_window(),
         };
@@ -826,7 +841,6 @@ mod tests {
 
     use super::*;
     use crate::app::close;
-    use crate::library::db::GameRow;
     use crate::libretro::tests::serial;
     use crate::ui::input::Input;
 
@@ -1554,6 +1568,46 @@ mod tests {
         }
         ctx.set_screen_layout(nds, ScreenLayout::SideBySide);
         assert!(options(&ctx).contains(&("melonds_screen_layout1", "left-right")));
+    }
+
+    /// A Wii Game starts Dolphin with the controller chosen for it in its Options Menu: the Wii
+    /// Remote and Nunchuk until set, a Classic Controller once set, while another Wii Game keeps
+    /// its own; a GameCube Game gets a RetroPad (FR-NEW-3).
+    #[test]
+    fn a_wii_game_starts_with_the_controller_chosen_for_it() {
+        use crate::cores::{DOLPHIN, DOLPHIN_CLASSIC_CONTROLLER, DOLPHIN_WII_REMOTE_AND_NUNCHUK};
+        use crate::library::FoundGame;
+        use crate::library::db::SortOrder;
+
+        let mut ctx = Ctx::empty();
+        let found = |system: &'static str, title: &str| FoundGame {
+            system,
+            rel_path: format!("{system}/{title}.iso"),
+            title: title.to_owned(),
+        };
+        let mut games = |system: &'static str, titles: &[&str]| {
+            let found: Vec<_> = titles.iter().map(|t| found(system, t)).collect();
+            ctx.library.sync_system(system, &found, 0).unwrap();
+            ctx.library.system_games(system, SortOrder::AZ).unwrap()
+        };
+        let wii_games = games("wii", &["Kart", "Other"]);
+        let gc_game = games("gc", &["Cube"]).remove(0);
+        let (kart, other) = (&wii_games[0], &wii_games[1]);
+        let (wii, gc) = (systems::by_id("wii").unwrap(), systems::by_id("gc").unwrap());
+        assert_eq!(
+            port_device(&ctx, wii, &DOLPHIN, kart),
+            DOLPHIN_WII_REMOTE_AND_NUNCHUK
+        );
+
+        ctx.library
+            .set_wii_controller(kart.id, WiiController::ClassicController)
+            .unwrap();
+        assert_eq!(port_device(&ctx, wii, &DOLPHIN, kart), DOLPHIN_CLASSIC_CONTROLLER);
+        assert_eq!(
+            port_device(&ctx, wii, &DOLPHIN, other),
+            DOLPHIN_WII_REMOTE_AND_NUNCHUK
+        );
+        assert_eq!(port_device(&ctx, gc, &DOLPHIN, &gc_game), PortDevice::RETROPAD);
     }
 
     /// A PS2 Game, `ps2/<file>`, on a Games Root.
@@ -2562,7 +2616,7 @@ mod tests {
         let (root, data, ctx, game) = dolphin_world("wii");
         let wii = systems::by_id("wii").unwrap();
         assert_eq!(
-            cores::for_system(wii).unwrap().port_device(wii),
+            port_device(&ctx, wii, &cores::DOLPHIN, &game),
             cores::DOLPHIN_WII_REMOTE_AND_NUNCHUK
         );
         let (_sdl, canvas) = offscreen_renderer();
@@ -2603,6 +2657,75 @@ mod tests {
         };
         assert_dolphin_states_round_trip(session, &mut gfx, &ctx, &shot, &game, nunchuk_down);
         assert_dolphin_wrote_only_its_own_folders(root.path(), "wii", since);
+    }
+
+    /// Wii with Dolphin and a Game set to the Classic Controller (FR-NEW-3): Game37 tells Dolphin
+    /// its Classic Controller (Pro) device, and Dolphin then asks for what that mapping reads: the
+    /// RetroPad's L, R, L2 and R2 as buttons (L, R, ZL and ZR), but neither the mouse nor L3, which
+    /// only its Wii Remote mappings use, nor the analog L2 and R2 its plain Classic Controller reads
+    /// for L and R. A, the Classic Controller's a, opens FCE Ultra GX's folder list.
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn hw_dolphin_plays_fce_ultra_gx_on_wii_with_the_classic_controller() {
+        use crate::library::FoundGame;
+        use crate::library::db::SortOrder;
+        use crate::libretro::Button;
+        use crate::ui::text::Fonts;
+
+        let _serial = serial();
+        let (_root, data, mut ctx, game) = dolphin_world("wii");
+        let found = FoundGame {
+            system: "wii",
+            rel_path: game.rel_path.clone(),
+            title: game.title.clone(),
+        };
+        ctx.library.sync_system("wii", &[found], 0).unwrap();
+        let game = ctx.library.system_games("wii", SortOrder::AZ).unwrap().remove(0);
+        ctx.library
+            .set_wii_controller(game.id, WiiController::ClassicController)
+            .unwrap();
+        let wii = systems::by_id("wii").unwrap();
+        assert_eq!(
+            port_device(&ctx, wii, &cores::DOLPHIN, &game),
+            cores::DOLPHIN_CLASSIC_CONTROLLER
+        );
+        let (_sdl, canvas) = offscreen_renderer();
+        let creator = canvas.texture_creator();
+        let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
+        let shot = data.path().join("shot.bmp");
+        let mut session = Session::start(&Play::resume(game), &ctx, gfx.gl_context(), None, Some(60.0))
+            .unwrap_or_else(|e| panic!("{e}"));
+        tick_n(&mut session, &mut gfx, 300);
+        let booted = shown_exactly(&mut session, &mut gfx, &ctx, &shot);
+        assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "booted");
+        let queries = session.core.input_queries();
+        let retropad = crate::libretro::PortDevice::RETROPAD.id();
+        for button in [Button::L, Button::R, Button::L2, Button::R2] {
+            assert!(
+                queries.contains_key(&(0, retropad, 0, button as u32)),
+                "{button:?}: {queries:?}"
+            );
+        }
+        assert!(
+            !queries.contains_key(&(0, retropad, 0, Button::L3 as u32)),
+            "L3: {queries:?}"
+        );
+        // RETRO_DEVICE_MOUSE, RETRO_DEVICE_ANALOG and RETRO_DEVICE_INDEX_ANALOG_BUTTON.
+        let (mouse, analog, index_button) = (2, 5, 2);
+        assert!(
+            !queries
+                .keys()
+                .any(|&(_, d, i, _)| d == mouse || (d == analog && i == index_button)),
+            "{queries:?}"
+        );
+
+        let mut a = PadState::default();
+        a.press(sdl3::gamepad::Button::East);
+        press(&mut session, &mut gfx, a);
+        assert!(
+            shown_exactly(&mut session, &mut gfx, &ctx, &shot) != booted,
+            "A opened a list"
+        );
     }
 
     /// Dolphin, one Core for two Systems, loads again and again in one process, as when the
