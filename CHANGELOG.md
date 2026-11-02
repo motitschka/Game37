@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0-beta.1 (unreleased)
+## 0.2.0-beta.1 (2026-11-02)
 
 PS2, 3DS, GameCube and Wii now play inside Game37, like the older Systems, with libretro Cores in
 place of their Flatpak emulators. Thirteen Systems are Embedded now; only Wii U (Cemu), Switch
