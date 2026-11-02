@@ -51,10 +51,10 @@ pub struct TouchScreen {
     pub swap: Swap,
     /// The pad buttons that reach the Core as another RetroPad button, `(pad, core)`: the pad's
     /// button is let go and the Core's held while it is, so a pad button only ever reaches the Core
-    /// as one button. Every other pad button reaches it as itself.
+    /// as one button. Every other pad button but R3 (Game37's swap) reaches it as itself.
     ///
     /// melonDS DS's cursor taps on R2 (its "Touch Joystick"; the DS has no R2 of its own) and its
-    /// L3 is the microphone button, on while held (its default "Hold" mode): L3 and R2 swap, so a
+    /// L3 is the microphone button, which blows while held (see its options): L3 and R2 swap, so a
     /// pad's L3 taps and its R2 is the microphone. melonDS DS's L2 is taken too (it speeds up the
     /// cursor and, held, gives other buttons other jobs). Azahar's cursor taps on R3 (its "Touch
     /// Screen Touch"): a pad's L3 reaches it as R3, as the pad's R3 is Game37's swap and the 3DS's
@@ -339,6 +339,10 @@ pub static MELONDS_DS: CoreInfo = CoreInfo {
         ("melonds_hybrid_small_screen", "one"),
         ("melonds_touch_mode", "auto"),
         ("melonds_show_cursor", "always"),
+        // Game37 has no microphone to give the Core, so the microphone button (a pad's R2) blows
+        // into it, while held.
+        ("melonds_mic_input", "blow"),
+        ("melonds_mic_input_active", "hold"),
         // The JIT crashed the DS homebrew test Game here; the interpreter is fast enough on a
         // desktop CPU.
         ("melonds_jit_enable", "disabled"),
@@ -1893,6 +1897,8 @@ mod tests {
                 ("melonds_hybrid_small_screen", "one"),
                 ("melonds_touch_mode", "auto"),
                 ("melonds_show_cursor", "always"),
+                ("melonds_mic_input", "blow"),
+                ("melonds_mic_input_active", "hold"),
                 ("melonds_jit_enable", "disabled"),
             ]
         );

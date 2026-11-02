@@ -120,7 +120,7 @@ Built in milestone 8 (ADR 0016, research in [research/m8-newer-cores.md](researc
 
 - **FR-DS-1** How DS shows its two screens is a choice in Settings → Display, one of three layouts: Large and small (the default), one large screen and one small screen, the large one three times the size of the small one: together 16:9, so on a 16:9 display the large screen fills the height and the small one the rest of the width; Side by side, both screens next to each other at the same size; or One screen, the top screen alone, filling the display. The choice applies from the next Game started.
 - **FR-DS-2** R3 (Tab on the keyboard) swaps the screens in every layout: which one is large, which one is on the left, or which one is shown.
-- **FR-DS-3** The touch screen accepts mouse clicks, and a right-stick cursor that L3 taps with. R2 is the microphone button, on while held.
+- **FR-DS-3** The touch screen accepts mouse clicks, and a right-stick cursor that L3 taps with. Holding R2 blows into the microphone.
 
 ### External play
 

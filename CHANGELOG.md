@@ -23,7 +23,7 @@ place of their Flatpak emulators. Thirteen Systems are Embedded now; only Wii U 
 - **DS and 3DS screen layouts** in Settings → Display: Large and small (the default, the large screen
   three times the small one), Side by side, or One screen. R3, or Tab on the keyboard, swaps the
   screens. The mouse touches the touch screen; the right stick moves a cursor that L3 taps with, on DS
-  as on 3DS. On DS, R2 is the microphone button, on while held.
+  as on 3DS. On DS, holding R2 blows into the microphone.
 - **GameCube and Wii:** the Dolphin Core downloads Dolphin's system files with it. Both take `.dol` and
   `.elf` homebrew besides disc images. On Wii the controller is a Wii Remote with a Nunchuk; see the
   README's Playing section for the full button mapping.
@@ -36,7 +36,7 @@ place of their Flatpak emulators. Thirteen Systems are Embedded now; only Wii U 
   whole User folder (memory cards, the Wii's system memory, and also Dolphin's settings, logs and shader
   cache) in `saves/gc/User/` and `saves/wii/User/`.
 - **DS controls:** the right-stick cursor taps with L3, as on 3DS, instead of R2, and the microphone
-  moved from L3 to R2.
+  button moved from L3 to R2, where holding it now blows into the microphone (before, it heard silence).
 - Delete save data on a 3DS, GameCube or Wii Game keeps the In-game Save, and says which Core keeps
   it: those Cores keep In-game Saves in their own files, shared by every Game of the System.
 

@@ -167,7 +167,9 @@ forwards raw pointer coordinates — no DS-screen-relative transform needed on G
 `AnalogCursorDirection` (`JoypadState::Update`) — this matches the mockup's "R2: Tap with cursor
 (proposed)" exactly. melonDS DS draws its own on-screen cursor for joystick mode when `show_cursor` is
 anything but `"never"` — the front end does not need to render one itself. `L2` speeds up cursor
-movement while held; `L3` toggles the microphone, not touch-related.
+movement while held; `L3` toggles the microphone, not touch-related. (2026-11-02: since 0.2.0 Game37
+swaps them, so a pad's L3 taps and its R2 is the microphone, which melonDS DS's default "Hold" mode
+keeps on while held; see FR-DS-3.)
 
 **Framebuffer**: hybrid layouts render all screens (large + small, or large + both smalls) into a
 single packed OpenGL/software framebuffer sized for that layout — vertex counts differ (12 vs 18,
