@@ -2322,7 +2322,15 @@ mod tests {
         let (_sdl, canvas) = offscreen_renderer();
         let creator = canvas.texture_creator();
         let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
-        for (system, aspect) in [("gc", 4.0 / 3.0), ("wii", 16.0 / 9.0), ("gc", 4.0 / 3.0)] {
+        // FCE Ultra GX's own rate on each System, as measured with Dolphin as the first Core in
+        // a process (so no previous Game's rate could leak in): used here, not
+        // `session.core.av_info().fps`, since that is read from the same stale place as
+        // `session.fps` and would still agree with it when `rereads_timing` is broken.
+        for (system, aspect, fps) in [
+            ("gc", 4.0 / 3.0, 50.0),
+            ("wii", 16.0 / 9.0, 59.94),
+            ("gc", 4.0 / 3.0, 50.0),
+        ] {
             let (_root, data, ctx, game) = dolphin_world(system);
             let shot = data.path().join("shot.bmp");
             let mut session = Session::start(&Play::resume(game), &ctx, gfx.gl_context(), None, Some(60.0))
@@ -2332,10 +2340,10 @@ mod tests {
             assert_eq!(session.core.av_info().aspect_ratio, aspect, "{system}");
             assert_sound_at_the_cores_rate(&mut session);
             tick_n(&mut session, &mut gfx, 1);
-            assert_eq!(
-                session.fps,
-                session.core.av_info().fps,
-                "{system}: frames at the Game's rate"
+            assert!(
+                (session.fps - fps).abs() < 0.1,
+                "{system}: frames at the Game's own rate, not the previous Game's: {} vs {fps}",
+                session.fps
             );
         }
     }
