@@ -41,6 +41,9 @@ The story in brackets stays open on GitHub until its checks pass.
 - [ ] Holding a direction in the Carousel speeds up and wraps around. (US-38)
 - [ ] The Controller test with real pads, including hold to exit. (US-34)
 - [ ] Menu button style with a real pad in each style. (US-32)
+- [ ] With a Switch controller in a PS2 Game, A confirms (✕) and B goes back (○); in an SNES Game, A is
+      still the right button. An Xbox or PlayStation controller in the PS2 Game: the bottom button
+      confirms.
 - [ ] Startup window mode across restarts; window resizing and F11. (US-33)
 
 ## 6. Text input and files

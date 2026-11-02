@@ -11,14 +11,14 @@ use std::time::{Duration, Instant};
 
 use sdl3::AudioSubsystem;
 use sdl3::audio::{AudioFormat, AudioSpec, AudioStreamOwner};
-use sdl3::gamepad::{Axis, Gamepad};
+use sdl3::gamepad::{Axis, Button as PadButton, ButtonLabel, Gamepad};
 use sdl3::keyboard::Scancode;
 use sdl3::sys::video::SDL_GLContext;
 use sdl3::video::Window;
 
 use super::gl::SdlGl;
 use super::glx::GlxGl;
-use super::input::{self, HeldOver, Mouse, PadState, PauseTrigger, TouchControls};
+use super::input::{self, FaceLetters, HeldOver, Mouse, PadState, PauseTrigger, TouchControls};
 use super::saves::{self, Tracker};
 use super::states::{self, SLOTS, StatePaths};
 use super::timing::{self, AUDIO_MAX, PlayTimer, Scheduler};
@@ -67,6 +67,8 @@ pub struct Session {
     touch: Option<TouchControls>,
     /// Whether the left stick also presses the d-pad ([`cores::CoreInfo::stick_is_dpad`]).
     stick_dpad: bool,
+    /// Whether a Nintendo-lettered pad's face buttons map by letter ([`input::faces_by_letter`]).
+    by_letter: bool,
     /// How fast the Game really ran, logged when the session ends.
     pace: Pace,
     /// Set once, by [`Session::start`]: the message to show the player when they chose a Save
@@ -177,7 +179,20 @@ pub fn pad_state(gamepad: &Gamepad) -> PadState {
     state.right_y = gamepad.axis(Axis::RightY);
     state.left_trigger = gamepad.axis(Axis::TriggerLeft);
     state.right_trigger = gamepad.axis(Axis::TriggerRight);
+    state.letters = face_letters(gamepad);
     state
+}
+
+/// Which letters an open SDL gamepad's face buttons carry: Nintendo when SDL labels its right
+/// button A or its bottom one B (SDL itself names the buttons by position).
+pub fn face_letters(gamepad: &Gamepad) -> FaceLetters {
+    // The sdl3 crate's name for SDL_GetGamepadButtonLabel.
+    let label = |button| gamepad.button_label_for_gamepad_type(button);
+    if label(PadButton::East) == ButtonLabel::A || label(PadButton::South) == ButtonLabel::B {
+        FaceLetters::Nintendo
+    } else {
+        FaceLetters::Other
+    }
 }
 
 /// The options `core` runs `system`'s Game at `game` with: for a System with two screens, in the
@@ -317,6 +332,7 @@ impl Session {
             paused: false,
             touch: core_info.touch.map(TouchControls::new),
             stick_dpad: core_info.stick_is_dpad(),
+            by_letter: input::faces_by_letter(system),
             pace: Pace::default(),
             start_message,
         })
@@ -384,8 +400,14 @@ impl Session {
     ) -> bool {
         let keyboard = input::keyboard_buttons(&down);
         let esc = down(Scancode::Escape);
-        let (mut input, paused) =
-            input::frame_input_with(pads, keyboard, esc, &mut self.pause, self.stick_dpad);
+        let (mut input, paused) = input::frame_input_with(
+            pads,
+            keyboard,
+            esc,
+            &mut self.pause,
+            self.stick_dpad,
+            self.by_letter,
+        );
         if paused {
             return true;
         }
@@ -2512,6 +2534,77 @@ mod tests {
                 "{system}: frames at the Game's own rate, not the previous Game's: {} vs {fps}",
                 session.fps
             );
+        }
+    }
+
+    /// SDL's own label lookup, on virtual gamepads that report the vendor and product of real
+    /// controllers: a Switch Pro Controller is Nintendo-lettered, an Xbox or PlayStation pad is not,
+    /// and the Switch pad's A (right) reaches a PS2 Core as ✕ (RetroPad B) but an SNES Core as A.
+    #[test]
+    fn sdl_labels_a_switch_pro_controller_nintendo_lettered_and_xbox_and_playstation_pads_not() {
+        use sdl3::sys::joystick::{
+            SDL_AttachVirtualJoystick, SDL_DetachVirtualJoystick, SDL_JOYSTICK_TYPE_GAMEPAD,
+            SDL_VirtualJoystickDesc,
+        };
+
+        let sdl = sdl3::init().unwrap();
+        let gamepads = sdl.gamepad().unwrap();
+        let open = |vendor: u16, product: u16| {
+            let desc = SDL_VirtualJoystickDesc {
+                r#type: SDL_JOYSTICK_TYPE_GAMEPAD.0 as u16,
+                vendor_id: vendor,
+                product_id: product,
+                naxes: 6,
+                nbuttons: 15,
+                name: c"Game37 test pad".as_ptr(),
+                ..SDL_VirtualJoystickDesc::new()
+            };
+            // SAFETY: `desc` is a valid descriptor, read during the call.
+            let id = unsafe { SDL_AttachVirtualJoystick(&desc) };
+            assert_ne!(id.0, 0, "{}", sdl3::get_error());
+            let pad = gamepads.open(id.into()).unwrap();
+            (id, pad)
+        };
+        let pads = [
+            (
+                open(0x057e, 0x2009),
+                FaceLetters::Nintendo,
+                "Switch Pro Controller",
+            ),
+            (open(0x045e, 0x02ea), FaceLetters::Other, "Xbox One controller"),
+            (open(0x054c, 0x0ce6), FaceLetters::Other, "DualSense"),
+        ];
+        for ((_, pad), want, name) in &pads {
+            assert_eq!(face_letters(pad), *want, "{name}: {:?}", pad.r#type());
+            assert_eq!(pad_state(pad).letters, *want, "{name}");
+        }
+
+        let ((_, switch), _, _) = &pads[0];
+        let mut a = pad_state(switch);
+        a.press(PadButton::East);
+        let on = |system: &str| {
+            let by_letter = input::faces_by_letter(systems::by_id(system).unwrap());
+            let (input, _) = input::frame_input_with(
+                &[(0, a)],
+                Default::default(),
+                false,
+                &mut PauseTrigger::default(),
+                true,
+                by_letter,
+            );
+            input.mask(0)
+        };
+        assert_eq!(on("ps2"), 1 << crate::libretro::Button::B as u16, "A is ✕ on PS2");
+        assert_eq!(
+            on("snes"),
+            1 << crate::libretro::Button::A as u16,
+            "A is A on SNES"
+        );
+
+        for ((id, pad), _, _) in pads {
+            drop(pad);
+            // SAFETY: `id` is a virtual joystick this test attached, now closed.
+            assert!(unsafe { SDL_DetachVirtualJoystick(id) });
         }
     }
 

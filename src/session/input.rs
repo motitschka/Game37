@@ -1,12 +1,13 @@
 //! What reaches the Core each frame: pads assigned to ports in connection order (FR-EMB-8), pad
-//! buttons mapped by position (FR-EMB-10), the fixed keyboard layout (FR-EMB-9), and the pause
-//! trigger (FR-EMB-3).
+//! buttons mapped by position, or by letter for a Nintendo-lettered pad on a PlayStation System
+//! (FR-EMB-10), the fixed keyboard layout (FR-EMB-9), and the pause trigger (FR-EMB-3).
 
 use sdl3::gamepad::Button as Pad;
 use sdl3::keyboard::Scancode;
 
 use crate::cores::{Swap, TouchScreen};
 use crate::libretro::{Button, InputState, MAX_PORTS, Pointer, Stick};
+use crate::systems::{Maker, System};
 use crate::ui::Rect;
 
 /// Which pad plays on which port. A pad takes the lowest free port when it connects and gives it
@@ -70,11 +71,24 @@ impl<Id: Copy + PartialEq> Ports<Id> {
     }
 }
 
+/// The letters a pad's face buttons carry, as SDL reports them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FaceLetters {
+    /// Xbox letters (A at the bottom), PlayStation symbols, or unknown.
+    #[default]
+    Other,
+    /// Nintendo letters: A on the right, B at the bottom, X on top, Y on the left (Switch Pro
+    /// Controller, Joy-Con pair).
+    Nintendo,
+}
+
 /// One pad's state this frame, read from SDL.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct PadState {
     /// One bit per pressed SDL gamepad button, at its `SDL_GamepadButton` value.
     pub buttons: u32,
+    /// Which letters its face buttons carry.
+    pub letters: FaceLetters,
     pub left_x: i16,
     pub left_y: i16,
     pub right_x: i16,
@@ -136,17 +150,40 @@ const BY_POSITION: [(Pad, Button); 14] = [
     (Pad::DPadRight, Button::Right),
 ];
 
-/// The RetroPad buttons a pad holds, the left stick counting as the d-pad.
+/// A Nintendo-lettered pad's face buttons by their letters, on a PlayStation System: A (right) is
+/// ✕, B (bottom) ○, X (top) □ and Y (left) △, which PlayStation Cores read as RetroPad B, A, Y and
+/// X. The letters land where an Xbox pad's are, so its A confirms in PlayStation Games as theirs does.
+const NINTENDO_BY_LETTER: [(Pad, Button); 4] = [
+    (Pad::East, Button::B),
+    (Pad::South, Button::A),
+    (Pad::North, Button::Y),
+    (Pad::West, Button::X),
+];
+
+/// Whether a System's Games read a Nintendo-lettered pad's face buttons by their letters
+/// ([`NINTENDO_BY_LETTER`]) rather than by position: the PlayStation Systems. Every other pad, and
+/// every pad on the other Systems, maps by position.
+pub fn faces_by_letter(system: &System) -> bool {
+    system.maker == Maker::Sony
+}
+
+/// The RetroPad buttons a pad holds, the left stick counting as the d-pad, every button by position.
 pub fn pad_buttons(pad: &PadState) -> InputState {
-    pad_buttons_with(pad, true)
+    pad_buttons_with(pad, true, false)
 }
 
 /// The RetroPad buttons a pad holds. With `stick_dpad`, the left stick past half way also presses
 /// the d-pad, for Systems without an analog stick; Cores of Systems with one (N64, PSP) read the
-/// stick as analog only, so it doesn't press the d-pad as well.
-pub fn pad_buttons_with(pad: &PadState, stick_dpad: bool) -> InputState {
+/// stick as analog only, so it doesn't press the d-pad as well. With `by_letter`
+/// ([`faces_by_letter`]), a Nintendo-lettered pad's face buttons map by their letters.
+pub fn pad_buttons_with(pad: &PadState, stick_dpad: bool, by_letter: bool) -> InputState {
+    let letters = by_letter && pad.letters == FaceLetters::Nintendo;
     let mut input = InputState::default();
-    for (from, to) in BY_POSITION {
+    for (from, by_position) in BY_POSITION {
+        let to = match NINTENDO_BY_LETTER.iter().find(|(face, _)| *face == from) {
+            Some(&(_, by_letter)) if letters => by_letter,
+            _ => by_position,
+        };
         if pad.is_pressed(from) {
             input.set(0, to, true);
         }
@@ -347,21 +384,22 @@ pub fn frame_input(
     esc: bool,
     pause: &mut PauseTrigger,
 ) -> (InputState, bool) {
-    frame_input_with(pads, keyboard, esc, pause, true)
+    frame_input_with(pads, keyboard, esc, pause, true, false)
 }
 
-/// [`frame_input`], with the left stick pressing the d-pad only if `stick_dpad` (see
-/// [`pad_buttons_with`]).
+/// [`frame_input`], with the left stick pressing the d-pad only if `stick_dpad`, and a
+/// Nintendo-lettered pad's face buttons by letter if `by_letter` (see [`pad_buttons_with`]).
 pub fn frame_input_with(
     pads: &[(usize, PadState)],
     keyboard: InputState,
     esc: bool,
     pause: &mut PauseTrigger,
     stick_dpad: bool,
+    by_letter: bool,
 ) -> (InputState, bool) {
     let mut input = InputState::default();
     for (port, pad) in pads {
-        let mut buttons = pad_buttons_with(pad, stick_dpad);
+        let mut buttons = pad_buttons_with(pad, stick_dpad, by_letter);
         if is_chord(pad) {
             buttons.set(0, Button::Select, false);
             buttons.set(0, Button::Start, false);
@@ -549,6 +587,127 @@ mod tests {
         );
     }
 
+    /// Port 0's buttons when a pad with `letters` holds `held` on `system`, as a session there reads
+    /// them.
+    fn on(system: &str, letters: FaceLetters, held: &[Pad]) -> u16 {
+        let system = crate::systems::by_id(system).unwrap();
+        let pad = PadState { letters, ..pad(held) };
+        let mut pause = PauseTrigger::default();
+        let by_letter = faces_by_letter(system);
+        let (input, _) = frame_input_with(
+            &[(0, pad)],
+            InputState::default(),
+            false,
+            &mut pause,
+            true,
+            by_letter,
+        );
+        input.mask(0)
+    }
+
+    fn bit(button: Button) -> u16 {
+        1 << button as u16
+    }
+
+    #[test]
+    fn a_nintendo_lettered_pad_maps_by_letter_on_playstation_systems() {
+        // PlayStation Cores read RetroPad B as ✕, A as ○, Y as □ and X as △.
+        let by_letter = [
+            (Pad::East, Button::B, "A is ✕"),
+            (Pad::South, Button::A, "B is ○"),
+            (Pad::North, Button::Y, "X is □"),
+            (Pad::West, Button::X, "Y is △"),
+        ];
+        for system in ["ps1", "ps2", "psp"] {
+            for (face, want, what) in by_letter {
+                assert_eq!(
+                    on(system, FaceLetters::Nintendo, &[face]),
+                    bit(want),
+                    "{system}: {what}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_nintendo_lettered_pad_maps_by_position_on_nintendo_systems() {
+        for system in ["snes", "gc", "n64", "3ds"] {
+            for (face, want) in &BY_POSITION[..4] {
+                assert_eq!(
+                    on(system, FaceLetters::Nintendo, &[*face]),
+                    bit(*want),
+                    "{system}: {face:?}"
+                );
+            }
+        }
+        assert_eq!(
+            on("snes", FaceLetters::Nintendo, &[Pad::East]),
+            bit(Button::A),
+            "A is still the right button"
+        );
+    }
+
+    #[test]
+    fn xbox_and_playstation_pads_map_by_position_on_playstation_systems() {
+        // SDL reports neither as Nintendo-lettered: their bottom button (A, ✕) is already ✕.
+        for (face, want) in &BY_POSITION[..4] {
+            assert_eq!(on("ps2", FaceLetters::Other, &[*face]), bit(*want), "{face:?}");
+        }
+        assert_eq!(
+            on("ps2", FaceLetters::Other, &[Pad::South]),
+            bit(Button::B),
+            "A or ✕ is ✕"
+        );
+    }
+
+    #[test]
+    fn two_kinds_of_pad_on_two_ports_each_map_their_own_way() {
+        let nintendo = PadState {
+            letters: FaceLetters::Nintendo,
+            ..pad(&[Pad::East])
+        };
+        let xbox = pad(&[Pad::East]);
+        let mut pause = PauseTrigger::default();
+        let ps2 = faces_by_letter(crate::systems::by_id("ps2").unwrap());
+        let pads = [(0, nintendo), (1, xbox)];
+        let (input, _) = frame_input_with(&pads, InputState::default(), false, &mut pause, true, ps2);
+        assert_eq!(input.mask(0), bit(Button::B), "the Switch pad's A is ✕");
+        assert_eq!(input.mask(1), bit(Button::A), "the Xbox pad's B is ○");
+    }
+
+    #[test]
+    fn a_nintendo_lettered_pad_keeps_its_other_buttons_and_the_pause_chord_on_playstation() {
+        for (from, want) in &BY_POSITION[4..] {
+            assert_eq!(on("ps2", FaceLetters::Nintendo, &[*from]), bit(*want), "{from:?}");
+        }
+        let chord = PadState {
+            letters: FaceLetters::Nintendo,
+            ..pad(&[Pad::Back, Pad::Start])
+        };
+        let mut pause = PauseTrigger::default();
+        frame_input_with(&[], InputState::default(), false, &mut pause, true, true);
+        let (input, paused) = frame_input_with(
+            &[(0, chord)],
+            InputState::default(),
+            false,
+            &mut pause,
+            true,
+            true,
+        );
+        assert!(paused, "Select+Start still pauses");
+        assert_eq!(input.mask(0), 0);
+    }
+
+    #[test]
+    fn only_the_playstation_systems_read_faces_by_letter() {
+        let by_letter: Vec<_> = crate::systems::SYSTEMS
+            .iter()
+            .filter(|s| faces_by_letter(s))
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(by_letter, ["ps1", "ps2", "psp", "ps3", "ps4"]);
+    }
+
     #[test]
     fn an_analog_system_reads_the_left_stick_as_analog_only() {
         let pad = PadState {
@@ -557,12 +716,19 @@ mod tests {
             ..PadState::default()
         };
         assert_eq!(
-            pad_buttons_with(&pad, false).mask(0),
+            pad_buttons_with(&pad, false, false).mask(0),
             0,
             "no d-pad from the stick"
         );
         let mut pause = PauseTrigger::default();
-        let (input, _) = frame_input_with(&[(0, pad)], InputState::default(), false, &mut pause, false);
+        let (input, _) = frame_input_with(
+            &[(0, pad)],
+            InputState::default(),
+            false,
+            &mut pause,
+            false,
+            false,
+        );
         assert_eq!(input.mask(0), 0);
         assert_eq!(
             input.stick(0, Stick::Left),

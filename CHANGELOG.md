@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0-beta.2 (unreleased)
+
+### Changed
+- **Switch controllers on PS1, PS2 and PSP:** a controller with Nintendo letters (Switch Pro
+  Controller, Joy-Con pair) maps its face buttons by letter in PlayStation Games: A is ✕, B is ○, X is
+  □ and Y is △, so A confirms and B goes back, as on an Xbox controller. Before, they mapped by
+  position, which made B confirm. On every other System, and for every other controller, buttons
+  still map by position.
+
 ## 0.2.0-beta.1 (2026-11-02)
 
 PS2, 3DS, GameCube and Wii now play inside Game37, like the older Systems, with libretro Cores in
