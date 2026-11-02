@@ -632,6 +632,14 @@ impl CoreInfo {
         std::ptr::eq(self, &DOLPHIN)
     }
 
+    /// Whether this Core is loaded into an address window
+    /// ([`crate::libretro::CoreSetup::address_window`]): LRPS2, whose recompilers can only reach
+    /// main and code maps near its image. After other Cores in the same run, there is often no
+    /// such room near wherever its library would land, and it then aborts Game37.
+    pub fn needs_address_window(&self) -> bool {
+        std::ptr::eq(self, &LRPS2)
+    }
+
     /// The controller this Core is told sits in each port for `system`'s Games: a RetroPad, but on
     /// Wii Dolphin's Wii Remote with a Nunchuk.
     pub fn port_device(&self, system: &System) -> PortDevice {
@@ -1486,7 +1494,7 @@ mod tests {
     }
 
     /// FR-NEW-3: on Wii the controller stands in for a Wii Remote, with a Nunchuk; everywhere
-    /// else it is a RetroPad. Only Dolphin needs its timing reread.
+    /// else it is a RetroPad. Only Dolphin needs its timing reread, and only LRPS2 an address window.
     #[test]
     fn dolphin_gets_a_wii_remote_and_nunchuk_on_wii_and_its_timing_reread() {
         for system in &crate::systems::SYSTEMS {
@@ -1498,6 +1506,7 @@ mod tests {
             };
             assert_eq!(core.port_device(system), expected, "{}", system.id);
             assert_eq!(core.rereads_timing(), core.name == "Dolphin", "{}", system.id);
+            assert_eq!(core.needs_address_window(), system.id == "ps2", "{}", system.id);
         }
         assert_eq!(
             DOLPHIN_WII_REMOTE_AND_NUNCHUK.id(),

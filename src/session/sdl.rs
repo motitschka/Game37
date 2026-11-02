@@ -266,6 +266,7 @@ impl Session {
             options: &options,
             device: core_info.port_device(system),
             reread_timing: core_info.rereads_timing(),
+            address_window: core_info.needs_address_window(),
         };
         // When the Core says why (a missing BIOS, an encrypted dump), that is the reason shown
         // (FR-EMB-14).
@@ -1618,6 +1619,23 @@ mod tests {
     const PRESS_TICKS: usize = 4;
     const SETTLE_TICKS: usize = 30;
 
+    /// Links the owner's PS2 BIOS into the Games Root `root`. Only the BIOS dump(s) are
+    /// symlinked, into a temp `bios/pcsx2/bios/`: LRPS2 writes `.nvm`/`.mec` and other folders
+    /// beside the dump, under its `pcsx2/` system directory, and those must land in `root`, never
+    /// in `.testdata` itself.
+    fn link_ps2_bios(root: &Path) {
+        let bios_dir = root.join("bios/pcsx2/bios");
+        fs::create_dir_all(&bios_dir).unwrap();
+        for entry in fs::read_dir(Path::new(TESTDATA).join("bios/pcsx2/bios")).unwrap() {
+            let entry = entry.unwrap();
+            std::os::unix::fs::symlink(entry.path(), bios_dir.join(entry.file_name())).unwrap();
+        }
+        assert!(
+            cores::PS2_BIOS.found(root).is_some(),
+            "a PS2 BIOS dump of 4 to 8 MiB"
+        );
+    }
+
     /// The owner's PS2 BIOS (FR-NEW-1): wLaunchELF boots on LRPS2 through a PS2 session beside
     /// the opengl renderer, and its picture shows on the renderer. Save State slot 1 is saved at
     /// the menu's starting position; one Down press from there gives the picture `one_down`, and
@@ -1639,19 +1657,7 @@ mod tests {
 
         let _serial = serial();
         let (root, data, ctx, elf) = ps2_world();
-        // Only the BIOS dump(s) are symlinked, into a temp `bios/pcsx2/bios/`: LRPS2 writes
-        // `.nvm`/`.mec` and other folders beside the dump, under its `pcsx2/` system directory,
-        // and those must land in `root`, never in `.testdata` itself.
-        let bios_dir = root.path().join("bios/pcsx2/bios");
-        fs::create_dir_all(&bios_dir).unwrap();
-        for entry in fs::read_dir(Path::new(TESTDATA).join("bios/pcsx2/bios")).unwrap() {
-            let entry = entry.unwrap();
-            std::os::unix::fs::symlink(entry.path(), bios_dir.join(entry.file_name())).unwrap();
-        }
-        assert!(
-            cores::PS2_BIOS.found(root.path()).is_some(),
-            "a PS2 BIOS dump of 4 to 8 MiB"
-        );
+        link_ps2_bios(root.path());
         let (_sdl, canvas) = offscreen_renderer();
         let creator = canvas.texture_creator();
         let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
@@ -1722,6 +1728,139 @@ mod tests {
         assert!(
             shown_exactly(&mut session, &mut gfx, &ctx, &shot) == one_down,
             "the Resume State brings back the menu's starting position"
+        );
+    }
+
+    /// Set in the child process [`needs_ps2_bios_lrps2_boots_after_azahar_dolphin_and_mupen64plus_next`]
+    /// runs itself in.
+    const PS2_AFTER_OTHERS_CHILD: &str = "GAME37_TEST_PS2_AFTER_OTHER_CORES";
+
+    /// Kills a child process (by its handle, so by pid) that is still running when the test ends.
+    struct KillOnDrop(std::process::Child);
+
+    impl Drop for KillOnDrop {
+        fn drop(&mut self) {
+            if let Ok(None) = self.0.try_wait() {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+    }
+
+    /// The owner's PS2 BIOS: a PS2 Game started after Azahar, Dolphin on GameCube and
+    /// Mupen64Plus-Next have each played a Game in the same process boots and shows its picture.
+    /// Those Cores stay mapped (`RTLD_NODELETE`) beside a 1 GB reservation Mupen64Plus-Next never
+    /// releases and the holes their maps leave, and LRPS2's library would go into one of those
+    /// holes, with no room near it for the main and code maps its recompilers must reach: it then
+    /// says it "could not place" them and aborts the process (every time, in 8 runs, without the
+    /// address window). An abort ends every test of the process, so the Games play in a child
+    /// process, this test run again, and the test fails when the child doesn't exit cleanly or
+    /// LRPS2 says it couldn't place its maps.
+    #[test]
+    #[ignore = "needs a PS2 BIOS dump in /home/matei/Game37/.testdata/bios/pcsx2/bios"]
+    fn needs_ps2_bios_lrps2_boots_after_azahar_dolphin_and_mupen64plus_next() {
+        let _serial = serial();
+        if std::env::var_os(PS2_AFTER_OTHERS_CHILD).is_some() {
+            return ps2_after_other_cores();
+        }
+        let dir = TempDir::new().unwrap();
+        let log_path = dir.path().join("child.log");
+        let log = fs::File::create(&log_path).unwrap();
+        let name = "needs_ps2_bios_lrps2_boots_after_azahar_dolphin_and_mupen64plus_next";
+        let path = format!("{}::{name}", module_path!().split_once("::").unwrap().1);
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--ignored", "--exact", &path, "--nocapture", "--test-threads=1"])
+            .env(PS2_AFTER_OTHERS_CHILD, "1")
+            .stdout(log.try_clone().unwrap())
+            .stderr(log)
+            .spawn()
+            .unwrap();
+        let mut child = KillOnDrop(child);
+        let deadline = Instant::now() + Duration::from_secs(600);
+        let status = loop {
+            if let Some(status) = child.0.try_wait().unwrap() {
+                break status;
+            }
+            assert!(Instant::now() < deadline, "the child still runs after 10 minutes");
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        let out = fs::read_to_string(&log_path).unwrap_or_default();
+        let tail: Vec<_> = out
+            .lines()
+            .rev()
+            .take(30)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let tail = tail.join("\n");
+        assert!(
+            !out.contains("Could not place"),
+            "LRPS2 couldn't place its maps:\n{tail}"
+        );
+        assert!(status.success(), "the child process ended with {status}:\n{tail}");
+        assert!(out.contains("1 passed"), "the child ran the test:\n{tail}");
+    }
+
+    /// Plays ftpd on Azahar, FCE Ultra GX on Dolphin (GameCube) and N64 NICCC on
+    /// Mupen64Plus-Next for 300 frames each, then boots wLaunchELF on LRPS2 and checks its picture.
+    fn ps2_after_other_cores() {
+        use crate::ui::text::Fonts;
+
+        let (_sdl, canvas) = offscreen_renderer();
+        let creator = canvas.texture_creator();
+        let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
+        let n64_world = || {
+            let file = "N64 NICCC (World).n64";
+            let root = TempDir::new().unwrap();
+            fs::create_dir_all(root.path().join("n64")).unwrap();
+            fs::copy(
+                Path::new(TESTDATA).join("games/n64").join(file),
+                root.path().join("n64").join(file),
+            )
+            .unwrap();
+            let data = TempDir::new().unwrap();
+            std::os::unix::fs::symlink(Path::new(TESTDATA).join("data/cores"), data.path().join("cores"))
+                .unwrap();
+            let mut ctx = Ctx::empty();
+            ctx.games_root = root.path().to_path_buf();
+            ctx.data_dir = data.path().to_path_buf();
+            let game = GameRow {
+                system: "n64".into(),
+                rel_path: format!("n64/{file}"),
+                title: "N64 NICCC".into(),
+                ..ps2_game(file)
+            };
+            (root, data, ctx, game)
+        };
+        for (root, data, ctx, game) in [three_ds_world(), dolphin_world("gc"), n64_world()] {
+            let mut session = Session::start(
+                &Play::resume(game.clone()),
+                &ctx,
+                gfx.gl_context(),
+                None,
+                Some(60.0),
+            )
+            .unwrap_or_else(|e| panic!("{}: {e}", game.system));
+            tick_n(&mut session, &mut gfx, 300);
+            drop(session);
+            drop((root, data));
+        }
+
+        let (root, data, ctx, elf) = ps2_world();
+        link_ps2_bios(root.path());
+        let mut session = Session::start(
+            &Play::resume(ps2_game(elf)),
+            &ctx,
+            gfx.gl_context(),
+            None,
+            Some(60.0),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        tick_n(&mut session, &mut gfx, 1200);
+        assert_a_picture(
+            &shown(&mut session, &mut gfx, &ctx, &data.path().join("shot.bmp")),
+            "booted after the other Cores",
         );
     }
 

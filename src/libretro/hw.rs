@@ -1001,7 +1001,7 @@ mod tests {
             game_path: c"/game".into(),
             game_data: None,
             lib: None,
-            _claim: Claim::take().expect("no other Core is loaded"),
+            claim: Claim::take().expect("no other Core is loaded"),
             _not_send: std::marker::PhantomData,
         };
 

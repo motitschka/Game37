@@ -13,6 +13,7 @@ mod ffi;
 mod hw;
 #[cfg(test)]
 pub(crate) mod tests;
+mod window;
 
 use std::ffi::{CString, c_int, c_uint};
 use std::fmt;
@@ -58,12 +59,15 @@ impl PortDevice {
 /// ahead of its own defaults, and `device` is the controller it is told sits in every port. With
 /// `reread_timing`, the frame rate and sample rate are read from the Core again after every frame
 /// (`retro_get_system_av_info`), for a Core whose rates follow the Game without it ever announcing
-/// a change (`SET_SYSTEM_AV_INFO`).
+/// a change (`SET_SYSTEM_AV_INFO`). With `address_window`, the Core's library is loaded into an
+/// address window kept free for the maps it places within reach of its image when it loads a Game
+/// (LRPS2's, see `window`).
 #[derive(Debug, Clone, Copy)]
 pub struct CoreSetup<'a> {
     pub options: &'a [(&'a str, &'a str)],
     pub device: PortDevice,
     pub reread_timing: bool,
+    pub address_window: bool,
 }
 
 impl Default for CoreSetup<'_> {
@@ -73,6 +77,7 @@ impl Default for CoreSetup<'_> {
             options: &[],
             device: PortDevice::RETROPAD,
             reread_timing: false,
+            address_window: false,
         }
     }
 }
@@ -112,6 +117,8 @@ pub enum CoreError {
     Unserialize,
     /// The Core asked for OpenGL rendering, and it couldn't be set up.
     Gl(String),
+    /// The Core needs an address window, and none could be reserved.
+    AddressWindow(PathBuf),
 }
 
 impl fmt::Display for CoreError {
@@ -134,6 +141,9 @@ impl fmt::Display for CoreError {
             CoreError::Serialize => write!(f, "The Core couldn't save its state"),
             CoreError::Unserialize => write!(f, "The Core couldn't restore the state"),
             CoreError::Gl(e) => write!(f, "Can't start OpenGL for the Core: {e}"),
+            CoreError::AddressWindow(path) => {
+                write!(f, "Can't make room in memory for the Core {}", path.display())
+            }
         }
     }
 }
@@ -331,20 +341,25 @@ impl InputState {
     }
 }
 
-/// Holds the process-wide one-Core claim; releasing it is the last thing a Core does.
-struct Claim;
+/// Holds the process-wide one-Core claim, and the address window when the Core was loaded into
+/// it; releasing them is the last thing a Core does.
+struct Claim {
+    window: Option<window::Lease>,
+}
 
 impl Claim {
     fn take() -> Option<Claim> {
         LOADED
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .ok()
-            .map(|_| Claim)
+            .map(|_| Claim { window: None })
     }
 }
 
 impl Drop for Claim {
     fn drop(&mut self) {
+        // The window is held again before another Core can load.
+        drop(self.window.take());
         LOADED.store(false, Ordering::Release);
     }
 }
@@ -370,7 +385,7 @@ pub struct Core {
     game_data: Option<Vec<u8>>,
     /// Taken and dropped last in `Drop`, after the Core has shut down.
     lib: Option<Library>,
-    _claim: Claim,
+    claim: Claim,
     _not_send: PhantomData<*const ()>,
 }
 
@@ -388,16 +403,34 @@ impl Core {
         setup: CoreSetup<'_>,
         gl: Option<Box<dyn GlHost>>,
     ) -> Result<Core, CoreError> {
-        let claim = Claim::take().ok_or(CoreError::AlreadyLoaded)?;
+        let mut claim = Claim::take().ok_or(CoreError::AlreadyLoaded)?;
+        if setup.address_window {
+            let lease = window::Lease::take().ok_or(CoreError::AddressWindow(core_path.to_path_buf()))?;
+            claim.window = Some(lease);
+        }
         // SAFETY: loading a shared library runs its initialisers. A Core is a plain C library and
         // its initialisers only set up its own statics; this is the trust any frontend places in
         // the Core it was given.
-        let lib: Library = unsafe { unix::Library::open(Some(core_path), DLOPEN_FLAGS) }
-            .map_err(|e| CoreError::Open(core_path.to_path_buf(), e))?
-            .into();
+        let open = || unsafe { unix::Library::open(Some(core_path), DLOPEN_FLAGS) };
+        let lib: Library = match &claim.window {
+            Some(window) => window.load(open),
+            None => open(),
+        }
+        .map_err(|e| CoreError::Open(core_path.to_path_buf(), e))?
+        .into();
         // SAFETY: the library is treated as a libretro Core, and `api` is stored next to `lib` in the
         // `Core`, which unloads `lib` only after its last call through `api`.
         let api = unsafe { Api::load(&lib) }.map_err(|s| CoreError::NotACore(core_path.to_path_buf(), s))?;
+        // Only in a race with another thread's maps; the Core then finds room for its own maps
+        // where it can, as without a window.
+        if let Some(window) = &claim.window
+            && !window.contains(api.init as usize)
+        {
+            eprintln!(
+                "game37: {} was loaded outside its address window",
+                core_path.display()
+            );
+        }
         // SAFETY: `retro_api_version` takes no arguments and may be called before `retro_init`.
         let version = unsafe { (api.api_version)() };
         if version != ffi::RETRO_API_VERSION {
@@ -451,7 +484,7 @@ impl Core {
             game_path: game_cpath,
             game_data: None,
             lib,
-            _claim: claim,
+            claim,
             _not_send: PhantomData,
         };
 
@@ -481,6 +514,10 @@ impl Core {
         };
         // Only a message sent while loading the Game can say why loading it failed.
         callbacks::clear_message();
+        // The Core places its maps while it loads the Game.
+        if let Some(window) = &core.claim.window {
+            window.open();
+        }
         // SAFETY: `info` points at the path and data owned by `core`, which keeps both until after
         // `retro_unload_game`; the heap buffers don't move when `core` does.
         if !unsafe { (core.api.load_game)(&info) } {
