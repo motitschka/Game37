@@ -1607,12 +1607,31 @@ mod tests {
         );
     }
 
+    /// One press of the Down key: held for [`PRESS_TICKS`] ticks, released, then
+    /// [`SETTLE_TICKS`] ticks for wLaunchELF's menu to settle, all at 60 Hz.
+    fn press_down(session: &mut Session, gfx: &mut Gfx<'_>) {
+        for _ in 0..PRESS_TICKS {
+            assert!(!session.tick(gfx, 1.0 / 60.0, &[], Mouse::default(), |s| s == Scancode::Down));
+        }
+        tick_n(session, gfx, SETTLE_TICKS);
+    }
+    const PRESS_TICKS: usize = 4;
+    const SETTLE_TICKS: usize = 30;
+
     /// The owner's PS2 BIOS (FR-NEW-1): wLaunchELF boots on LRPS2 through a PS2 session beside
-    /// the opengl renderer, and its picture shows on the renderer. Save State slot 1 saves the
-    /// picture at the menu's starting position; moving the cursor away and loading the slot again
-    /// brings back that exact picture, not the moved one (so a no-op load would fail this), and
-    /// the same is true of the Resume State in a new session after quitting. Frames run with
-    /// LRPS2's fastmem on (its SIGSEGV handler beside Rust's).
+    /// the opengl renderer, and its picture shows on the renderer. Save State slot 1 is saved at
+    /// the menu's starting position; one Down press from there gives the picture `one_down`, and
+    /// a second press moves the highlight on. Loading slot 1, slot 1 in a new session, and the
+    /// Resume State (written straight after that load) are each followed by the same one press,
+    /// which must give `one_down` again: a load that didn't restore would leave the highlight a
+    /// press further on.
+    ///
+    /// The press is there because, after a load, LRPS2's OpenGL renderer shows nothing new until
+    /// the Game draws: `GSState::Defrost` empties the texture cache (`Reset(true)` →
+    /// `GSTextureCache::RemoveAll`), and `GSTextureCache::LookupDisplayTarget` only makes a display
+    /// target again after a fresh EE→GS transfer. wLaunchELF only redraws on input, so without the
+    /// press every frame after a load is a dupe and Game37 keeps showing the pre-load picture (a
+    /// Known issue). Frames run with LRPS2's fastmem on (its SIGSEGV handler beside Rust's).
     #[test]
     #[ignore = "needs a PS2 BIOS dump in /home/matei/Game37/.testdata/bios/pcsx2/bios"]
     fn needs_ps2_bios_lrps2_boots_wlaunchelf_on_the_renderer_and_states_round_trip() {
@@ -1650,32 +1669,31 @@ mod tests {
         tick_n(&mut session, &mut gfx, 1200);
         let booted = shown_exactly(&mut session, &mut gfx, &ctx, &shot);
         assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "booted");
-
         session.save_slot(1).unwrap_or_else(|e| panic!("save: {e}"));
 
-        // Moves wLaunchELF's menu cursor, so the picture changes: a no-op load would leave it
-        // here rather than bringing back the one saved above.
-        for _ in 0..30 {
-            assert!(!session.tick(&mut gfx, 1.0 / 60.0, &[], Mouse::default(), |s| s
-                == Scancode::Down));
-        }
-        tick_n(&mut session, &mut gfx, 30);
+        // The menu starts with no item highlighted; each press highlights the next of its three
+        // items, wrapping around: one press highlights the first, a second the second.
+        press_down(&mut session, &mut gfx);
+        let one_down = shown_exactly(&mut session, &mut gfx, &ctx, &shot);
+        assert!(
+            one_down != booted,
+            "one Down press highlights the menu's first item"
+        );
+        press_down(&mut session, &mut gfx);
         let moved = shown_exactly(&mut session, &mut gfx, &ctx, &shot);
-        assert_ne!(
-            moved, booted,
-            "the cursor moved the picture away from the saved one"
-        );
+        assert!(moved != one_down, "a second Down press moves the highlight on");
 
+        // From `moved`, a load that didn't restore would highlight the third item, not the first.
+        // The Resume State is written straight after the load, so it too holds the starting
+        // position, and the session moves on from there before it ends.
         session.load_slot(1).unwrap_or_else(|e| panic!("load: {e}"));
-        tick_n(&mut session, &mut gfx, 60);
-        assert_eq!(
-            shown_exactly(&mut session, &mut gfx, &ctx, &shot),
-            booted,
-            "the slot brings back the picture from save time, not the moved one"
-        );
-
         session.write_resume();
         let resume = session.states.resume();
+        press_down(&mut session, &mut gfx);
+        assert!(
+            shown_exactly(&mut session, &mut gfx, &ctx, &shot) == one_down,
+            "slot 1 brings back the menu's starting position"
+        );
         drop(session);
         assert!(
             fs::metadata(&resume).is_ok_and(|m| m.len() > 0),
@@ -1689,22 +1707,21 @@ mod tests {
         let mut session = Session::start(&from_slot, &ctx, gfx.gl_context(), None, Some(60.0))
             .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(session.start_message, None, "slot 1 restored in a new session");
-        tick_n(&mut session, &mut gfx, 60);
-        assert_eq!(
-            shown_exactly(&mut session, &mut gfx, &ctx, &shot),
-            booted,
-            "a fresh session also restores the saved picture"
+        press_down(&mut session, &mut gfx);
+        assert!(
+            shown_exactly(&mut session, &mut gfx, &ctx, &shot) == one_down,
+            "slot 1 in a new session brings back the menu's starting position"
         );
+        // The new session has moved on to the first item: the Resume State must take it back.
         let state = fs::read(&resume).unwrap();
         session
             .core
             .unserialize(&state)
             .unwrap_or_else(|e| panic!("resume: {e}"));
-        tick_n(&mut session, &mut gfx, 60);
-        assert_eq!(
-            shown_exactly(&mut session, &mut gfx, &ctx, &shot),
-            booted,
-            "the Resume State also restores the saved picture"
+        press_down(&mut session, &mut gfx);
+        assert!(
+            shown_exactly(&mut session, &mut gfx, &ctx, &shot) == one_down,
+            "the Resume State brings back the menu's starting position"
         );
     }
 
@@ -1909,6 +1926,7 @@ mod tests {
         assert_eq!(session.start_message, None, "slot 1 restored in a new session");
         tick_n(&mut session, &mut gfx, 60);
         assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "from slot 1");
+        // The new session has moved on to the first item: the Resume State must take it back.
         let state = fs::read(&resume).unwrap();
         session
             .core
@@ -2198,6 +2216,7 @@ mod tests {
             shown_exactly(&mut session, gfx, ctx, shot) != saved,
             "moved again"
         );
+        // The new session has moved on to the first item: the Resume State must take it back.
         let state = fs::read(&resume).unwrap();
         session
             .core
