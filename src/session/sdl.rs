@@ -1198,6 +1198,114 @@ mod tests {
         );
     }
 
+    /// A Nintendo-lettered pad with its east button (A) held.
+    fn east_held() -> PadState {
+        let mut east = PadState {
+            letters: FaceLetters::Nintendo,
+            ..Default::default()
+        };
+        east.press(PadButton::East);
+        east
+    }
+
+    /// A Nintendo-lettered pad holding its east button (A) maps to the PlayStation symbols for ✕
+    /// (RetroPad B) on a PSP Game (FR-EMB-10), checked on a real Core: `Session::tick` wires
+    /// `self.by_letter` into `input::frame_input_with`. Setting that call's `by_letter` argument
+    /// to `false` makes this fail.
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn a_nintendo_lettered_pad_maps_its_east_button_by_letter_on_a_psp_game() {
+        let _serial = serial();
+        let east = east_held();
+        let root = TempDir::new().unwrap();
+        let game_dir = root.path().join("psp/CMFileManager");
+        fs::create_dir_all(&game_dir).unwrap();
+        for entry in fs::read_dir(Path::new(TESTDATA).join("games/psp/CMFileManager")).unwrap() {
+            let entry = entry.unwrap();
+            fs::copy(entry.path(), game_dir.join(entry.file_name())).unwrap();
+        }
+        let data = TempDir::new().unwrap();
+        for dir in ["cores", "system"] {
+            std::os::unix::fs::symlink(Path::new(TESTDATA).join("data").join(dir), data.path().join(dir))
+                .unwrap();
+        }
+        let mut ctx = Ctx::empty();
+        ctx.games_root = root.path().to_path_buf();
+        ctx.data_dir = data.path().to_path_buf();
+        let game = GameRow {
+            id: 1,
+            system: "psp".into(),
+            rel_path: "psp/CMFileManager/EBOOT.PBP".into(),
+            title: "CMFileManager".into(),
+            date_added: 0,
+            last_played: None,
+            playtime_secs: 0,
+            favorite: false,
+        };
+        let (_sdl, canvas) = offscreen_renderer();
+        let creator = canvas.texture_creator();
+        let mut gfx = Gfx::new(canvas, &creator, crate::ui::text::Fonts::new().unwrap());
+        let frontend = gfx.gl_context();
+        let mut session = Session::start(&Play::resume(game), &ctx, frontend, None, Some(60.0))
+            .unwrap_or_else(|e| panic!("{e}"));
+        // Lets PPSSPP finish booting before it's asked to quit, and settles `HeldOver` on a
+        // frame with no pads, so it doesn't mistake the button pressed afterwards as held over
+        // from before the Game started and mask it out.
+        for _ in 0..900 {
+            assert!(!session.tick(&mut gfx, 1.0 / 60.0, &[], Mouse::default(), |_| false));
+        }
+        assert!(!session.tick(&mut gfx, 1.0 / 60.0, &[(0, east)], Mouse::default(), |_| false));
+        let mask = session.core.last_input().mask(0);
+        gfx.clear(crate::ui::theme::Colour::hex(0x000000));
+        session.draw(&mut gfx, &ctx);
+        drop(session);
+        assert_eq!(
+            mask,
+            1 << crate::libretro::Button::B as u16,
+            "PSP: Nintendo A maps by letter to ✕ (RetroPad B)"
+        );
+    }
+
+    /// The same Nintendo-lettered pad's east button (A) stays by position, RetroPad A, on an
+    /// SNES Game (FR-EMB-10): SNES isn't a PlayStation System, so it maps by position regardless
+    /// of `self.by_letter`, and this still passes with that argument forced to `false`.
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn a_nintendo_lettered_pad_stays_by_position_on_an_snes_game() {
+        let _serial = serial();
+        let east = east_held();
+        let root = TempDir::new().unwrap();
+        let rel = "snes/240p Test Suite (World).sfc";
+        fs::create_dir_all(root.path().join("snes")).unwrap();
+        fs::copy(Path::new(TESTDATA).join("games").join(rel), root.path().join(rel)).unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = root.path().to_path_buf();
+        ctx.data_dir = Path::new(TESTDATA).join("data");
+        let game = GameRow {
+            id: 1,
+            system: "snes".into(),
+            rel_path: rel.into(),
+            title: "240p Test Suite".into(),
+            date_added: 0,
+            last_played: None,
+            playtime_secs: 0,
+            favorite: false,
+        };
+        let mut session =
+            Session::start(&Play::resume(game), &ctx, None, None, None).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!session.tick(&mut NoPicture, 1.0 / 60.0, &[], Mouse::default(), |_| false));
+        assert!(
+            !session.tick(&mut NoPicture, 1.0 / 60.0, &[(0, east)], Mouse::default(), |_| {
+                false
+            })
+        );
+        assert_eq!(
+            session.core.last_input().mask(0),
+            1 << crate::libretro::Button::A as u16,
+            "SNES: Nintendo A stays by position: RetroPad A"
+        );
+    }
+
     /// New frames go nowhere.
     struct NoPicture;
 
@@ -2547,6 +2655,7 @@ mod tests {
             SDL_VirtualJoystickDesc,
         };
 
+        let _serial = serial();
         let sdl = sdl3::init().unwrap();
         let gamepads = sdl.gamepad().unwrap();
         let open = |vendor: u16, product: u16| {

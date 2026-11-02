@@ -100,7 +100,7 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 - **FR-EMB-7** In-game Saves are always written to disk, regardless of Save States.
 - **FR-EMB-8** 2–4 controllers are supported. Player order follows connection order.
 - **FR-EMB-9** A fixed default keyboard layout allows playing without a controller.
-- **FR-EMB-10** In-game buttons map by position to the original console's controller. The exception: on PS1, PS2 and PSP, a controller with Nintendo letters on its face buttons (Switch Pro Controller, Joy-Con pair: A on the right, B at the bottom) maps them by letter, A to ✕, B to ○, X to □ and Y to △, so its A confirms as on an Xbox controller. Its other buttons, and every other controller, still map by position.
+- **FR-EMB-10** In-game buttons map by position to the original console's controller. The exception: on PS1, PS2 and PSP, a controller with Nintendo letters on its face buttons (Switch Pro Controller, Joy-Con pair, or a single Joy-Con held sideways: A on the right, B at the bottom) maps them by letter, A to ✕, B to ○, X to □ and Y to △, so its A confirms as on an Xbox controller. Its other buttons, and every other controller, still map by position.
 - **FR-EMB-11** There is no fast-forward.
 - **FR-EMB-12** If a required BIOS is missing, Game37 says which file to place in which folder instead of failing silently.
 - **FR-EMB-13** European (PAL) N64 Games are cropped to their picture, without the PAL frame's black borders.

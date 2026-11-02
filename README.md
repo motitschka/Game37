@@ -462,11 +462,11 @@ back; Settings → Controls → Menu button style switches to Xbox or PlayStatio
 | Paste, in a text field | | Ctrl+V | |
 | Fullscreen | | F11 | |
 
-In an embedded game, buttons map by position to the original console's controller. On PS1, PS2 and
-PSP, a controller with Nintendo letters (a Switch Pro Controller or Joy-Con pair) maps its face buttons
-by letter instead: A is ✕, B is ○, X is □ and Y is △, so A confirms and B goes back, as on an Xbox
-controller. Controllers become players 1 to 4 in the order they connect. Without a controller, the keyboard plays like this
-(RetroArch's default layout):
+In an embedded game, buttons map by position to the original console's controller. On PS1, PS2 and PSP, a
+controller with Nintendo letters (a Switch Pro Controller, a Joy-Con pair, or a single Joy-Con held
+sideways, whose right-hand button is A) maps its face buttons by letter instead: A is ✕, B is ○, X is □
+and Y is △, so A confirms and B goes back, as on an Xbox controller. Controllers become players 1 to 4 in
+the order they connect. Without a controller, the keyboard plays like this (RetroArch's default layout):
 
 | Console button | Key |
 |---|---|

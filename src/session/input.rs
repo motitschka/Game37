@@ -163,6 +163,9 @@ const NINTENDO_BY_LETTER: [(Pad, Button); 4] = [
 /// Whether a System's Games read a Nintendo-lettered pad's face buttons by their letters
 /// ([`NINTENDO_BY_LETTER`]) rather than by position: the PlayStation Systems. Every other pad, and
 /// every pad on the other Systems, maps by position.
+///
+/// This also covers PS3 and PS4 by `maker`, though neither has a Core in `cores::for_system` and
+/// so never reaches this function in Game37; that is fine, not a gap to close.
 pub fn faces_by_letter(system: &System) -> bool {
     system.maker == Maker::Sony
 }
