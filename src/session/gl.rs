@@ -196,6 +196,7 @@ mod tests {
 #[cfg(test)]
 mod real_core_tests {
     use std::collections::HashSet;
+    use std::fs;
     use std::path::Path;
 
     use sdl3::pixels::Color;
@@ -278,9 +279,22 @@ mod real_core_tests {
         };
 
         let dirs = TempDir::new().unwrap();
+        // The Game runs from a copy, since some homebrew writes beside itself (CMFileManager its
+        // `debug.log`): the folder of a folder Game (`psp/CMFileManager/EBOOT.PBP`), else the file.
+        let copy = dirs.path().join("games").join(game);
+        let from = data.join("games").join(game);
+        fs::create_dir_all(copy.parent().unwrap()).unwrap();
+        if Path::new(game).components().count() > 2 {
+            for entry in fs::read_dir(from.parent().unwrap()).unwrap() {
+                let entry = entry.unwrap();
+                fs::copy(entry.path(), copy.with_file_name(entry.file_name())).unwrap();
+            }
+        } else {
+            fs::copy(&from, &copy).unwrap();
+        }
         let core = Core::load(
             &data.join("data/cores").join(core),
-            &data.join("games").join(game),
+            &copy,
             CoreDirs {
                 system: system.to_path_buf(),
                 save: dirs.path().join("saves"),
