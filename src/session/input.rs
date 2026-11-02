@@ -206,8 +206,8 @@ pub fn keyboard_buttons(down: impl Fn(Scancode) -> bool) -> InputState {
 }
 
 /// Game37's controls for a touch screen (DS, 3DS; FR-DS-2, FR-DS-3, FR-NEW-2), the same on both:
-/// R3 on any pad, or Tab, swaps the screens, and the pad button that taps with the right-stick
-/// cursor reaches the Core as the button its cursor taps on ([`TouchScreen`]).
+/// R3 on any pad, or Tab, swaps the screens, and L3 taps with the right-stick cursor, reaching the
+/// Core as the button its cursor taps on, with the Core's other button moves ([`TouchScreen`]).
 #[derive(Debug, Clone, Copy)]
 pub struct TouchControls {
     touch: TouchScreen,
@@ -233,21 +233,26 @@ impl TouchControls {
     }
 
     /// Takes the touch controls out of a frame's `input` and `tab`, whether Tab is down, and puts
-    /// in what the Core takes for them. Each pad's `tap_with` is let go and `tap` held instead;
-    /// each pad's R3 is let go, and with [`Swap::Button`] that button held while the swap control
-    /// is. With [`Swap::Option`], returns the option and its new value once per press of the swap
-    /// control, however long it is held, for the Core to change.
+    /// in what the Core takes for them. On each pad, every button of the touch screen's `moves` is
+    /// let go and the button it moves to held instead while it is; R3 is let go, and with
+    /// [`Swap::Button`] that button held while the swap control is. With [`Swap::Option`], returns
+    /// the option and its new value once per press of the swap control, however long it is held,
+    /// for the Core to change.
     pub fn apply(&mut self, input: &mut InputState, tab: bool) -> Option<(&'static str, &'static str)> {
         let mut held = false;
+        let pad = *input;
         for port in 0..MAX_PORTS {
-            let tap = input.is_pressed(port, self.touch.tap_with);
             // Tab is port 0's, as the rest of the keyboard is.
-            let swap = input.is_pressed(port, Button::R3) || (port == 0 && tab);
+            let swap = pad.is_pressed(port, Button::R3) || (port == 0 && tab);
             held |= swap;
             input.set(port, Button::R3, false);
-            input.set(port, self.touch.tap_with, false);
-            if tap {
-                input.set(port, self.touch.tap, true);
+            for &(from, _) in self.touch.moves {
+                input.set(port, from, false);
+            }
+            for &(from, to) in self.touch.moves {
+                if pad.is_pressed(port, from) {
+                    input.set(port, to, true);
+                }
             }
             if let Swap::Button(button) = self.touch.swap
                 && swap
@@ -820,10 +825,10 @@ mod tests {
         }
     }
 
-    /// DS on melonDS DS (FR-DS-2, FR-DS-3), as before: R3 and Tab hold R3, its Next Screen
-    /// Layout, while held; R2 taps with its cursor; L3 is its microphone; no option changes.
+    /// DS on melonDS DS (FR-DS-2, FR-DS-3): R3 and Tab hold R3, its Next Screen Layout, while
+    /// held; no option changes.
     #[test]
-    fn on_ds_r3_and_tab_hold_r3_and_r2_and_l3_reach_melonds_ds_as_they_are() {
+    fn on_ds_r3_and_tab_hold_r3_its_next_screen_layout() {
         let mut controls = TouchControls::new(crate::cores::MELONDS_DS.touch.unwrap());
         for _ in 0..2 {
             let (input, change) = touch_frame(&mut controls, holding(1, &[Button::R3, Button::A]), false);
@@ -835,8 +840,48 @@ mod tests {
         }
         let (input, change) = touch_frame(&mut controls, InputState::default(), true);
         assert_eq!((input, change), (holding(0, &[Button::R3]), None), "Tab");
-        let both = holding(2, &[Button::R2, Button::L3]);
-        assert_eq!(touch_frame(&mut controls, both, false), (both, None), "R2 and L3");
+    }
+
+    /// DS on melonDS DS (FR-DS-3): a pad's L3 taps with the right-stick cursor, reaching melonDS
+    /// DS as R2, its Touch Joystick, and never as L3, its microphone; a pad's R2 reaches it as L3,
+    /// the microphone, and never taps; both together are both. On every port, beside other
+    /// buttons, which reach it as they are.
+    #[test]
+    fn on_ds_l3_taps_as_r2_and_r2_is_the_microphone_as_l3() {
+        let mut controls = TouchControls::new(crate::cores::MELONDS_DS.touch.unwrap());
+        for port in [0, 1, 3] {
+            let frame =
+                |controls: &mut TouchControls, buttons| touch_frame(controls, holding(port, buttons), false);
+            assert_eq!(
+                frame(&mut controls, &[Button::L3]),
+                (holding(port, &[Button::R2]), None),
+                "port {port}: L3 taps, as R2 only"
+            );
+            assert_eq!(
+                frame(&mut controls, &[Button::R2, Button::B]),
+                (holding(port, &[Button::L3, Button::B]), None),
+                "port {port}: R2 is the microphone, as L3 only"
+            );
+            assert_eq!(
+                frame(&mut controls, &[Button::L3, Button::R2]),
+                (holding(port, &[Button::R2, Button::L3]), None),
+                "port {port}: both are both"
+            );
+            assert_eq!(
+                frame(&mut controls, &[Button::L2, Button::L]),
+                (holding(port, &[Button::L2, Button::L]), None),
+                "port {port}: L2 and L as they are"
+            );
+        }
+        let mut two = holding(0, &[Button::L3]);
+        two.set(2, Button::R2, true);
+        let mut expected = holding(0, &[Button::R2]);
+        expected.set(2, Button::L3, true);
+        assert_eq!(
+            touch_frame(&mut controls, two, false),
+            (expected, None),
+            "each pad's own"
+        );
     }
 
     #[test]

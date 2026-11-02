@@ -705,12 +705,12 @@ def screen_ds():
     sv.add(text(lx, 140, "Mario Kart DS", 34, 800), text(lx, 178, "Nintendo DS  ·  Large + small layout", 18, 500,
                                                          fill=C["muted"]))
     rows = [(["R3"], "Swap large and small screen"), (["Mouse"], "Click to touch"),
-            (["Right stick"], "Move touch cursor"), (["R2"], "Tap with cursor (proposed)")]
+            (["Right stick"], "Move touch cursor"), (["L3"], "Tap with cursor"), (["R2"], "Microphone (hold)")]
     for i, (gs, desc) in enumerate(rows):
         y = 250 + i * 64
         wdt = glyph(sv, lx, y, gs[0])
         sv.add(text(lx + wdt + 16, y + 7, desc, 19, 500, fill=C["muted"]))
-    sv.add(text(lx, 560, "Pause menu: Guide, Select + Start, or Esc", 16, 500, fill=C["dim"]))
+    sv.add(text(lx, 570, "Pause menu: Guide, Select + Start, or Esc", 16, 500, fill=C["dim"]))
     sv.save()
 
 

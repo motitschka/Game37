@@ -485,7 +485,7 @@ GameCube and Wii need a controller for those.
 - **Nintendo DS and 3DS:** one large and one small screen, unless Settings → Display picks Side by side
   or One screen; R3, or Tab on the keyboard, swaps them (in One screen, it shows the touch screen
   instead). Touch the touch screen with the mouse, or move a cursor with the right stick and tap with
-  R2 on DS or L3 on 3DS (the 3DS's R2 is its ZR button); on 3DS the right stick is also the C-Stick.
+  L3; on 3DS the right stick is also the C-Stick. On DS, R2 is the microphone button, on while held.
 - **Wii:** the controller is a Wii Remote with a Nunchuk:
 
   | Pad button | Wii function |

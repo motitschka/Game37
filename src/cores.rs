@@ -44,17 +44,22 @@ pub struct CoreInfo {
 /// A Core's touch screen, one of two screens it shows in one frame (FR-DS-1–3, FR-NEW-2): the
 /// mouse touches it through `RETRO_DEVICE_POINTER` over the whole frame, the mouse cursor shows,
 /// Game37's swap control (a pad's R3, Tab) swaps which screen is large, and the right stick moves
-/// a cursor the Core draws on it, which taps on `tap`.
+/// a cursor the Core draws on it, which a pad's L3 taps with on both Systems.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TouchScreen {
     /// How Game37's swap control reaches the Core.
     pub swap: Swap,
-    /// The RetroPad button the Core's right-stick cursor taps on: R2 on melonDS DS (its "Touch
-    /// Joystick"; the DS has no R2 of its own), R3 on Azahar (its "Touch Screen Touch").
-    pub tap: Button,
-    /// The pad button that reaches the Core as `tap`: R2 itself on DS, L3 on 3DS, whose R2 is ZR
-    /// and whose R3 is Game37's swap. On DS L3 stays L3, melonDS DS's microphone.
-    pub tap_with: Button,
+    /// The pad buttons that reach the Core as another RetroPad button, `(pad, core)`: the pad's
+    /// button is let go and the Core's held while it is, so a pad button only ever reaches the Core
+    /// as one button. Every other pad button reaches it as itself.
+    ///
+    /// melonDS DS's cursor taps on R2 (its "Touch Joystick"; the DS has no R2 of its own) and its
+    /// L3 is the microphone button, on while held (its default "Hold" mode): L3 and R2 swap, so a
+    /// pad's L3 taps and its R2 is the microphone. melonDS DS's L2 is taken too (it speeds up the
+    /// cursor and, held, gives other buttons other jobs). Azahar's cursor taps on R3 (its "Touch
+    /// Screen Touch"): a pad's L3 reaches it as R3, as the pad's R3 is Game37's swap and the 3DS's
+    /// R2 is ZR.
+    pub moves: &'static [(Button, Button)],
 }
 
 /// How Game37's swap control reaches a Core (FR-DS-2, FR-NEW-2).
@@ -343,8 +348,7 @@ pub static MELONDS_DS: CoreInfo = CoreInfo {
     saves: InGameSaves::SaveMemory,
     touch: Some(TouchScreen {
         swap: Swap::Button(Button::R3),
-        tap: Button::R2,
-        tap_with: Button::R2,
+        moves: &[(Button::L3, Button::R2), (Button::R2, Button::L3)],
     }),
 };
 pub static PPSSPP: CoreInfo = CoreInfo {
@@ -397,8 +401,7 @@ pub static AZAHAR: CoreInfo = CoreInfo {
             key: "citra_swap_screen",
             values: ["Top", "Bottom"],
         },
-        tap: Button::R3,
-        tap_with: Button::L3,
+        moves: &[(Button::L3, Button::R3)],
     }),
 };
 /// Dolphin (FR-NEW-3), for GameCube and Wii, with the values its own option list offers: its one
@@ -1845,15 +1848,13 @@ mod tests {
             MELONDS_DS.touch,
             Some(TouchScreen {
                 swap: Swap::Button(Button::R3),
-                tap: Button::R2,
-                tap_with: Button::R2,
+                moves: &[(Button::L3, Button::R2), (Button::R2, Button::L3)],
             }),
-            "melonDS DS's Next Screen Layout and Touch Joystick"
+            "melonDS DS's Next Screen Layout, and L3 and R2 swapped for its Touch Joystick and microphone"
         );
         let Some(TouchScreen {
             swap: Swap::Option { key, values },
-            tap: Button::R3,
-            tap_with: Button::L3,
+            moves: [(Button::L3, Button::R3)],
         }) = AZAHAR.touch
         else {
             panic!(

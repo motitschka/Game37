@@ -206,13 +206,16 @@ fn libretro_only_one_core_at_a_time() {
 }
 
 /// melonDS DS with its hybrid layout (FR-DS-1) reads the pointer: a press at the centre of the
-/// small touch screen is what it reads as `RETRO_DEVICE_POINTER` coordinates (FR-DS-3), and R3 swaps
-/// the screens (FR-DS-2). Run with `cargo test -- --ignored ds`.
+/// small touch screen is what it reads as `RETRO_DEVICE_POINTER` coordinates (FR-DS-3); through
+/// Game37's touch controls a pad's L3 reaches it as R2, its cursor's tap, and R2 as L3, its
+/// microphone, and the right stick moves its cursor (FR-DS-3); and R3 swaps the screens (FR-DS-2).
+/// Run with `cargo test -- --ignored ds`.
 #[test]
 #[ignore = "needs /home/matei/Game37/.testdata"]
 fn ds_touch_reaches_melonds_ds_and_r3_swaps_the_screens() {
-    use super::{Button, Pointer, ffi};
+    use super::{Button, Pointer, Stick, ffi};
     use crate::cores::MELONDS_DS;
+    use crate::session::input::TouchControls;
 
     let _serial = serial();
     let dirs = TempDir::new().unwrap();
@@ -280,6 +283,57 @@ fn ds_touch_reaches_melonds_ds_and_r3_swaps_the_screens() {
         Some(1),
         "the Core asked for the press"
     );
+
+    // A pad's L3 and R2 through Game37's touch controls: L3 reaches melonDS DS as R2, its Touch
+    // Joystick, and R2 as L3, its microphone. melonDS DS reads the joypad as one mask, which
+    // these read back as it was answered.
+    let mut controls = TouchControls::new(MELONDS_DS.touch.unwrap());
+    let joypad = |core: &Core| {
+        let queries = core.input_queries();
+        let mask = queries.get(&(0, ffi::RETRO_DEVICE_JOYPAD, 0, ffi::RETRO_DEVICE_ID_JOYPAD_MASK));
+        *mask.expect("melonDS DS reads the joypad mask") as u16
+    };
+    let bit = |button: Button| 1u16 << button as u16;
+    let pad = |buttons: &[Button], stick: (i16, i16)| {
+        let mut input = InputState::default();
+        for &button in buttons {
+            input.set(0, button, true);
+        }
+        input.set_stick(0, Stick::Right, stick.0, stick.1);
+        input
+    };
+    for (held, reaches) in [
+        (vec![Button::L3], bit(Button::R2)),
+        (vec![Button::R2], bit(Button::L3)),
+        (vec![Button::L3, Button::R2], bit(Button::R2) | bit(Button::L3)),
+    ] {
+        let mut input = pad(&held, (0, 0));
+        controls.apply(&mut input, false);
+        for _ in 0..3 {
+            core.run_frame(&input);
+        }
+        assert_eq!(joypad(&core), reaches, "{held:?}");
+    }
+    run(&mut core, 30);
+
+    // The right stick moves the cursor melonDS DS draws on the touch screen, still the small one:
+    // hbmenu's touch screen stands still on its own, so only the cursor changes it. (A tap, the
+    // pad's L3 above, changes nothing hbmenu shows, so the mask is what shows it reached the Core.)
+    let still = core.frame().clone();
+    let (later, _) = run(&mut core, 30);
+    let changed = |a: &Frame, b: &Frame| {
+        let (a, b) = (small_screen(a), small_screen(b));
+        a.chunks(3).zip(b.chunks(3)).filter(|(x, y)| x != y).count()
+    };
+    assert_eq!(changed(&still, &later), 0, "hbmenu's touch screen stands still");
+    let mut right = pad(&[], (0x7fff, 0));
+    controls.apply(&mut right, false);
+    for _ in 0..20 {
+        core.run_frame(&right);
+    }
+    let moved = changed(&later, core.frame());
+    eprintln!("the right stick changed {moved} pixels of the touch screen");
+    assert!(moved > 0, "the right stick moves the cursor");
 
     // R3 for a few frames, then released: the other hybrid layout, whose large screen shows the
     // touch screen (the small one before) and whose small one, now at the bottom right, shows the

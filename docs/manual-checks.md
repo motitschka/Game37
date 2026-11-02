@@ -54,7 +54,9 @@ The story in brackets stays open on GitHub until its checks pass.
 
 - [ ] A real Game of each of PS2, 3DS, GameCube and Wii plays at full speed, with sound that doesn't
       crackle; PS2 with your BIOS in `~/Games/bios/pcsx2/bios/`.
-- [ ] 3DS: touch with the mouse, and with the right-stick cursor tapping with L3.
+- [ ] DS and 3DS: touch with the mouse, and with the right-stick cursor tapping with L3; on DS, L3
+      never turns the microphone on.
+- [ ] DS: holding R2 turns the microphone on in a Game that listens for it, and never taps.
 - [ ] DS and 3DS: R3 on a pad and Tab on the keyboard swap the screens in each layout (Large and small,
       Side by side, One screen), chosen in Settings → Display.
 - [ ] Wii: a real Wii Game plays with the Wii Remote and Nunchuk, buttons mapped as in the README's
