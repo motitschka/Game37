@@ -1556,8 +1556,11 @@ mod tests {
         let game = root.path().join("ps2").join(elf);
         let options = core_options(&ctx, systems::by_id("ps2").unwrap(), &cores::LRPS2, &game);
         let core_path = cores::installed_path(data.path(), &cores::LRPS2);
+        // Into the address window, as a session loads it: once loaded anywhere else, LRPS2's image
+        // stays there, and a later PS2 test in this process may find no room for its maps.
         let setup = CoreSetup {
             options: &options,
+            address_window: cores::LRPS2.needs_address_window(),
             ..Default::default()
         };
         match Core::load(&core_path, &game, dirs, setup, gl) {
