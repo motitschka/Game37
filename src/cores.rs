@@ -1794,6 +1794,50 @@ mod tests {
         );
     }
 
+    /// Dolphin's own options (OSD off, so it never draws over the picture), its system files
+    /// coming as assets, saves shared, no touch screen or BIOS, a Wii Remote with a Nunchuk on
+    /// Wii but a plain RetroPad on GameCube, and the only Core whose timing is read again every
+    /// frame ([`CoreInfo::rereads_timing`]).
+    #[test]
+    fn dolphin_hides_its_osd_shares_its_saves_and_rereads_its_timing_every_frame() {
+        assert_eq!(DOLPHIN.file, "dolphin_libretro.so");
+        assert_eq!(
+            DOLPHIN.options,
+            &[
+                ("dolphin_renderer", "Hardware"),
+                ("dolphin_efb_scale", "2"),
+                ("dolphin_shader_compilation_mode", "2"),
+                ("dolphin_main_cpu_thread", "enabled"),
+                ("dolphin_osd_enabled", "disabled"),
+            ]
+        );
+        assert_eq!(DOLPHIN.bios, None);
+        assert_eq!(DOLPHIN.assets, Some(&DOLPHIN_ASSETS));
+        assert_eq!(DOLPHIN.saves, InGameSaves::Shared);
+        assert_eq!(DOLPHIN.touch, None);
+
+        let wii = crate::systems::by_id("wii").unwrap();
+        let gc = crate::systems::by_id("gc").unwrap();
+        assert_eq!(DOLPHIN.port_device(wii), DOLPHIN_WII_REMOTE_AND_NUNCHUK);
+        assert_eq!(DOLPHIN.port_device(gc), PortDevice::RETROPAD);
+
+        assert!(DOLPHIN.rereads_timing());
+        for core in [
+            &MESEN,
+            &BSNES,
+            &SAMEBOY,
+            &MGBA,
+            &MUPEN64PLUS_NEXT,
+            &BEETLE_PSX_HW,
+            &MELONDS_DS,
+            &PPSSPP,
+            &LRPS2,
+            &AZAHAR,
+        ] {
+            assert!(!core.rereads_timing(), "{}", core.name);
+        }
+    }
+
     #[test]
     fn ds_and_3ds_have_a_touch_screen_whose_swap_and_tap_their_cores_take_differently() {
         assert_eq!(
