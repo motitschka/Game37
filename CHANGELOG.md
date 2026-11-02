@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.2.0-beta.1 (unreleased)
+
+PS2, 3DS, GameCube and Wii now play inside Game37, like the older Systems, with libretro Cores in
+place of their Flatpak emulators. Thirteen Systems are Embedded now; only Wii U (Cemu), Switch
+(Ryubing), PS3 (RPCS3) and PS4 (shadPS4) still need a Flatpak emulator.
+
+### New
+- **PS2, 3DS, GameCube and Wii play inside Game37,** with the Pause Menu, Save States, a Resume State
+  and Playtime: PS2 with the LRPS2 Core, 3DS with the Azahar Core, GameCube and Wii with the Dolphin
+  Core. Each Core downloads the first time you play its System, and all of them render with OpenGL.
+- **PS2:** needs a BIOS dumped from your own PS2, with any file name, in `<Games Root>/bios/pcsx2/bios/`.
+  Without one, a PS2 Game says so and names that folder. Settings → BIOS has a PS2 row, and Setup's
+  BIOS note names every ticked System that needs a BIOS. Each Game gets its own memory card in
+  `<Games Root>/saves/ps2/`, named after the Game's file (`Okami.iso` gets `Okami.ps2`), which Game37
+  makes already formatted at the Game's first start. PS2 also takes `.ciso` and `.cue` disc images and
+  `.elf` homebrew.
+- **3DS:** plays homebrew and decrypted Games, including `.app`, `.elf`, `.axf`, the compressed `.zcci`,
+  `.zcxi` and `.z3dsx`, and the `.bcci` and `.bcxi` bundles. An encrypted dump shows a message saying it
+  must be decrypted.
+- **DS and 3DS screen layouts** in Settings → Display: Large and small (the default, the large screen
+  three times the small one), Side by side, or One screen. R3, or Tab on the keyboard, swaps the
+  screens. The mouse touches the touch screen; the right stick moves a cursor that taps with R2 on DS
+  and with L3 on 3DS, where R2 is the ZR button.
+- **GameCube and Wii:** the Dolphin Core downloads Dolphin's system files with it. Both take `.dol` and
+  `.elf` homebrew besides disc images. On Wii the controller is a Wii Remote with a Nunchuk: the left
+  stick is the Nunchuk's stick, the right stick points the Wii Remote at the screen, and the face
+  buttons are A, B, C and Z.
+
+### Changed
+- **Upgrading from 0.1:** PS2, 3DS, GameCube and Wii Games no longer open in the PCSX2, Azahar or
+  Dolphin Flatpaks, and Setup no longer offers those emulators; you can uninstall them if nothing
+  else needs them. Saves made in them aren't moved into Game37: Game37 keeps these Systems' saves in
+  the Games Root now, PS2 memory cards in `saves/ps2/`, 3DS saves in `saves/3ds/Azahar/`, and Dolphin's
+  whole User folder (memory cards, the Wii's system memory, and also Dolphin's settings, logs and shader
+  cache) in `saves/gc/User/` and `saves/wii/User/`.
+- Delete save data on a 3DS, GameCube or Wii Game keeps the In-game Save, and says which Core keeps
+  it: those Cores keep In-game Saves in their own files, shared by every Game of the System.
+
+### Known issues
+- OpenGL only, no Vulkan: some PS2, 3DS, GameCube and Wii Games may run slower than in the standalone
+  emulators.
+- **PS2:** after loading a Save State on a screen that doesn't change by itself, such as a still menu,
+  the old picture stays until the Game draws again; pressing a button brings it back. This is a bug in
+  the LRPS2 Core.
+- **3DS:** encrypted dumps don't play, and there's no HOME Menu, as the 3DS's system files aren't
+  supported. The Azahar Core's Save States break with every update of the Core: a slot that can't load
+  says so.
+- **GameCube and Wii:** Games on more than one disc can't change discs yet. Wii plays with the Wii
+  Remote and Nunchuk only.
+- New Super Mario Bros. and Zelda: Phantom Hourglass can freeze on DS
+  ([#42](https://github.com/motitschka/Game37/issues/42)). Use Start from power-on to continue from your
+  In-game Save.
+
 ## 0.1.0-beta.2 (2026-10-27)
 
 ### New

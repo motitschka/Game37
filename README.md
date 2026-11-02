@@ -37,11 +37,11 @@ keyboard.
 
 ## Status
 
-**Beta.** Version 0.1.0-beta.2 is the second beta: everything planned for v1 is in, but it has
-mostly been played with homebrew and test programs so far. What changed in each release is in
-[CHANGELOG.md](CHANGELOG.md). First-run Setup, the library, both ways of
-playing, Artwork, the Details Page, the Options Menu, Settings and search all work. Please
-[report what breaks](https://github.com/motitschka/Game37/issues).
+**Beta.** Version 0.2.0-beta.1 is the third beta: everything planned for v1 is in, and PS2, 3DS,
+GameCube and Wii now play inside Game37 too, but it has mostly been played with homebrew and test
+programs so far. What changed in each release is in [CHANGELOG.md](CHANGELOG.md). First-run Setup,
+the library, both ways of playing, Artwork, the Details Page, the Options Menu, Settings and search
+all work. Please [report what breaks](https://github.com/motitschka/Game37/issues).
 
 | Milestone | What it brings | State |
 |---|---|---|
@@ -51,6 +51,7 @@ playing, Artwork, the Details Page, the Options Menu, Settings and search all wo
 | M4 OpenGL rendering | N64, DS, PS1 and PSP inside Game37 | Done |
 | M5 Artwork, Details Page, Options Menu | SteamGridDB covers, per-Game page and actions | Done |
 | M6 Settings, search, First-run Setup | Everything a new player needs, without editing files | Done |
+| M8 PS2, 3DS, GameCube and Wii inside Game37 | LRPS2, Azahar and Dolphin Cores in place of their Flatpak emulators (0.2.0) | In beta |
 | 1.0 | Beta fixes, hand-checked on real Games, CI, AUR package | Planned |
 | M7 Speedrun timer (1.1) | Your own Splits per Game, LiveSplit-compatible | Planned |
 
@@ -66,13 +67,13 @@ Details are in [docs/milestones.md](docs/milestones.md), and the current state i
   each and a "See all" grid.
 - **Carousel:** every System in a fixed order, themed per System, opening that System's Console Page:
   a sortable grid of its Games.
-- **Retro Systems play inside Game37.** Each Core downloads automatically the first time you play that
-  System. You get a Pause Menu, three Save State slots with screenshots, a Resume State written on quit,
-  and In-game Saves that are always kept. Up to four controllers are supported, and a keyboard layout
-  for playing without one.
-- **Newer Systems open in their emulator.** Game37 starts the right Flatpak emulator fullscreen with the
-  Game, steps aside while you play, and comes back when the emulator closes. If an emulator isn't
-  installed, its System says so and shows the install command.
+- **Thirteen Systems play inside Game37,** from NES to PS2, 3DS and Wii. Each Core downloads
+  automatically the first time you play that System. You get a Pause Menu, three Save State slots with
+  screenshots, a Resume State written on quit, and In-game Saves that are always kept. Up to four
+  controllers are supported, and a keyboard layout for playing without one.
+- **Wii U, Switch, PS3 and PS4 open in their emulator.** Game37 starts the right Flatpak emulator
+  fullscreen with the Game, steps aside while you play, and comes back when the emulator closes. If an
+  emulator isn't installed, its System says so and shows the install command.
 - **Playtime and last played** are tracked for every Game, embedded and external.
 - **Artwork:** with a SteamGridDB API key, Game37 fetches a cover and a wide hero image for each Game
   you browse, caches them, and lets you pick different ones. Without a key, Games show their Display
@@ -94,19 +95,21 @@ Listed in System Order: Nintendo first, then Sony, each by European release date
 | Nintendo 64 | `n64` | Mupen64Plus-Next Core | `.n64` `.z64` `.v64` |
 | Game Boy Color | `gbc` | SameBoy Core | `.gbc` |
 | Game Boy Advance | `gba` | mGBA Core | `.gba` |
-| GameCube | `gc` | Dolphin | `.iso` `.gcm` `.rvz` `.ciso` `.gcz` |
+| GameCube | `gc` | Dolphin Core | `.iso` `.gcm` `.rvz` `.ciso` `.gcz` `.dol` `.elf` |
 | Nintendo DS | `nds` | melonDS DS Core | `.nds` |
-| Wii | `wii` | Dolphin | `.iso` `.wbfs` `.rvz` `.wia` `.ciso` `.gcz` |
-| 3DS | `3ds` | Azahar | `.3ds` `.cci` `.cxi` `.3dsx` |
+| Wii | `wii` | Dolphin Core | `.iso` `.wbfs` `.rvz` `.wia` `.ciso` `.gcz` `.dol` `.elf` |
+| 3DS | `3ds` | Azahar Core | `.3ds` `.cci` `.cxi` `.3dsx` `.app` `.elf` `.axf` `.zcci` `.zcxi` `.z3dsx` `.bcci` `.bcxi` |
 | Wii U | `wiiu` | Cemu | `.wua` `.wud` `.wux`, or a game folder with `code/`, `content/` and `meta/` |
 | Switch | `switch` | Ryubing | `.nsp` `.xci` `.nro` |
 | PlayStation | `ps1` | Beetle PSX HW Core | `.cue` (with its `.bin`) `.chd` `.pbp` `.m3u` |
-| PlayStation 2 | `ps2` | PCSX2 | `.iso` `.chd` `.cso` `.zso` |
+| PlayStation 2 | `ps2` | LRPS2 Core | `.iso` `.chd` `.cso` `.zso` `.ciso` `.cue` (with its `.bin`) `.elf` |
 | PSP | `psp` | PPSSPP Core | `.iso` `.cso` `.pbp` `.chd` |
 | PlayStation 3 | `ps3` | RPCS3 | a game folder with `PS3_GAME/`, or with `PARAM.SFO` and `USRDIR/` |
 | PlayStation 4 | `ps4` | shadPS4 | a game folder with `eboot.bin` and `sce_sys/` |
 
-Systems played with a Core are **Embedded Systems**; the others are **External Systems**.
+Systems played with a Core are **Embedded Systems**; the other four are **External Systems**. `.dol`
+and `.elf` files on GameCube, Wii and PS2, and `.3dsx`, `.elf` and `.axf` on 3DS, are homebrew. 3DS
+Games must be decrypted dumps; a `.cia` is an installer, which the Azahar Core can't play.
 
 ## Install
 
@@ -126,8 +129,8 @@ There are three ways to get it:
 - **OpenGL**, which every desktop has.
 - **fontconfig's `fc-match`**, to find the Adwaita Sans font (GNOME's interface font). fontconfig picks
   another font if Adwaita Sans is missing, but Game37 won't start without `fc-match`.
-- **Flatpak with Flathub**, for the Standalone Emulators of the External Systems. Embedded Systems don't
-  need it.
+- **Flatpak with Flathub**, for the Standalone Emulators of the four External Systems (Wii U, Switch,
+  PS3 and PS4). Embedded Systems don't need it.
 - **XWayland or an X session**, for PSP only. GNOME has XWayland.
 
 ### Prebuilt binary (Arch Linux and Ubuntu)
@@ -150,24 +153,24 @@ The binaries use your system's SDL3, so they need an up-to-date Arch (`sudo pacm
    ```
 
 2. From the [Releases page](https://github.com/motitschka/Game37/releases), download the file for your
-   distribution and its `.sha256` file: `game37-0.1.0-beta.2-x86_64-arch.tar.gz` or
-   `game37-0.1.0-beta.2-x86_64-ubuntu.tar.gz`. Then check and unpack it; on Ubuntu, write `ubuntu` in
+   distribution and its `.sha256` file: `game37-0.2.0-beta.1-x86_64-arch.tar.gz` or
+   `game37-0.2.0-beta.1-x86_64-ubuntu.tar.gz`. Then check and unpack it; on Ubuntu, write `ubuntu` in
    place of `arch`:
 
    ```bash
-   sha256sum -c game37-0.1.0-beta.2-x86_64-arch.tar.gz.sha256
-   tar -xzf game37-0.1.0-beta.2-x86_64-arch.tar.gz
+   sha256sum -c game37-0.2.0-beta.1-x86_64-arch.tar.gz.sha256
+   tar -xzf game37-0.2.0-beta.1-x86_64-arch.tar.gz
    ```
 
 3. Set up Flathub, as in [step 3](#3-set-up-flathub) below.
 4. Start it:
 
    ```bash
-   ./game37-0.1.0-beta.2/game37
+   ./game37-0.2.0-beta.1/game37
    ```
 
 To start it from your app menu, see [Add Game37 to your app menu](#add-game37-to-your-app-menu); use
-`game37-0.1.0-beta.2/game37` in place of `target/release/game37` there.
+`game37-0.2.0-beta.1/game37` in place of `target/release/game37` there.
 
 ### NixOS
 
@@ -185,14 +188,14 @@ Then set up Flathub, as in [step 3](#3-set-up-flathub) below.
 To try Game37 without installing it:
 
 ```bash
-nix run github:motitschka/Game37/v0.1.0-beta.2
+nix run github:motitschka/Game37/v0.2.0-beta.1
 ```
 
 To install it, with an entry and icon in your app menu, add the flake to your system flake:
 
 ```nix
 # flake.nix, under inputs:
-game37.url = "github:motitschka/Game37/v0.1.0-beta.2";
+game37.url = "github:motitschka/Game37/v0.2.0-beta.1";
 
 # Your NixOS configuration, with inputs passed in through specialArgs:
 environment.systemPackages = [ inputs.game37.packages.x86_64-linux.default ];
@@ -255,11 +258,11 @@ flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.f
 #### 4. Get the source
 
 ```bash
-git clone --branch v0.1.0-beta.2 https://github.com/motitschka/Game37.git
+git clone --branch v0.2.0-beta.1 https://github.com/motitschka/Game37.git
 cd Game37
 ```
 
-Leave out `--branch v0.1.0-beta.2` to get the latest development version instead of this release.
+Leave out `--branch v0.2.0-beta.1` to get the latest development version instead of this release.
 
 #### 5. Build
 
@@ -316,7 +319,7 @@ everything else it needs is downloaded or created at first start, in the places 
 ### Updating
 
 From the `Game37` folder, fetch the new release, check out its tag (shown on the
-[Releases page](https://github.com/motitschka/Game37/releases); `v0.1.0-beta.3` is an example) and build
+[Releases page](https://github.com/motitschka/Game37/releases); `v0.2.0-beta.2` is an example) and build
 again:
 
 ```bash
@@ -324,7 +327,7 @@ git fetch --tags
 ```
 
 ```bash
-git checkout v0.1.0-beta.3
+git checkout v0.2.0-beta.2
 ```
 
 ```bash
@@ -333,6 +336,10 @@ cargo build --release
 
 If you added Game37 to your app menu, run the `install` line from that section again. Your Config,
 library, saves and states live outside the `Game37` folder and stay as they are.
+
+Coming from 0.1: PS2, 3DS, GameCube and Wii now play inside Game37, so their Flatpak emulators are no
+longer used, and saves made in those emulators aren't moved into Game37. The
+[CHANGELOG](CHANGELOG.md) says where Game37 keeps these Systems' saves now.
 
 ### If the build fails
 
@@ -369,7 +376,12 @@ After Setup, or once it's done:
   - Games copied in while Game37 runs appear without a restart.
 - **The PS1 BIOS.** Put one of `scph5500.bin`, `scph5501.bin`, `scph5502.bin`, `scph5503.bin`,
   `scph7003.bin` or `scph5552.bin` in the Games Root's `bios/` folder. Game37 tells you which file is
-  missing if there is none, in Settings → BIOS too. No other Embedded System needs a BIOS.
+  missing if there is none, in Settings → BIOS too.
+- **The PS2 BIOS.** Dump the BIOS from your own PS2 and put it, with any file name, in the Games
+  Root's `bios/pcsx2/bios/` folder (`~/Games/bios/pcsx2/bios/` by default). Without one, a PS2 Game
+  says so and names that folder; Settings → BIOS has a PS2 row, and Setup's BIOS note names every
+  ticked System that needs a BIOS. No other Embedded System needs one: the Dolphin Core downloads
+  Dolphin's system files for GameCube and Wii with it, and 3DS plays without the 3DS's system files.
 - **Emulators that need files from your own console**, set up inside the emulator itself rather than in
   the Games Root: Switch keys for Ryubing, the PS3 firmware for RPCS3, and the PS4 modules for shadPS4.
 
@@ -421,8 +433,9 @@ seven sections, down the left:
 - **Controls:** Menu button style (Nintendo, where the right face button confirms; or Xbox or
   PlayStation, where the bottom face button confirms) and Controller test, which exits by holding B.
 - **Display:** Startup window mode (Remember last, Always fullscreen or Always windowed), which applies
-  the next time Game37 starts; and under Screens, the DS and 3DS layout: Large and small, Side by side
-  or One screen, which applies from the next Game started.
+  the next time Game37 starts; and under Screens, a DS layout and a 3DS layout: Large and small (the
+  default, the large screen three times the small one), Side by side or One screen, which applies from
+  the next Game started.
 - **About:** the version, the licence and the paths Game37 uses.
 
 ## Search
@@ -459,13 +472,17 @@ players 1 to 4 in the order they connect. Without a controller, the keyboard pla
 | A / B / X / Y | X / Z / S / A |
 | L / R | Q / W |
 | Start / Select | Enter / Right Shift |
-| R3 (DS: swap screens) | Tab |
+| R3 (DS and 3DS: swap screens) | Tab |
 
 - **Pause Menu:** the Guide button, Select + Start, or Esc. It offers resume, save and load in three
   slots, and quit to the library. Quitting writes a Resume State, so the next launch continues where you
   stopped.
-- **Nintendo DS:** one large and one small screen, unless Settings → Display picks Side by side or One
-  screen; R3 swaps them. Tap the touch screen with the mouse, or with a right-stick cursor.
+- **Nintendo DS and 3DS:** one large and one small screen, unless Settings → Display picks Side by side
+  or One screen; R3, or Tab on the keyboard, swaps them (in One screen, it shows the touch screen
+  instead). Touch the touch screen with the mouse, or move a cursor with the right stick and tap with
+  R2 on DS or L3 on 3DS (the 3DS's R2 is its ZR button).
+- **Wii:** the controller is a Wii Remote with a Nunchuk: the left stick is the Nunchuk's stick, the
+  right stick points the Wii Remote at the screen, and the face buttons are A, B, C and Z.
 - **External Systems:** quit with the emulator's own controls, and Game37 comes back to the front.
 
 ## Where your data lives
@@ -476,8 +493,12 @@ players 1 to 4 in the order they connect. Without a controller, the keyboard pla
 | `~/.config/game37/secrets.toml` | Your SteamGridDB API key. Keep it private (`chmod 600`) |
 | `~/Games/bios/` | BIOS files |
 | `~/Games/saves/<system>/` | In-game Saves |
+| `~/Games/saves/ps2/` | A memory card per PS2 Game, named after its file (`Okami.iso` gets `Okami.ps2`), made already formatted at the Game's first start |
+| `~/Games/saves/3ds/Azahar/` | The Azahar Core's 3DS saves |
+| `~/Games/saves/gc/User/`, `~/Games/saves/wii/User/` | The Dolphin Core's User folder: GameCube memory cards, the Wii's system memory (NAND), and Dolphin's own settings, logs and shader cache |
 | `~/Games/states/<system>/` | Save States and Resume States |
 | `~/.local/share/game37/cores/` | Downloaded Cores |
+| `~/.local/share/game37/system/` | Files some Cores download with them, such as Dolphin's system files |
 | `~/.local/share/game37/library.db` | The library: Playtime, last played, date added, Favorites, renames, hidden Games, chosen Artwork, sort order |
 | `~/.local/share/game37/artwork/` | Cached covers and hero images |
 
@@ -501,9 +522,24 @@ a second at most.
 - PSP needs an X display (XWayland on GNOME): the PPSSPP Core doesn't start on Wayland's EGL. Without
   one, Game37 shows a message instead.
 - N64 rendering is only confirmed with test programs so far, not with a real game.
-- Azahar, Ryubing and shadPS4 stay open in their own game list when a game stops, so Playtime keeps
+- Ryubing and shadPS4 stay open in their own game list when a game stops, so Playtime keeps
   counting until you close the emulator's window.
-- Two Games in the same folder with the same name but different extensions share their save files.
+- Embedded Systems render with OpenGL only, not Vulkan, so some PS2, 3DS, GameCube and Wii Games may
+  run slower than in their standalone emulators.
+- PS2: after loading a Save State on a screen that doesn't change by itself, such as a still menu, the
+  old picture stays until the Game draws again; pressing a button brings it back. This is a bug in the
+  LRPS2 Core.
+- 3DS: encrypted dumps don't play (Game37 says the dump must be decrypted), and there's no HOME Menu,
+  as the 3DS's system files aren't supported. The Azahar Core's Save States break with every update of
+  the Core: a slot that can't load says so.
+- GameCube and Wii: Games on more than one disc can't change discs yet. Wii plays with the Wii Remote
+  and Nunchuk only.
+- Delete save data doesn't delete a PSP, 3DS, GameCube or Wii Game's In-game Save: the PPSSPP, Azahar
+  and Dolphin Cores keep them in their own files, which every Game of the System shares, and the Options
+  Menu says which Core keeps them.
+- Saves made in the PCSX2, Azahar or Dolphin Flatpaks aren't moved into Game37.
+- Two Games in the same folder with the same name but different extensions share their save files. On
+  PS2 that goes for two Games with the same file name in any folders: they share one memory card.
 - Hiding a Game also removes it from Favorites.
 - When SteamGridDB has no Artwork for a Game, Game37 remembers that and doesn't ask again unless you
   rename the Game.
