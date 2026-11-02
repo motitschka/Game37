@@ -429,8 +429,9 @@ pub static DOLPHIN: CoreInfo = CoreInfo {
 
 /// Dolphin's Wii Remote with a Nunchuk (`RETRO_DEVICE_WIIMOTE_NC` in its `Input.cpp`): what most
 /// Wii Games play with. The left stick is the Nunchuk's stick and the right stick points the
-/// Wii Remote at the screen; the face buttons are A, B, C and Z. Dolphin's plain RetroPad on Wii
-/// is a Wii Remote alone, whose left stick tilts it.
+/// Wii Remote at the screen; RetroPad A and B are the Wii Remote's, X and Y the Nunchuk's C and Z
+/// (the README's Wii table has the rest). Dolphin's plain RetroPad on Wii is a Wii Remote alone,
+/// whose left stick tilts it.
 pub const DOLPHIN_WII_REMOTE_AND_NUNCHUK: PortDevice = PortDevice::retropad_subclass(2);
 
 /// How a two-screen System shows its two screens (FR-DS-1, FR-NEW-2), chosen per System in
