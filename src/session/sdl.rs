@@ -1774,6 +1774,8 @@ mod tests {
         let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--ignored", "--exact", &path, "--nocapture", "--test-threads=1"])
             .env(PS2_AFTER_OTHERS_CHILD, "1")
+            // The child's temp dirs go in this test's, so an abort can't leave them behind.
+            .env("TMPDIR", dir.path())
             .stdout(log.try_clone().unwrap())
             .stderr(log)
             .spawn()
@@ -1800,6 +1802,10 @@ mod tests {
         assert!(
             !out.contains("Could not place"),
             "LRPS2 couldn't place its maps:\n{tail}"
+        );
+        assert!(
+            !out.contains("outside its address window") && !out.contains("no address window"),
+            "LRPS2 was loaded without its address window:\n{tail}"
         );
         assert!(status.success(), "the child process ended with {status}:\n{tail}");
         assert!(out.contains("1 passed"), "the child ran the test:\n{tail}");

@@ -117,8 +117,6 @@ pub enum CoreError {
     Unserialize,
     /// The Core asked for OpenGL rendering, and it couldn't be set up.
     Gl(String),
-    /// The Core needs an address window, and none could be reserved.
-    AddressWindow(PathBuf),
 }
 
 impl fmt::Display for CoreError {
@@ -141,9 +139,6 @@ impl fmt::Display for CoreError {
             CoreError::Serialize => write!(f, "The Core couldn't save its state"),
             CoreError::Unserialize => write!(f, "The Core couldn't restore the state"),
             CoreError::Gl(e) => write!(f, "Can't start OpenGL for the Core: {e}"),
-            CoreError::AddressWindow(path) => {
-                write!(f, "Can't make room in memory for the Core {}", path.display())
-            }
         }
     }
 }
@@ -405,8 +400,15 @@ impl Core {
     ) -> Result<Core, CoreError> {
         let mut claim = Claim::take().ok_or(CoreError::AlreadyLoaded)?;
         if setup.address_window {
-            let lease = window::Lease::take().ok_or(CoreError::AddressWindow(core_path.to_path_buf()))?;
-            claim.window = Some(lease);
+            // Without a window (under an address-space limit, say) the Core loads as it would
+            // without one: as the first Core in the process it still finds room for its maps.
+            claim.window = window::Lease::take();
+            if claim.window.is_none() {
+                eprintln!(
+                    "game37: no address window could be reserved for {}",
+                    core_path.display()
+                );
+            }
         }
         // SAFETY: loading a shared library runs its initialisers. A Core is a plain C library and
         // its initialisers only set up its own statics; this is the trust any frontend places in
