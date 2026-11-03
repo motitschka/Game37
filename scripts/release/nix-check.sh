@@ -68,7 +68,7 @@ shot() {
 }
 shot menu /tmp/root/empty.toml "nexttab" ""
 shot n64 /tmp/root/cfg.toml "nexttab,right,right,right,confirm,confirm,confirm" "$xvfb -a" --frames 300
-shot psp /tmp/root/cfg.toml "nexttab,left,left,left,confirm,confirm,confirm" "$xvfb -a" --frames 900
+shot psp /tmp/root/cfg.toml "nexttab,left,left,left,left,confirm,confirm,confirm" "$xvfb -a" --frames 900
 exit $failed
 '
     rm "$out/src-nix.tar"
