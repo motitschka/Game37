@@ -179,7 +179,7 @@ impl Step for Systems {
 
         // The Select all pill, as `action_pill` draws it, with X's glyph.
         let label = TextStyle::new(22, Weight::Bold, TEXT);
-        let y = super::BUTTONS_Y;
+        let y = super::buttons_y();
         let w = 28.0 + 46.0 + gfx.measure("Select all", label) + 28.0;
         let r = Rect::new(M, y, w, PILL_H);
         if self.focus == Focus::SelectAll {

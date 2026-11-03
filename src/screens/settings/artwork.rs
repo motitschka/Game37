@@ -15,7 +15,7 @@ use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
 use crate::ui::text_entry::{KEYBOARD_H, KEYBOARD_W, Outcome, TextEntry, mask};
 use crate::ui::theme::{DANGER, LINE, MUTED, SURFACE, TEXT};
-use crate::ui::{Rect, W};
+use crate::ui::{self, Rect, W};
 
 const KEY: usize = 0;
 const REMOVE: usize = 1;
@@ -24,7 +24,13 @@ const REMOVE: usize = 1;
 pub(super) const CARD_W: f32 = 1240.0;
 pub(super) const CARD_H: f32 = 768.0;
 pub(super) const CARD_X: f32 = (W - CARD_W) / 2.0;
-pub(super) const CARD_Y: f32 = 120.0;
+/// The card's top on a 1080 canvas; [`card_y`] keeps it centred on a taller one.
+const CARD_Y: f32 = 120.0;
+
+/// The card's top: [`CARD_Y`] on a 1080 canvas, moved down by half of any extra height.
+pub(super) fn card_y() -> f32 {
+    CARD_Y + (ui::h() - ui::H) / 2.0
+}
 /// SteamGridDB's keys are 32 characters; room to spare, so a long paste isn't cut short.
 const MAX_KEY_CHARS: usize = 128;
 /// What a key with characters no key has gets, without echoing what was typed.
@@ -165,13 +171,14 @@ impl Screen for KeyEntry {
     fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
         self.kind = ctx.input_kind;
         dim(gfx);
-        let card = Rect::new(CARD_X, CARD_Y, CARD_W, CARD_H);
+        let card_y = card_y();
+        let card = Rect::new(CARD_X, card_y, CARD_W, CARD_H);
         gfx.fill_round_rect(card, 20.0, SURFACE);
         gfx.stroke_round_rect(card, 20.0, 1.0, LINE);
         let x = CARD_X + (CARD_W - KEYBOARD_W) / 2.0;
         let heading = TextStyle::new(28, Weight::ExtraBold, TEXT);
-        gfx.text(x, CARD_Y + 72.0, self.title(), heading, Align::Left);
-        let field = Rect::new(x, CARD_Y + 136.0, KEYBOARD_W, 88.0);
+        gfx.text(x, card_y + 72.0, self.title(), heading, Align::Left);
+        let field = Rect::new(x, card_y + 136.0, KEYBOARD_W, 88.0);
         self.entry
             .draw_field_showing(gfx, field, "", &mask(self.entry.text()));
         let (line, ink) = match &self.error {
@@ -180,12 +187,12 @@ impl Screen for KeyEntry {
         };
         gfx.text(
             x,
-            CARD_Y + 256.0,
+            card_y + 256.0,
             &line,
             TextStyle::new(16, Weight::Medium, ink),
             Align::Left,
         );
-        let top = CARD_Y + CARD_H - 48.0 - KEYBOARD_H;
+        let top = card_y + CARD_H - 48.0 - KEYBOARD_H;
         self.entry.draw_keyboard(gfx, x, top);
     }
 
@@ -204,6 +211,16 @@ mod tests {
     use crate::ui::nav::{Hits, Nav};
 
     const SECRET: &str = "0123456789abcdef0123456789ab3f9a";
+
+    #[test]
+    fn the_card_stays_centred_above_the_hint_bar_however_tall_the_canvas() {
+        assert_eq!(card_y(), 120.0);
+        ui::with_h(1200.0, || {
+            assert_eq!(card_y(), 180.0);
+            let (above, below) = (card_y(), crate::ui::chrome::hintbar_top() - card_y() - CARD_H);
+            assert!((above - below).abs() <= 2.0, "{above} above, {below} below");
+        });
+    }
 
     /// A Ctx whose Config and data folder are in a temporary directory, with `key` saved and
     /// Artwork started with it.
