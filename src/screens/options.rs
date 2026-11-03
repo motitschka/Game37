@@ -33,7 +33,7 @@ use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
 use crate::ui::text_entry::{KEYBOARD_H, KEYBOARD_W, Outcome, TextEntry};
 use crate::ui::theme::{ACCENT, Colour, DIM, LINE, MUTED, STAR, SURFACE, SURFACE2, TEXT};
-use crate::ui::{H, Rect, W, hit};
+use crate::ui::{self, H, Rect, W, hit};
 
 /// At most this many Favorites exist (FR-HOME-6).
 pub const MAX_FAVORITES: usize = 5;
@@ -50,7 +50,19 @@ const PICK_PITCH: f32 = 112.0;
 const RENAME_W: f32 = 1240.0;
 const RENAME_H: f32 = 768.0;
 const RENAME_X: f32 = (W - RENAME_W) / 2.0;
-const RENAME_Y: f32 = 120.0;
+/// The rename panel's top: 120 on a 1080 canvas, and as much lower as keeps it centred on a
+/// taller one (`ui::h`).
+fn rename_y() -> f32 {
+    120.0 + (ui::h() - H) / 2.0
+}
+
+/// The dim over the page and the side panel run the full height of the canvas (`ui::h`).
+fn dim_rect() -> Rect {
+    Rect::new(0.0, 0.0, W, ui::h())
+}
+fn panel_rect() -> Rect {
+    Rect::new(PANEL_X, 0.0, PANEL_W, ui::h())
+}
 
 /// The longest Display Title typing can make, in characters.
 pub const MAX_TITLE_CHARS: usize = 100;
@@ -651,26 +663,27 @@ impl OptionsMenu {
     }
 
     fn draw_rename(&mut self, gfx: &mut Gfx<'_>) {
-        let panel = Rect::new(RENAME_X, RENAME_Y, RENAME_W, RENAME_H);
+        let rename_y = rename_y();
+        let panel = Rect::new(RENAME_X, rename_y, RENAME_W, RENAME_H);
         gfx.fill_round_rect(panel, 20.0, SURFACE);
         gfx.stroke_round_rect(panel, 20.0, 1.0, LINE);
         let x = RENAME_X + (RENAME_W - KEYBOARD_W) / 2.0;
         let heading = TextStyle::new(30, Weight::ExtraBold, TEXT);
-        gfx.text(x, RENAME_Y + 72.0, "Rename", heading, Align::Left);
+        gfx.text(x, rename_y + 72.0, "Rename", heading, Align::Left);
         let meta = TextStyle::new(18, Weight::Medium, MUTED);
-        gfx.text(x, RENAME_Y + 106.0, &self.meta, meta, Align::Left);
+        gfx.text(x, rename_y + 106.0, &self.meta, meta, Align::Left);
         let Some(entry) = &mut self.entry else {
             return;
         };
-        let field = Rect::new(x, RENAME_Y + 136.0, KEYBOARD_W, 88.0);
+        let field = Rect::new(x, rename_y + 136.0, KEYBOARD_W, 88.0);
         entry.draw_field(gfx, field, &self.cleaned);
         let note = TextStyle::new(16, Weight::Medium, DIM);
         let reset = format!("Leave empty to use “{}”. The file keeps its name.", self.cleaned);
         let reset = ellipsize(&reset, KEYBOARD_W - 120.0, |s| gfx.measure(s, note));
-        gfx.text(x, RENAME_Y + 256.0, &reset, note, Align::Left);
+        gfx.text(x, rename_y + 256.0, &reset, note, Align::Left);
         let count = format!("{} / {MAX_TITLE_CHARS}", entry.text().chars().count());
-        gfx.text(x + KEYBOARD_W, RENAME_Y + 256.0, &count, note, Align::Right);
-        let top = RENAME_Y + RENAME_H - 48.0 - KEYBOARD_H;
+        gfx.text(x + KEYBOARD_W, rename_y + 256.0, &count, note, Align::Right);
+        let top = rename_y + RENAME_H - 48.0 - KEYBOARD_H;
         entry.draw_keyboard(gfx, x, top);
     }
 
@@ -1010,13 +1023,14 @@ impl Screen for OptionsMenu {
         for (i, thumb) in self.uploads.drain(..) {
             gfx.set_image(THUMB_KEYS[i], thumb.as_ref());
         }
-        gfx.fill_rect(Rect::new(0.0, 0.0, W, H), Colour::hex(0x000000).alpha(0.62));
+        gfx.fill_rect(dim_rect(), Colour::hex(0x000000).alpha(0.62));
         if self.view == View::Rename {
             self.item_hits.clear();
             return self.draw_rename(gfx);
         }
-        gfx.fill_rect(Rect::new(PANEL_X, 0.0, PANEL_W, H), SURFACE);
-        gfx.fill_rect(Rect::new(PANEL_X, 0.0, 1.0, H), LINE);
+        let panel = panel_rect();
+        gfx.fill_rect(panel, SURFACE);
+        gfx.fill_rect(Rect { w: 1.0, ..panel }, LINE);
         cover::draw(
             gfx,
             Rect::new(PANEL_X + 48.0, 64.0, 96.0, 144.0),
@@ -2269,5 +2283,16 @@ mod tests {
         let i = at(&menu, Item::Controller).unwrap();
         assert!(matches!(menu.choose(i, &mut ctx), Transition::None));
         assert_eq!(stored(&ctx, kart), WiiController::WiiRemoteAndNunchuk);
+    }
+
+    #[test]
+    fn on_a_taller_canvas_the_panel_runs_the_full_height_and_rename_stays_centred() {
+        assert_eq!(rename_y(), 120.0);
+        assert_eq!(panel_rect(), Rect::new(PANEL_X, 0.0, PANEL_W, 1080.0));
+        ui::with_h(1200.0, || {
+            assert_eq!(rename_y(), 180.0);
+            assert_eq!(dim_rect(), Rect::new(0.0, 0.0, W, 1200.0));
+            assert_eq!(panel_rect(), Rect::new(PANEL_X, 0.0, PANEL_W, 1200.0));
+        });
     }
 }

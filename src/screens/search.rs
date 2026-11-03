@@ -15,7 +15,7 @@ use crate::ui::nav::{Entry, Hint, Screen, Transition};
 use crate::ui::text::Weight;
 use crate::ui::text_entry::{KEYBOARD_H, KEYBOARD_W, Outcome, TextEntry};
 use crate::ui::theme::{ACCENT, BG, LINE, MUTED, SURFACE, TEXT};
-use crate::ui::{M, Rect, W, hit, scroll};
+use crate::ui::{self, H, M, Rect, W, chrome, hit, scroll};
 
 /// The field, where the top bar's pill is on other screens.
 const FIELD: Rect = Rect::new(M + 300.0, 40.0, W - M - 174.0 - (M + 300.0), 56.0);
@@ -28,19 +28,28 @@ const MAX_QUERY_CHARS: usize = 100;
 const COUNT_Y: f32 = 160.0;
 const COLS: usize = 8;
 const TOP: f32 = 196.0;
-const BOTTOM: f32 = 1010.0;
+/// Where the grid ends without the on-screen keyboard: the hint bar, which follows the bottom of
+/// the canvas (`ui::h`).
+fn view_bottom() -> f32 {
+    chrome::hintbar_top()
+}
 const PITCH_X: f32 = COVER_W + COVER_GAP;
 const PITCH_Y: f32 = COVER_H + 72.0;
 /// Pixels scrolled per wheel notch.
 const WHEEL_STEP: f32 = PITCH_Y / 2.0;
 /// How far below a cover the focused Game's Display Title and System name reach.
 const CAPTION_H: f32 = 76.0;
-/// Where the empty-query hint and the no-match message go.
-const MESSAGE_Y: f32 = 520.0;
+/// Where the empty-query hint and the no-match message go: 520 on a 1080 canvas, and as much
+/// lower as keeps it centred on a taller one.
+fn message_y() -> f32 {
+    520.0 + (ui::h() - H) / 2.0
+}
 /// The tray the on-screen keyboard is docked in (FR-SRCH-2), just above the hint bar, with the
 /// keyboard centred in it.
 const TRAY_PAD: f32 = 24.0;
-const TRAY_Y: f32 = BOTTOM - TRAY_PAD - KEYBOARD_H - TRAY_PAD;
+fn tray_y() -> f32 {
+    view_bottom() - TRAY_PAD - KEYBOARD_H - TRAY_PAD
+}
 
 /// What has focus: the field, being typed into, or the results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +70,8 @@ pub struct Search {
     /// The focused result, while the results have focus.
     grid_focus: usize,
     scroll: f32,
+    /// The canvas height (`ui::h`) `scroll` was last fitted at; a resize refits it in `draw`.
+    scroll_h: f32,
     hits: Vec<(Rect, usize)>,
     /// What the player last used, as of the last input or frame: on a controller the field has
     /// the on-screen keyboard.
@@ -78,6 +89,7 @@ impl Search {
             revision: None,
             grid_focus: 0,
             scroll: 0.0,
+            scroll_h: ui::h(),
             hits: Vec::new(),
             kind: ctx.input_kind,
         };
@@ -142,7 +154,11 @@ impl Search {
 
     /// Where the grid ends: above the on-screen keyboard while it shows.
     fn bottom(&self) -> f32 {
-        if self.keyboard_shown() { TRAY_Y } else { BOTTOM }
+        if self.keyboard_shown() {
+            tray_y()
+        } else {
+            view_bottom()
+        }
     }
 
     fn content_h(&self) -> f32 {
@@ -159,6 +175,15 @@ impl Search {
             view,
         );
         self.scroll = scroll::clamp(s, self.content_h(), view);
+        self.scroll_h = ui::h();
+    }
+
+    /// After a resize (`ui::h` changed), scrolls again so the focused Game shows and no space is
+    /// left below the last row.
+    fn refit(&mut self) {
+        if self.scroll_h != ui::h() {
+            self.reveal_focus();
+        }
     }
 
     /// Confirm or a click on a result opens its Details Page (FR-DET-1).
@@ -260,6 +285,7 @@ impl Search {
             Input::Pointer(Pointer::Wheel { dy }) => {
                 let view = self.bottom() - TOP;
                 self.scroll = scroll::clamp(self.scroll - dy * WHEEL_STEP, self.content_h(), view);
+                self.scroll_h = ui::h();
             }
             _ => {}
         }
@@ -313,9 +339,9 @@ impl Search {
         let style = TextStyle::new(26, Weight::Medium, MUTED);
         // Above the on-screen keyboard, centred between it and the field.
         let y = if self.keyboard_shown() {
-            (FIELD.y + FIELD.h + TRAY_Y) / 2.0 + 9.0
+            (FIELD.y + FIELD.h + tray_y()) / 2.0 + 9.0
         } else {
-            MESSAGE_Y
+            message_y()
         };
         gfx.text(W / 2.0, y, message, style, Align::Centre);
     }
@@ -416,6 +442,7 @@ impl Screen for Search {
     fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
         self.kind = ctx.input_kind;
         self.reload_if_changed(ctx);
+        self.refit();
         self.hits.clear();
         self.draw_field(gfx);
         if self.games.is_empty() {
@@ -424,10 +451,11 @@ impl Screen for Search {
             self.draw_results(gfx, ctx);
         }
         if self.keyboard_shown() {
-            gfx.fill_rect(Rect::new(0.0, TRAY_Y, W, BOTTOM - TRAY_Y), SURFACE);
-            gfx.fill_rect(Rect::new(0.0, TRAY_Y, W, 1.0), LINE);
+            let tray_y = tray_y();
+            gfx.fill_rect(Rect::new(0.0, tray_y, W, view_bottom() - tray_y), SURFACE);
+            gfx.fill_rect(Rect::new(0.0, tray_y, W, 1.0), LINE);
             self.entry
-                .draw_keyboard(gfx, (W - KEYBOARD_W) / 2.0, TRAY_Y + TRAY_PAD);
+                .draw_keyboard(gfx, (W - KEYBOARD_W) / 2.0, tray_y + TRAY_PAD);
         }
     }
 
@@ -669,7 +697,7 @@ mod tests {
         let (_dir, mut ctx) = pad_ctx_with(&["Quest", "Q Bert"]);
         let mut search = Search::new(&ctx);
         assert!(search.keyboard_shown() && search.text_input());
-        assert_eq!(search.bottom(), TRAY_Y, "the results end above the keyboard");
+        assert_eq!(search.bottom(), tray_y(), "the results end above the keyboard");
         act(&mut search, Action::Confirm, &mut ctx);
         assert_eq!(search.query(), "q", "A types the focused key");
         assert_eq!(titles(&search), ["Q Bert", "Quest"]);
@@ -692,7 +720,7 @@ mod tests {
             !search.keyboard_shown() && !search.text_input(),
             "Start finishes typing"
         );
-        assert_eq!(search.bottom(), BOTTOM);
+        assert_eq!(search.bottom(), view_bottom());
         act(&mut search, Action::Up, &mut ctx);
         assert!(
             search.keyboard_shown(),
@@ -815,5 +843,63 @@ mod tests {
     fn the_count_line_is_singular_for_one_game() {
         assert_eq!(count(1), "1 Game");
         assert_eq!(count(7), "7 Games");
+    }
+
+    #[test]
+    fn on_a_taller_canvas_the_results_keyboard_and_message_follow_the_bottom() {
+        assert_eq!(
+            (view_bottom(), tray_y(), message_y()),
+            (1010.0, 1010.0 - 48.0 - KEYBOARD_H, 520.0)
+        );
+        ui::with_h(1200.0, || {
+            assert_eq!(view_bottom(), 1130.0);
+            assert_eq!(
+                tray_y(),
+                1130.0 - 48.0 - KEYBOARD_H,
+                "the keyboard stays docked on the hint bar"
+            );
+            assert_eq!(message_y(), 580.0);
+            let (_dir, mut ctx) = pad_ctx_with(&["Quest"]);
+            let mut search = Search::new(&ctx);
+            assert_eq!(search.bottom(), tray_y());
+            act(&mut search, Action::Confirm, &mut ctx);
+            act(&mut search, Action::Start, &mut ctx);
+            assert_eq!(search.bottom(), 1130.0);
+        });
+    }
+
+    /// 50 results (7 rows) with the last one focused and in view.
+    fn search_scrolled_to_the_end() -> (tempfile::TempDir, Ctx, Search) {
+        let titles: Vec<String> = (0..50).map(|n| format!("Game {n:02}")).collect();
+        let titles: Vec<&str> = titles.iter().map(String::as_str).collect();
+        let (dir, mut ctx) = ctx_with(&titles);
+        let mut search = Search::new(&ctx);
+        type_text(&mut search, "game", &mut ctx);
+        assert_eq!(search.games.len(), 50);
+        act(&mut search, Action::Down, &mut ctx);
+        search.grid_focus = 49;
+        search.reveal_focus();
+        (dir, ctx, search)
+    }
+
+    #[test]
+    fn a_taller_canvas_scrolls_the_results_less_and_a_resize_refits_them() {
+        let (_dir, _ctx, mut search) = search_scrolled_to_the_end();
+        assert_eq!(search.focus, Focus::Results);
+        assert_eq!(search.scroll, search.content_h() - (1010.0 - TOP));
+        ui::with_h(1200.0, || {
+            search.refit();
+            assert_eq!(search.scroll, search.content_h() - (1130.0 - TOP));
+        });
+        search.refit();
+        assert_eq!(
+            search.scroll,
+            search.content_h() - (1010.0 - TOP),
+            "no more than the last row"
+        );
+        // Wheeled away from the focused Game: an unchanged height leaves the scroll alone.
+        search.scroll = 0.0;
+        search.refit();
+        assert_eq!(search.scroll, 0.0);
     }
 }

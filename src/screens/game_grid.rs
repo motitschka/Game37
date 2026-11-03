@@ -16,7 +16,7 @@ use crate::ui::input::{Action, Input, Pointer, glyph_label};
 use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
 use crate::ui::theme::{BG, Colour, LINE, MUTED, SURFACE, TEXT, WARN};
-use crate::ui::{M, Rect, W, hit, scroll};
+use crate::ui::{self, M, Rect, W, hit, scroll};
 
 /// Where a grid's Games come from; called again whenever the library changes.
 pub type Source = Box<dyn Fn(&Library) -> Result<Vec<GameRow>, DbError>>;
@@ -32,7 +32,12 @@ struct Extra {
 
 const COLS: usize = 8;
 const TOP: f32 = 288.0;
-const BOTTOM: f32 = 1010.0;
+/// The bottom of the grid's view: the hint bar, which follows the bottom of the canvas (`ui::h`).
+fn bottom() -> f32 {
+    chrome::hintbar_top()
+}
+/// The fade over the last row showing, when more lies below.
+const FADE_H: f32 = 110.0;
 const PITCH_X: f32 = COVER_W + COVER_GAP;
 const PITCH_Y: f32 = COVER_H + 72.0;
 /// Pixels scrolled per wheel notch.
@@ -137,6 +142,8 @@ pub struct GameGrid {
     revision: Option<u64>,
     focus: usize,
     scroll: f32,
+    /// The canvas height (`ui::h`) `scroll` was last fitted at; a resize refits it in `draw`.
+    scroll_h: f32,
     hits: Vec<(Rect, usize)>,
     extra: Option<Extra>,
     /// Where the sort chip was last drawn, for the mouse.
@@ -164,6 +171,7 @@ impl GameGrid {
             revision: None,
             focus: 0,
             scroll: 0.0,
+            scroll_h: ui::h(),
             hits: Vec::new(),
             extra: None,
             sort_hit: None,
@@ -218,7 +226,7 @@ impl GameGrid {
         if self.extra.is_some() {
             self.sort_order = ctx.library.sort_order().unwrap_or_default();
         }
-        self.scroll = scroll::clamp(self.scroll, self.content_h(), BOTTOM - self.top_y());
+        self.scroll = scroll::clamp(self.scroll, self.content_h(), bottom() - self.top_y());
         self.reveal_focus();
     }
 
@@ -325,7 +333,7 @@ impl GameGrid {
 
     fn reveal_focus(&mut self) {
         let row = (self.focus / COLS) as f32;
-        let bottom_minus_top = BOTTOM - self.top_y();
+        let bottom_minus_top = bottom() - self.top_y();
         let s = scroll::keep_visible(
             self.scroll,
             row * PITCH_Y - RING_REACH,
@@ -333,6 +341,15 @@ impl GameGrid {
             bottom_minus_top,
         );
         self.scroll = scroll::clamp(s, self.content_h(), bottom_minus_top);
+        self.scroll_h = ui::h();
+    }
+
+    /// After a resize (`ui::h` changed), scrolls again so the focused Game shows and no space is
+    /// left below the last row.
+    fn refit(&mut self) {
+        if self.scroll_h != ui::h() {
+            self.reveal_focus();
+        }
     }
 
     /// The sort chip, right-aligned next to the title; returns where it was drawn.
@@ -525,9 +542,10 @@ impl Screen for GameGrid {
                 }
             }
             Input::Pointer(Pointer::Wheel { dy }) => {
-                let bottom_minus_top = BOTTOM - self.top_y();
+                let bottom_minus_top = bottom() - self.top_y();
                 self.scroll =
                     scroll::clamp(self.scroll - dy * WHEEL_STEP, self.content_h(), bottom_minus_top);
+                self.scroll_h = ui::h();
             }
             _ => {}
         }
@@ -537,6 +555,7 @@ impl Screen for GameGrid {
     fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
         self.reload_if_changed(ctx);
         self.sync_notice(ctx);
+        self.refit();
         let mut title_x = M;
         if let Some(extra) = &self.extra {
             chrome::background_tinted(gfx, extra.tint, 0.35);
@@ -582,11 +601,11 @@ impl Screen for GameGrid {
             self.draw_empty(gfx);
             return;
         }
-        let top = self.top_y();
+        let (top, bottom) = (self.top_y(), bottom());
         let clip_top = top - RING_REACH - 4.0;
-        gfx.clip(Some(Rect::new(0.0, clip_top, W, BOTTOM - clip_top)));
+        gfx.clip(Some(Rect::new(0.0, clip_top, W, bottom - clip_top)));
         let first_row = ((self.scroll - RING_REACH) / PITCH_Y).floor().max(0.0) as usize;
-        let last_row = ((self.scroll + BOTTOM - top) / PITCH_Y).ceil() as usize;
+        let last_row = ((self.scroll + bottom - top) / PITCH_Y).ceil() as usize;
         let caption = TextStyle::new(17, Weight::Medium, MUTED);
         for i in first_row * COLS..((last_row + 1) * COLS).min(self.games.len()) {
             let (row, col) = (i / COLS, i % COLS);
@@ -621,13 +640,14 @@ impl Screen for GameGrid {
                     r.x,
                     r.y.max(clip_top),
                     r.w,
-                    (r.y + r.h).min(BOTTOM) - r.y.max(clip_top),
+                    (r.y + r.h).min(bottom) - r.y.max(clip_top),
                 ),
                 i,
             ));
         }
-        if self.content_h() - self.scroll > BOTTOM - top {
-            gfx.fill_round_rect_vgradient(Rect::new(0.0, 900.0, W, BOTTOM - 900.0), 0.0, BG.alpha(0.0), BG);
+        if self.content_h() - self.scroll > bottom - top {
+            let fade = Rect::new(0.0, bottom - FADE_H, W, FADE_H);
+            gfx.fill_round_rect_vgradient(fade, 0.0, BG.alpha(0.0), BG);
         }
         gfx.clip(None);
         if self.games.is_empty() {
@@ -785,10 +805,60 @@ mod tests {
         assert_eq!(grid.focus, 80, "the focused Game moved to row 10");
         let row_top = (grid.focus / COLS) as f32 * PITCH_Y;
         assert!(
-            row_top - grid.scroll >= 0.0 && row_top - grid.scroll <= BOTTOM - TOP,
+            row_top - grid.scroll >= 0.0 && row_top - grid.scroll <= bottom() - TOP,
             "row 10 should be scrolled into view, but scroll is {}",
             grid.scroll
         );
+    }
+
+    /// A Console Page of 50 Games (7 rows), loaded, with the last Game focused and in view.
+    fn grid_scrolled_to_the_end(ctx: &mut Ctx) -> GameGrid {
+        let games: Vec<_> = (0..50).map(found).collect();
+        ctx.library.sync_system("snes", &games, 0).unwrap();
+        let mut grid = GameGrid::new("NES", console_source()).sortable(Colour::hex(0), "hint".into(), snes());
+        grid.handle(Input::Action(Action::Back), ctx); // initial load
+        grid.focus = 49;
+        grid.reveal_focus();
+        grid
+    }
+
+    /// Where the last row's focus ring and caption end, in content coordinates.
+    const LAST_ROW_END: f32 = 6.0 * PITCH_Y + COVER_H + RING_REACH + 40.0;
+
+    #[test]
+    fn a_taller_canvas_shows_more_rows_and_scrolls_less_to_the_last() {
+        let mut ctx = Ctx::empty();
+        let grid = grid_scrolled_to_the_end(&mut ctx);
+        assert_eq!(grid.scroll, LAST_ROW_END - (1010.0 - TOP));
+        ui::with_h(1200.0, || {
+            assert_eq!(bottom(), 1130.0);
+            let grid = grid_scrolled_to_the_end(&mut ctx);
+            assert_eq!(grid.scroll, LAST_ROW_END - (1130.0 - TOP));
+        });
+    }
+
+    #[test]
+    fn a_resize_refits_the_grid_scroll() {
+        let mut ctx = Ctx::empty();
+        let mut grid = grid_scrolled_to_the_end(&mut ctx);
+        ui::with_h(1200.0, || {
+            grid.refit();
+            assert_eq!(
+                grid.scroll,
+                grid.content_h() - (1130.0 - TOP),
+                "no space left under the last row"
+            );
+        });
+        grid.refit();
+        assert_eq!(
+            grid.scroll,
+            LAST_ROW_END - (1010.0 - TOP),
+            "the focused Game shows in full"
+        );
+        // Wheeled away from the focused Game: an unchanged height leaves the scroll alone.
+        grid.scroll = 0.0;
+        grid.refit();
+        assert_eq!(grid.scroll, 0.0);
     }
 
     #[test]

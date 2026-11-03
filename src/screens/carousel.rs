@@ -14,13 +14,24 @@ use crate::ui::input::{Action, Input, Pointer};
 use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
 use crate::ui::theme::{BG, Colour, MUTED, TEXT, WARN};
-use crate::ui::{H, Rect, W};
+use crate::ui::{self, H, Rect, W};
 
 use super::game_grid::GameGrid;
 use super::home::tilde;
 
-/// Vertical centre of the cards.
+/// Vertical centre of the cards on a 1080 canvas.
 const CARD_Y: f32 = 450.0;
+
+/// How far the cards, the count and the page dots move down to stay centred on a canvas taller
+/// than 1080 (`ui::h`).
+fn dy() -> f32 {
+    (ui::h() - H) / 2.0
+}
+
+/// Vertical centre of the cards on this canvas.
+fn card_y() -> f32 {
+    CARD_Y + dy()
+}
 
 /// Where a card sits and how it looks at a distance from the focused card.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -121,7 +132,7 @@ fn card_opacity(offset: f32, games: usize, missing: bool) -> f32 {
 /// The settled square a card fills at a whole-number `offset`.
 fn card_rect(offset: i32) -> Rect {
     let s = slot(offset as f32);
-    Rect::new(s.cx - s.size / 2.0, CARD_Y - s.size / 2.0, s.size, s.size)
+    Rect::new(s.cx - s.size / 2.0, card_y() - s.size / 2.0, s.size, s.size)
 }
 
 /// Offset from the focused card of the card under a point, if any.
@@ -294,7 +305,7 @@ impl Carousel {
         missing: Option<&'static Emulator>,
     ) {
         let Slot { cx, size, .. } = slot(offset);
-        let cy = CARD_Y;
+        let cy = card_y();
         let card = Rect::new(cx - size / 2.0, cy - size / 2.0, size, size);
         let colour = Colour::hex(system.colour);
         gfx.fill_round_rect_gradient(
@@ -382,7 +393,8 @@ impl Screen for Carousel {
             self.position - self.position.floor(),
         );
         gfx.clear(BG);
-        gfx.radial_glow(W / 2.0, 0.42 * H, 0.6 * W, 0.6 * H, tint, 0.55);
+        let dy = dy();
+        gfx.radial_glow(W / 2.0, 0.42 * H + dy, 0.6 * W, 0.6 * H, tint, 0.55);
 
         for (index, offset) in visible(self.position) {
             let missing = ctx.emulators.missing(&SYSTEMS[index]);
@@ -394,7 +406,7 @@ impl Screen for Carousel {
 
         gfx.text(
             W / 2.0,
-            790.0,
+            790.0 + dy,
             &count_label(self.counts[self.focus()]),
             TextStyle::new(26, Weight::SemiBold, MUTED),
             Align::Centre,
@@ -404,9 +416,13 @@ impl Screen for Carousel {
         for i in 0..n {
             let x = W / 2.0 + (i as f32 - (n - 1) as f32 / 2.0) * 22.0;
             if i == self.focus() {
-                gfx.fill_round_rect(Rect::new(x - 12.0, 846.0, 24.0, 8.0), 4.0, Colour::hex(0xFFFFFF));
+                gfx.fill_round_rect(
+                    Rect::new(x - 12.0, 846.0 + dy, 24.0, 8.0),
+                    4.0,
+                    Colour::hex(0xFFFFFF),
+                );
             } else {
-                gfx.fill_circle(x, 850.0, 4.0, Colour::hex(0xFFFFFF).alpha(0.3));
+                gfx.fill_circle(x, 850.0 + dy, 4.0, Colour::hex(0xFFFFFF).alpha(0.3));
             }
         }
     }
@@ -580,6 +596,17 @@ mod tests {
         assert_eq!(card_at(1760.0, 450.0), Some(2));
         assert_eq!(card_at(1250.0, 450.0), None, "the gap between cards");
         assert_eq!(card_at(960.0, 790.0), None, "below the cards");
+    }
+
+    #[test]
+    fn on_a_taller_canvas_the_cards_stay_centred_and_clicks_follow_them() {
+        ui::with_h(1200.0, || {
+            assert_eq!(card_y(), 510.0);
+            assert_eq!(card_rect(0), Rect::new(710.0, 260.0, 500.0, 500.0));
+            assert_eq!(card_at(960.0, 220.0), None, "above the centre card");
+            assert_eq!(card_at(960.0, 740.0), Some(0), "below where it ends at 1080");
+            assert_eq!(card_at(1450.0, 650.0), Some(1));
+        });
     }
 
     #[test]

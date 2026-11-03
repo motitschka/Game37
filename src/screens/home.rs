@@ -20,10 +20,17 @@ use crate::ui::{M, Rect, W, hit, scroll};
 
 const SHELVES: usize = Shelf::ALL.len();
 
-/// The visible content area between the top bar and the hint bar.
+/// The visible content area between the top bar and the hint bar, which follows the bottom of the
+/// canvas (`ui::h`): 900 tall on a 1080 canvas.
 const VIEW_TOP: f32 = 110.0;
-const VIEW_BOTTOM: f32 = 1010.0;
-const VIEW_H: f32 = VIEW_BOTTOM - VIEW_TOP;
+fn view_bottom() -> f32 {
+    chrome::hintbar_top()
+}
+fn view_h() -> f32 {
+    view_bottom() - VIEW_TOP
+}
+/// The fade over the last Shelf showing, when more lies below.
+const FADE_H: f32 = 80.0;
 const VIEW_W: f32 = W - 2.0 * M;
 /// Distance from the top of a Shelf's block to its title's baseline.
 const TITLE_DY: f32 = 46.0;
@@ -140,6 +147,8 @@ pub struct Home {
     focus: Focus,
     hscroll: [f32; SHELVES],
     vscroll: f32,
+    /// The view height `vscroll` was last fitted to; a resize refits it in `draw`.
+    vscroll_view: f32,
     hits: Vec<(Rect, Target)>,
 }
 
@@ -165,6 +174,7 @@ impl Home {
             focus: Focus::default(),
             hscroll: [0.0; SHELVES],
             vscroll: 0.0,
+            vscroll_view: view_h(),
             hits: Vec::new(),
         }
     }
@@ -232,8 +242,18 @@ impl Home {
     /// Scrolls Home to show the focused Shelf.
     fn reveal_shelf(&mut self) {
         let i = self.focus.shelf;
-        let s = scroll::keep_visible(self.vscroll, self.block_top(i), self.block_h(i), VIEW_H);
-        self.vscroll = scroll::clamp(s, self.content_h(), VIEW_H);
+        let view = view_h();
+        let s = scroll::keep_visible(self.vscroll, self.block_top(i), self.block_h(i), view);
+        self.vscroll = scroll::clamp(s, self.content_h(), view);
+        self.vscroll_view = view;
+    }
+
+    /// After a resize (`ui::h` changed), scrolls again so the focused Shelf shows and no space is
+    /// left below the last one.
+    fn refit(&mut self) {
+        if self.vscroll_view != view_h() {
+            self.reveal_shelf();
+        }
     }
 
     fn confirm(&self, ctx: &mut Ctx) -> Transition {
@@ -446,7 +466,9 @@ impl Screen for Home {
                 }
             }
             Input::Pointer(Pointer::Wheel { dy }) => {
-                self.vscroll = scroll::clamp(self.vscroll - dy * WHEEL_STEP, self.content_h(), VIEW_H);
+                let view = view_h();
+                self.vscroll = scroll::clamp(self.vscroll - dy * WHEEL_STEP, self.content_h(), view);
+                self.vscroll_view = view;
             }
             _ => {}
         }
@@ -455,12 +477,14 @@ impl Screen for Home {
 
     fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
         self.reload_if_changed(ctx);
+        self.refit();
         self.hits.clear();
-        gfx.clip(Some(Rect::new(0.0, VIEW_TOP, W, VIEW_H)));
+        let (view_bottom, view_h) = (view_bottom(), view_h());
+        gfx.clip(Some(Rect::new(0.0, VIEW_TOP, W, view_h)));
         let title = TextStyle::new(28, Weight::Bold, TEXT);
         for i in 0..SHELVES {
             let top = VIEW_TOP + self.block_top(i) - self.vscroll;
-            if top > VIEW_BOTTOM || top + self.block_h(i) < VIEW_TOP {
+            if top > view_bottom || top + self.block_h(i) < VIEW_TOP {
                 continue;
             }
             let base = top + TITLE_DY;
@@ -471,16 +495,16 @@ impl Screen for Home {
             }
             gfx.text(M, base, name(self.shelves[i].shelf), title, Align::Left);
         }
-        if self.content_h() - self.vscroll > VIEW_H {
+        if self.content_h() - self.vscroll > view_h {
             gfx.fill_round_rect_vgradient(
-                Rect::new(0.0, 930.0, W, VIEW_BOTTOM - 930.0),
+                Rect::new(0.0, view_bottom - FADE_H, W, FADE_H),
                 0.0,
                 BG.alpha(0.0),
                 BG,
             );
         }
         gfx.clip(None);
-        self.hits = clip_hits(&self.hits, Rect::new(0.0, VIEW_TOP, W, VIEW_H));
+        self.hits = clip_hits(&self.hits, Rect::new(0.0, VIEW_TOP, W, view_h));
     }
 
     fn hints(&self) -> Vec<Hint> {
@@ -504,6 +528,7 @@ impl Screen for Home {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui;
 
     fn row(id: i64) -> GameRow {
         GameRow {
@@ -785,7 +810,7 @@ mod tests {
 
     #[test]
     fn a_hit_rect_above_the_view_is_clipped_so_a_click_there_misses() {
-        let view = Rect::new(0.0, VIEW_TOP, W, VIEW_H);
+        let view = Rect::new(0.0, VIEW_TOP, W, view_h());
         // A cover scrolled so most of it sits above the top bar; only its bottom sliver is
         // visible.
         let hits = vec![(
@@ -803,5 +828,55 @@ mod tests {
             Some(Target::Item(0, 2)),
             "a click on the visible sliver still hits"
         );
+    }
+
+    /// Every Shelf filled, so Home is taller than the view however tall the canvas is.
+    fn filled_home() -> Home {
+        let mut home = Home::new();
+        for row in &mut home.shelves {
+            row.games = rows(1..=3);
+        }
+        home
+    }
+
+    #[test]
+    fn a_taller_canvas_shows_more_of_home_and_scrolls_less_to_the_last_shelf() {
+        let mut home = filled_home();
+        home.focus.shelf = SHELVES - 1;
+        home.reveal_shelf();
+        assert_eq!(view_h(), 900.0);
+        assert_eq!(home.vscroll, home.content_h() - 900.0);
+        ui::with_h(1200.0, || {
+            assert_eq!((view_bottom(), view_h()), (1130.0, 1020.0));
+            let mut home = filled_home();
+            home.focus.shelf = SHELVES - 1;
+            home.reveal_shelf();
+            assert_eq!(home.vscroll, home.content_h() - 1020.0);
+        });
+    }
+
+    #[test]
+    fn a_resize_refits_the_scroll_to_the_new_view() {
+        let mut home = filled_home();
+        home.focus.shelf = SHELVES - 1;
+        home.reveal_shelf();
+        ui::with_h(1200.0, || {
+            home.refit();
+            assert_eq!(
+                home.vscroll,
+                home.content_h() - 1020.0,
+                "no space left under the last Shelf"
+            );
+        });
+        home.refit();
+        assert_eq!(
+            home.vscroll,
+            home.content_h() - 900.0,
+            "the focused Shelf shows in full again"
+        );
+        // Wheeled away from the focused Shelf: an unchanged height leaves the scroll alone.
+        home.vscroll = 0.0;
+        home.refit();
+        assert_eq!(home.vscroll, 0.0);
     }
 }

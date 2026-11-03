@@ -21,15 +21,18 @@ use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::scroll;
 use crate::ui::text::Weight;
 use crate::ui::theme::{ACCENT, Colour, DIM, LINE, MUTED, SURFACE, SURFACE2, TEXT};
-use crate::ui::{H, Rect, W, hit};
+use crate::ui::{self, Rect, W, hit};
 
 const PANEL_W: f32 = 1040.0;
 const PANEL_X: f32 = W - PANEL_W;
 const GRID_X: f32 = PANEL_X + 56.0;
 const GRID_W: f32 = PANEL_W - 112.0;
-/// The grid scrolls between these, inside the panel and above the credit line.
+/// The grid scrolls between these, inside the panel and above the credit line, which follows the
+/// bottom of the canvas (`ui::h`): 944 on a 1080 canvas.
 const GRID_TOP: f32 = 236.0;
-const GRID_BOTTOM: f32 = 944.0;
+fn grid_bottom() -> f32 {
+    ui::h() - 136.0
+}
 const GAP: f32 = 24.0;
 const TAB_Y: f32 = 196.0;
 /// How far one wheel notch scrolls.
@@ -83,7 +86,9 @@ fn content_h(kind: Kind, n: usize) -> f32 {
     (rows * pitch_y(kind) - GAP).max(0.0) + 2.0 * RING_REACH
 }
 
-const VIEW_H: f32 = GRID_BOTTOM - GRID_TOP;
+fn view_h() -> f32 {
+    grid_bottom() - GRID_TOP
+}
 
 /// What the picker says instead of a grid: a heading and a line under it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +109,9 @@ pub struct ArtworkPicker {
     placed: [bool; 2],
     /// Scroll the focused preview into view on the next draw.
     reveal: bool,
+    /// The canvas height (`ui::h`) the grid was last drawn at; a resize scrolls the focused preview
+    /// into view again.
+    scroll_h: f32,
     /// Whether the open tab had previews to choose from, as of the last look, for the hints.
     choosable: bool,
     /// Whether the candidates were asked for yet: the first ask tries again lists that failed to
@@ -125,6 +133,7 @@ impl ArtworkPicker {
             scroll: [0.0; 2],
             placed: [false; 2],
             reveal: false,
+            scroll_h: ui::h(),
             choosable: false,
             asked: Cell::new(false),
             cell_hits: Vec::new(),
@@ -213,7 +222,7 @@ impl ArtworkPicker {
 
     /// The preview under the pointer, among `n`, if it shows inside the grid.
     fn grid_hit(&self, x: f32, y: f32, n: usize) -> Option<usize> {
-        if !(GRID_TOP..GRID_BOTTOM).contains(&y) {
+        if !(GRID_TOP..grid_bottom()).contains(&y) {
             return None;
         }
         hit(&self.cell_hits, x, y).filter(|&i| i < n)
@@ -288,6 +297,21 @@ impl ArtworkPicker {
         glyph(gfx, x - 16.0, TAB_Y, next);
     }
 
+    /// Fits the open tab's scroll to its `n` previews before a draw: the focused one scrolled into
+    /// view when asked or after a resize (`ui::h` changed), and no space left past the last row.
+    fn fit_scroll(&mut self, n: usize) {
+        let kind = self.tab;
+        let tab = tab_index(kind);
+        let view = view_h();
+        let resized = std::mem::replace(&mut self.scroll_h, ui::h()) != ui::h();
+        if std::mem::take(&mut self.reveal) || resized {
+            let row = (self.focus[tab] / cols(kind)) as f32;
+            let len = cell(kind).1 + 2.0 * RING_REACH;
+            self.scroll[tab] = scroll::keep_visible(self.scroll[tab], row * pitch_y(kind), len, view);
+        }
+        self.scroll[tab] = scroll::clamp(self.scroll[tab], content_h(kind, n), view);
+    }
+
     fn draw_grid(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx, list: &[Candidate]) {
         let kind = self.tab;
         let tab = tab_index(kind);
@@ -295,17 +319,13 @@ impl ArtworkPicker {
         let pitch = pitch_y(kind);
         let cols = cols(kind);
         let focus = self.focus[tab];
-        if std::mem::take(&mut self.reveal) {
-            let row = (focus / cols) as f32;
-            let s = scroll::keep_visible(self.scroll[tab], row * pitch, ch + 2.0 * RING_REACH, VIEW_H);
-            self.scroll[tab] = s;
-        }
-        self.scroll[tab] = scroll::clamp(self.scroll[tab], content_h(kind, list.len()), VIEW_H);
+        self.fit_scroll(list.len());
+        let view_h = view_h();
         let offset = self.scroll[tab];
         let current = self.current(ctx, list);
-        gfx.clip(Some(Rect::new(PANEL_X + 1.0, GRID_TOP, PANEL_W - 1.0, VIEW_H)));
+        gfx.clip(Some(Rect::new(PANEL_X + 1.0, GRID_TOP, PANEL_W - 1.0, view_h)));
         let first_row = (offset / pitch).floor() as usize;
-        let last_row = ((offset + VIEW_H) / pitch).ceil() as usize;
+        let last_row = ((offset + view_h) / pitch).ceil() as usize;
         let shown = list
             .iter()
             .enumerate()
@@ -353,7 +373,7 @@ impl ArtworkPicker {
         };
         let style = TextStyle::new(17, Weight::Medium, MUTED);
         let credit = ellipsize(&credit, GRID_W, |s| gfx.measure(s, style));
-        gfx.text(GRID_X, GRID_BOTTOM + 40.0, &credit, style, Align::Left);
+        gfx.text(GRID_X, grid_bottom() + 40.0, &credit, style, Align::Left);
     }
 
     fn draw_notice(&mut self, gfx: &mut Gfx<'_>, notice: &Notice) {
@@ -361,7 +381,7 @@ impl ArtworkPicker {
         let body = TextStyle::new(18, Weight::Medium, MUTED);
         let cx = PANEL_X + PANEL_W / 2.0;
         let lines = gfx.wrap(&notice.body, body, GRID_W - 120.0);
-        let top = GRID_TOP + VIEW_H / 2.0 - 30.0 - lines.len() as f32 * 14.0;
+        let top = GRID_TOP + view_h() / 2.0 - 30.0 - lines.len() as f32 * 14.0;
         let title = ellipsize(&notice.heading, GRID_W, |s| gfx.measure(s, heading));
         gfx.text(cx, top, &title, heading, Align::Centre);
         for (i, line) in lines.iter().enumerate() {
@@ -420,7 +440,7 @@ impl Screen for ArtworkPicker {
             Input::Pointer(Pointer::Wheel { dy }) => {
                 let tab = tab_index(self.tab);
                 let s = self.scroll[tab] - dy * WHEEL_STEP;
-                self.scroll[tab] = scroll::clamp(s, content_h(self.tab, n), VIEW_H);
+                self.scroll[tab] = scroll::clamp(s, content_h(self.tab, n), view_h());
             }
             _ => {}
         }
@@ -429,9 +449,10 @@ impl Screen for ArtworkPicker {
 
     fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
         self.cell_hits.clear();
-        gfx.fill_rect(Rect::new(0.0, 0.0, W, H), Colour::hex(0x000000).alpha(0.62));
-        gfx.fill_rect(Rect::new(PANEL_X, 0.0, PANEL_W, H), SURFACE);
-        gfx.fill_rect(Rect::new(PANEL_X, 0.0, 1.0, H), LINE);
+        let h = ui::h();
+        gfx.fill_rect(Rect::new(0.0, 0.0, W, h), Colour::hex(0x000000).alpha(0.62));
+        gfx.fill_rect(Rect::new(PANEL_X, 0.0, PANEL_W, h), SURFACE);
+        gfx.fill_rect(Rect::new(PANEL_X, 0.0, 1.0, h), LINE);
         let heading = TextStyle::new(30, Weight::ExtraBold, TEXT);
         gfx.text(GRID_X, 104.0, "Choose artwork", heading, Align::Left);
         let meta = TextStyle::new(18, Weight::Medium, MUTED);
@@ -653,7 +674,7 @@ mod tests {
         picker.cell_hits = vec![(Rect::new(GRID_X, 300.0, 400.0, 700.0), 0)];
         let below = Input::Pointer(Pointer::Click {
             x: GRID_X + 10.0,
-            y: GRID_BOTTOM + 5.0,
+            y: grid_bottom() + 5.0,
         });
         assert!(
             matches!(picker.handle(below, &mut ctx), Transition::None),
@@ -800,6 +821,38 @@ mod tests {
         assert_eq!(
             none.heading, "SteamGridDB has no heroes for this Game",
             "Beta has none"
+        );
+    }
+
+    #[test]
+    fn on_a_taller_canvas_the_grid_reaches_further_down_and_a_resize_refits_it() {
+        let mut picker = ArtworkPicker::new(alpha());
+        picker.cell_hits = vec![(Rect::new(GRID_X, 900.0, 200.0, 200.0), 0)];
+        assert_eq!(picker.grid_hit(GRID_X + 10.0, 1000.0, 1), None, "under the grid");
+        // 30 covers in 6 rows, the last focused.
+        picker.focus[0] = 29;
+        picker.reveal = true;
+        picker.fit_scroll(30);
+        let end = content_h(Kind::Cover, 30);
+        assert_eq!(picker.scroll[0], end - 708.0);
+        ui::with_h(1200.0, || {
+            assert_eq!(grid_bottom(), 1064.0);
+            assert_eq!(picker.grid_hit(GRID_X + 10.0, 1000.0, 1), Some(0));
+            picker.fit_scroll(30);
+            assert_eq!(picker.scroll[0], end - 828.0, "no space left under the last row");
+        });
+        picker.scroll[0] = 0.0;
+        picker.fit_scroll(30);
+        assert_eq!(
+            picker.scroll[0],
+            end - 708.0,
+            "a resize scrolls the focused cover into view"
+        );
+        picker.scroll[0] = 0.0;
+        picker.fit_scroll(30);
+        assert_eq!(
+            picker.scroll[0], 0.0,
+            "an unchanged height leaves a wheeled scroll alone"
         );
     }
 }
