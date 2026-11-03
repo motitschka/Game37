@@ -1,6 +1,9 @@
 # Changelog
 
-## 0.2.0-beta.2 (unreleased)
+## 0.2.0-beta.2 (2026-11-03)
+
+Switch 2 and PS5 join the library ahead of an emulator that can play them, Wii Games can use a
+Classic Controller, and Switch controllers press the right buttons in PlayStation Games.
 
 ### New
 - **Switch 2 and PS5 are listed as Upcoming Systems.** No emulator can play them yet, but Game37
