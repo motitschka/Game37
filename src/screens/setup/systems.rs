@@ -13,7 +13,7 @@ use crate::ui::text::Weight;
 use crate::ui::theme::{ACCENT, LINE, MUTED, SURFACE, SURFACE2, TEXT};
 use crate::ui::{M, Rect, W, hit};
 
-const COLS: usize = 6;
+const COLS: usize = 7;
 const GAP: f32 = 24.0;
 const TILE_H: f32 = 148.0;
 const TILE_W: f32 = (W - 2.0 * M - (COLS - 1) as f32 * GAP) / COLS as f32;
@@ -116,6 +116,7 @@ impl Systems {
 fn plays_in(system: &System) -> String {
     match (system.kind, emulators::for_system(system)) {
         (Kind::External, Some(emulator)) => format!("Needs {}", emulator.name),
+        (Kind::Upcoming, _) => "Not playable yet".to_owned(),
         _ => "Plays in Game37".to_owned(),
     }
 }
@@ -241,7 +242,7 @@ mod tests {
         act(&mut setup, ctx, Action::Confirm);
         act(&mut setup, ctx, Action::Down);
         act(&mut setup, ctx, Action::Confirm);
-        assert_eq!(ticked(&setup), ["snes", "wii"], "in System Order");
+        assert_eq!(ticked(&setup), ["snes", "3ds"], "in System Order");
         act(&mut setup, ctx, Action::Confirm);
         assert_eq!(ticked(&setup), ["snes"]);
     }
@@ -253,7 +254,7 @@ mod tests {
         act(&mut setup, ctx, Action::Confirm);
         act(&mut setup, ctx, Action::Sort);
         assert_eq!(ticked(&setup).len(), SYSTEMS.len());
-        assert_eq!(selected_label(SYSTEMS.len()), "17 Systems selected");
+        assert_eq!(selected_label(SYSTEMS.len()), "19 Systems selected");
         assert_eq!(selected_label(1), "1 System selected");
     }
 
@@ -278,7 +279,7 @@ mod tests {
         assert_eq!(
             setup.step(),
             3,
-            "PlayStation needs no emulator, so step 2 is passed over"
+            "PlayStation 2 needs no emulator, so step 2 is passed over"
         );
     }
 
@@ -289,5 +290,7 @@ mod tests {
         assert_eq!(plays_in(by_id("wiiu")), "Needs Cemu");
         assert_eq!(plays_in(by_id("gc")), "Plays in Game37");
         assert_eq!(plays_in(by_id("ps4")), "Needs shadPS4");
+        assert_eq!(plays_in(by_id("switch2")), "Not playable yet");
+        assert_eq!(plays_in(by_id("ps5")), "Not playable yet");
     }
 }

@@ -14,7 +14,7 @@ Two people use Game37:
 - Settings → Rescan library finds changes made while Game37 was closed.
 - *Covers FR-LIB-1, FR-LIB-2, FR-LIB-3*
 
-**US-2 Folder games.** As a player with PS3, PS4 or Wii U games, I want a game folder to count as one Game, so these Systems work like the others.
+**US-2 Folder games.** As a player with PS3, PS4, PS5 or Wii U games, I want a game folder to count as one Game, so these Systems work like the others.
 - A `BLUS12345/` folder containing `PS3_GAME/` appears as one Game in PS3.
 - The files inside a game folder never appear as separate Games.
 - *Covers FR-LIB-4, FR-LIB-5*
@@ -60,7 +60,7 @@ Two people use Game37:
 
 **US-10 Browse a console.** As a player, I want to pick a console from a themed carousel and see all its games, so I can browse the way I think about my collection.
 - L1/R1 or the tabs switch between Home and Carousel.
-- All 17 Systems are listed in System Order: Nintendo first, then Sony, each by European release year, which is shown on each card.
+- All 19 Systems are listed in System Order: Nintendo first, then Sony, each by European release year, which is shown on each card.
 - The background colour changes as I move between Systems.
 - Selecting a System opens a grid of tall covers.
 - *Covers FR-CAR-1, FR-CAR-2, FR-CAR-3*
@@ -77,7 +77,7 @@ Two people use Game37:
 
 **US-38 Get around the carousel fast.** As a player, I want the carousel to remember where I was and loop around, so reaching any console takes only a few presses.
 - Switching to the Carousel shows the System I last viewed, even after a restart. The very first time, it shows NES.
-- Pressing right on PS4 goes to NES, and left on NES goes to PS4.
+- Pressing right on PS5 goes to NES, and left on NES goes to PS5.
 - Holding left or right scrolls faster the longer I hold.
 - Every other list of Systems (setup checklist, BIOS status, README) uses the same order.
 - *Covers FR-CAR-6, FR-CAR-7, FR-CAR-8*

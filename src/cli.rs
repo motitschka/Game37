@@ -146,7 +146,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
 }
 
 /// The `--missing-emulators` ids, resolved to the `Emulators` state they stand for: every
-/// emulator installed except those Systems'. An unknown or Embedded System id is an error.
+/// emulator installed except those Systems'. An unknown, Embedded or Upcoming System id is an error.
 fn parse_missing_emulators(list: Option<&str>) -> Result<Emulators, String> {
     let Some(list) = list else {
         return Ok(Emulators::all_installed());
@@ -154,10 +154,18 @@ fn parse_missing_emulators(list: Option<&str>) -> Result<Emulators, String> {
     let mut missing = Vec::new();
     for id in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
         let system = systems::by_id(id).ok_or_else(|| format!("unknown System {id:?}"))?;
-        if system.kind != Kind::External {
-            return Err(format!(
-                "{id:?} is an Embedded System: it has no Standalone Emulator"
-            ));
+        match system.kind {
+            Kind::External => {}
+            Kind::Embedded => {
+                return Err(format!(
+                    "{id:?} is an Embedded System: it has no Standalone Emulator"
+                ));
+            }
+            Kind::Upcoming => {
+                return Err(format!(
+                    "{id:?} is an Upcoming System: no emulator can play it yet"
+                ));
+            }
         }
         missing.push(system);
     }
@@ -406,6 +414,14 @@ mod tests {
         for id in ["gc", "wii"] {
             let err = parse(shot_args(&format!("--screenshot o.bmp --missing-emulators {id}"))).unwrap_err();
             assert!(err.contains("Embedded"), "{id} plays in Game37: {err}");
+        }
+    }
+
+    #[test]
+    fn an_upcoming_system_id_is_an_error() {
+        for id in ["switch2", "ps5"] {
+            let err = parse(shot_args(&format!("--screenshot o.bmp --missing-emulators {id}"))).unwrap_err();
+            assert!(err.contains("Upcoming"), "no emulator plays {id}: {err}");
         }
     }
 }

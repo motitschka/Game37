@@ -51,16 +51,21 @@ SYSTEMS = [
     ("3ds", "Nintendo 3DS", "Nintendo · 2011", "#C9302C"),
     ("wiiu", "Wii U", "Nintendo · 2012", "#0A8FBF"),
     ("switch", "Switch", "Nintendo · 2017", "#E60012"),
+    ("switch2", "Switch 2", "Nintendo · 2025", "#E8590C"),
     ("ps1", "PlayStation", "Sony · 1995", "#8C8C96"),
     ("ps2", "PlayStation 2", "Sony · 2000", "#2443B8"),
     ("psp", "PSP", "Sony · 2005", "#3A3F4B"),
     ("ps3", "PlayStation 3", "Sony · 2007", "#2B2F3A"),
     ("ps4", "PlayStation 4", "Sony · 2013", "#0B3D91"),
+    ("ps5", "PlayStation 5", "Sony · 2020", "#00897B"),
 ]
 SYS = {s[0]: s for s in SYSTEMS}
 SHORT = {"nes": "NES", "gb": "GB", "snes": "SNES", "n64": "N64", "gbc": "GBC", "gba": "GBA",
          "gc": "GAMECUBE", "nds": "DS", "wii": "WII", "3ds": "3DS", "wiiu": "WII U",
-         "switch": "SWITCH", "ps1": "PS1", "ps2": "PS2", "psp": "PSP", "ps3": "PS3", "ps4": "PS4"}
+         "switch": "SWITCH", "switch2": "SWITCH 2", "ps1": "PS1", "ps2": "PS2", "psp": "PSP", "ps3": "PS3",
+         "ps4": "PS4", "ps5": "PS5"}
+# Upcoming Systems: listed, but no emulator can play them yet.
+UPCOMING = {"switch2", "ps5"}
 
 
 def game(title, sys, hours=None):
@@ -1159,7 +1164,7 @@ BIOS_MISSING = {"ps1": "Missing: put scph5500.bin, scph5501.bin or scph5502.bin 
 def screen_settings_bios():
     sv = Svg("18-settings-bios", "Settings: BIOS")
     settings_page(sv, "BIOS")
-    pitch, top, status_x = 41, TOP + 28, RX + 320
+    pitch, top, status_x = 36, TOP + 28, RX + 320
     sv.add(text(RX + 32, TOP + 13, "SYSTEM", 13, 700, fill=C["muted"], ls=1.5),
            text(status_x, TOP + 13, "BIOS", 13, 700, fill=C["muted"], ls=1.5))
     for i, (sysid, name, _, _) in enumerate(SYSTEMS):
@@ -1177,6 +1182,8 @@ def screen_settings_bios():
                    text(status_x + 32, base, BIOS_MISSING[sysid], 18, 500, fill=WARN))
         elif sysid in EMULATORS:
             sv.add(text(status_x, base, f"Handled by {EMULATORS[sysid]}", 18, 500, fill=C["muted"]))
+        elif sysid in UPCOMING:
+            sv.add(text(status_x, base, "Not playable yet", 18, 500, fill=C["muted"]))
         else:
             sv.add(text(status_x, base, "No BIOS needed", 18, 500, fill=C["muted"]))
     hintbar(sv, [(["B"], "Back")])
@@ -1575,7 +1582,7 @@ def screen_setup_systems():
     sv = Svg("26-setup-systems", "First-run Setup: Systems")
     setup_frame(sv, 1, "Pick your Systems",
                 "Tick the Systems you have Games for. You can add folders for others later.")
-    cols, gap, th, top = 6, 24, 148, 296
+    cols, gap, th, top = 7, 24, 148, 296
     tile_w = (W - 2 * M - (cols - 1) * gap) / cols
     for i, (sysid, name, _, _) in enumerate(SYSTEMS):
         r, c = divmod(i, cols)
@@ -1586,7 +1593,8 @@ def screen_setup_systems():
         sv.add(rect(x, y, tile_w, th, C["surface2"] if on else C["surface"], rx=14, stroke=C["line"], sw=1))
         system_chip(sv, x + 20, y + 20, 52, sysid)
         checkbox(sv, x + tile_w - 50, y + 31, on)
-        sub = f"Needs {EXTERNAL[sysid]}" if sysid in EXTERNAL else "Plays in Game37"
+        sub = (f"Needs {EXTERNAL[sysid]}" if sysid in EXTERNAL
+               else "Not playable yet" if sysid in UPCOMING else "Plays in Game37")
         sv.add(text(x + 20, y + 106, name, 21, 700), text(x + 20, y + 132, sub, 16, 500, fill=C["muted"]))
     w = action_pill(sv, M, 906, "Select all", pad="X")
     sv.add(text(M + w + 24, 945, f"{len(SETUP_TICKED)} Systems selected", 20, 500, fill=C["muted"]))

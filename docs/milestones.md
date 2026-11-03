@@ -12,7 +12,7 @@ Testing uses free, legal homebrew games and test ROMs, never commercial game fil
 - Rust project, SDL3 window, dark theme.
 - Controller, keyboard and mouse input. Menus use Nintendo-style confirm/back.
 - Reads the owner's Config from `~/.config/game37/config.toml`.
-- Library scanner for all 17 System folders, including folder Games for PS3, PS4 and Wii U. Display Titles are cleaned up.
+- Library scanner for all 17 System folders, including folder Games for PS3, PS4 and Wii U (19 since Switch 2 and PS5 were added as Upcoming Systems, ADR 0017). Display Titles are cleaned up.
 - Live watching of the Games Root.
 - Local library database (date added, last played, Playtime, flags).
 - Home with all four Shelves, 20-game limit, "See all" grid, and empty-Shelf hints.

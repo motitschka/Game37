@@ -62,7 +62,7 @@ enum Button {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Measured {
     pub bytes: u64,
-    /// A folder Game (PS3, PS4, Wii U), whose size is the sum of its files.
+    /// A folder Game (PS3, PS4, PS5, Wii U), whose size is the sum of its files.
     pub folder: bool,
 }
 
@@ -141,7 +141,7 @@ fn local(secs: i64) -> Option<Local> {
 }
 
 /// How many of the Game's Save State slots are filled; `None` for an External System's Game,
-/// whose Standalone Emulator keeps its own.
+/// whose Standalone Emulator keeps its own, and an Upcoming System's, which nothing plays yet.
 fn save_state_count(games_root: &Path, game: &GameRow, system: Option<&System>) -> Option<usize> {
     if system?.kind != Kind::Embedded {
         return None;
@@ -150,9 +150,11 @@ fn save_state_count(games_root: &Path, game: &GameRow, system: Option<&System>) 
     Some((1..=SLOTS).filter(|&n| paths.slot(n).is_file()).count())
 }
 
-/// What runs the Game: its Standalone Emulator, or Game37 itself on a Core.
+/// What runs the Game: its Standalone Emulator, or Game37 itself on a Core; nothing yet for an
+/// Upcoming System's.
 fn opens_in(system: &System) -> Option<String> {
     match system.kind {
+        Kind::Upcoming => Some("Not playable yet".to_owned()),
         Kind::External => emulators::for_system(system).map(|e| format!("Opens in {}", e.name)),
         Kind::Embedded => Some(match cores::for_system(system) {
             Some(core) => format!("Opens in Game37 · {} core", core.name),
@@ -877,5 +879,8 @@ mod tests {
             opens_in(by_id("snes")).as_deref(),
             Some("Opens in Game37 · bsnes core")
         );
+        for id in ["switch2", "ps5"] {
+            assert_eq!(opens_in(by_id(id)).as_deref(), Some("Not playable yet"), "{id}");
+        }
     }
 }

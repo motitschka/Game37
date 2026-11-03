@@ -308,6 +308,24 @@ mod tests {
     }
 
     #[test]
+    fn a_ps5_folder_and_a_switch_2_xci_are_games() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        touch(root, "ps5/PPSA01234/eboot.bin");
+        mkdir(root, "ps5/PPSA01234/sce_sys");
+        touch(root, "switch2/Mario Kart World (Europe).xci");
+        let games = scan_root(root);
+        let found: Vec<_> = games.iter().map(|g| (g.system, g.rel_path.as_str())).collect();
+        assert_eq!(
+            found,
+            [
+                ("switch2", "switch2/Mario Kart World (Europe).xci"),
+                ("ps5", "ps5/PPSA01234")
+            ]
+        );
+    }
+
+    #[test]
     fn wiiu_folder_and_wua_file_are_games() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();

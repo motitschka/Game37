@@ -16,6 +16,10 @@ _Avoid_: Internal system, built-in system
 A System whose games Game37 hands to a Standalone Emulator in its own window.
 _Avoid_: Launched system, delegated system
 
+**Upcoming System**:
+A System no emulator can play yet (Switch 2, PS5). Game37 lists its Games; Play on one explains why it can't start it.
+_Avoid_: Unsupported system, placeholder system
+
 **Core**:
 A libretro library that emulates one Embedded System inside Game37.
 _Avoid_: Plugin, module, emulator (when meaning a core)
@@ -39,7 +43,7 @@ The single folder (default `~/Games/`) that holds one folder per System plus BIO
 _Avoid_: ROM folder, library path
 
 **Game**:
-One playable title found in a System folder: a single file, or a folder for PS3, PS4 and Wii U.
+One playable title found in a System folder: a single file, or a folder for PS3, PS4, PS5 and Wii U.
 _Avoid_: ROM, title, entry
 
 **Display Title**:
