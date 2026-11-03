@@ -83,3 +83,11 @@ The Switch controller in PlayStation Games is checked in section 5.
 - [ ] Wii: on a Game with a Resume State made with the Wii Remote and Nunchuk, switch its Controller to
       Classic Controller and press Play: note what the Game does (it resumes with the Nunchuk state);
       then Start from power-on: the Classic Controller works from the title screen.
+
+## 9. Menus on a 16:10 screen (0.2.0-beta.3)
+
+- [ ] On a 1920×1200 screen, fullscreen: Home, the Carousel, a Console Page, Settings and First-run
+      Setup fill the screen with the hint bar at the very bottom and no black bars; a Game started from
+      there keeps its aspect ratio with bars as before, and its Pause Menu looks as it did.
+- [ ] Switching F11 between windowed and fullscreen, and resizing the window, on a scrolled Console
+      Page and in Settings → Hidden games: the focused item stays in view and nothing is cut off.

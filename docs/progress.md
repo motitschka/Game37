@@ -26,6 +26,8 @@ in [manual-checks.md](manual-checks.md#7-ps2-3ds-gamecube-and-wii-inside-game37-
 0.2.0-beta.2 (2026-11-03) adds Switch 2 and PS5 as Upcoming Systems (ADR 0017), the Classic
 Controller on Wii and PlayStation buttons by letter for Nintendo-lettered pads; its manual checks are
 in [manual-checks.md](manual-checks.md#8-switch-2-ps5-and-the-wii-classic-controller-020-beta2).
+0.2.0-beta.3 (2026-11-03) lets the menus fill screens taller than 16:9 (FR-UI-6, ADR 0018); its manual
+checks are in [manual-checks.md](manual-checks.md#9-menus-on-a-1610-screen-020-beta3).
 Start M7 from `main`, on a new branch `m7-…`.
 
 ## Code map

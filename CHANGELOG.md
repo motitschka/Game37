@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.0-beta.3 (2026-11-03)
+
+The menus fill screens taller than 16:9, such as 16:10 laptop screens.
 
 ### Changed
 - **The menus fill 16:10 screens:** on a screen taller than 16:9, such as a 1920×1200 laptop screen, the
