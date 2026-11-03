@@ -18,7 +18,8 @@ mkdir -p "$out/root"
 root=$out/root
 cp -r "$testdata/games" "$root/games"
 for f in "wiiu/Xenoblade Chronicles X (Europe).wua" \
-    "ps2/Persona 4 (USA).iso" "switch/Hello World.nro"; do
+    "ps2/Persona 4 (USA).iso" "switch/Hello World.nro" \
+    "switch2/Mario Kart World.xci"; do
     mkdir -p "$root/games/$(dirname "$f")"
     : > "$root/games/$f"
 done
@@ -53,13 +54,16 @@ shot m1-home "$root/cfg.toml" ""
 shot m1-see-all "$root/cfg.toml" "down,down,$(printf 'right,%.0s' {1..25})confirm"
 shot m1-carousel "$root/cfg.toml" "nexttab,right,right"
 shot m1-console-page "$root/cfg.toml" "nexttab,right,right,confirm,sort"
-shot m1-console-empty "$root/cfg.toml" "nexttab,left,left,confirm"
+shot m1-console-empty "$root/cfg.toml" "nexttab,left,left,left,confirm"
 # M2: missing-emulator badge and notice, launching, messages
-shot m2-carousel-missing "$root/cfg.toml" "nexttab,left,left,left,left,left,left,left" --missing-emulators wiiu
-shot m2-notice "$root/cfg.toml" "nexttab,left,left,left,left,left,left,left,confirm" --missing-emulators wiiu
+shot m2-carousel-missing "$root/cfg.toml" "nexttab,left,left,left,left,left,left,left,left,left" --missing-emulators wiiu
+shot m2-notice "$root/cfg.toml" "nexttab,left,left,left,left,left,left,left,left,left,confirm" --missing-emulators wiiu
 shot m5-details-missing "$root/cfg.toml" \
-    "nexttab,left,left,left,left,left,left,left,confirm,down,confirm,left" --missing-emulators wiiu
-shot m2-playing "$root/cfg.toml" "nexttab,left,left,left,left,left,left,left,confirm,confirm,confirm"
+    "nexttab,left,left,left,left,left,left,left,left,left,confirm,down,confirm,left" --missing-emulators wiiu
+shot m2-playing "$root/cfg.toml" "nexttab,left,left,left,left,left,left,left,left,left,confirm,confirm,confirm"
+# Switch 2, an Upcoming System: its Console Page, and Play saying it is not playable yet
+shot m9-upcoming-console-page "$root/cfg.toml" "nexttab,left,left,left,left,left,left,left,confirm"
+shot m9-upcoming-not-playable "$root/cfg.toml" "nexttab,left,left,left,left,left,left,left,confirm,confirm,confirm"
 # M3: each Embedded System running, Pause Menu with a saved slot
 shot m3-nes "$root/cfg.toml" "nexttab,confirm,confirm,confirm" --frames 180
 shot m3-gb "$root/cfg.toml" "nexttab,right,confirm,confirm,confirm" --frames 600
@@ -83,15 +87,15 @@ shot m3-pause-restart-confirm "$root/cfg.toml" \
 shot m4-n64 "$root/cfg.toml" "nexttab,right,right,right,confirm,confirm,confirm" --frames 300
 shot m4-ds "$root/cfg.toml" "nexttab,right,right,right,right,right,right,right,confirm,confirm,confirm" \
     --frames 300
-shot m4-psp "$root/cfg.toml" "nexttab,left,left,left,confirm,confirm,confirm" --frames 900
-shot m4-ps1-no-bios "$root/cfg.toml" "nexttab,left,left,left,left,left,confirm,confirm,confirm"
+shot m4-psp "$root/cfg.toml" "nexttab,left,left,left,left,confirm,confirm,confirm" --frames 900
+shot m4-ps1-no-bios "$root/cfg.toml" "nexttab,left,left,left,left,left,left,confirm,confirm,confirm"
 # M8: DS side by side, chosen in Settings → Display first (each shot has its own library)
 shot m8-ds-side-by-side "$root/cfg.toml" \
     "settings$(printf ',down%.0s' {1..5}),right,down,right,back,back,nexttab$(printf ',right%.0s' {1..7}),confirm,confirm,confirm" \
     --frames 300
 # M8: PS2 without a BIOS; 3DS running ftpd on Azahar, the top screen large and the touch screen small;
 # GameCube and Wii running FCE Ultra GX on Dolphin, its menu showing
-shot m8-ps2-no-bios "$root/cfg.toml" "nexttab,left,left,left,left,confirm,confirm,confirm"
+shot m8-ps2-no-bios "$root/cfg.toml" "nexttab,left,left,left,left,left,confirm,confirm,confirm"
 shot m8-3ds "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..9}),confirm,confirm,confirm" --frames 600
 shot m8-gc "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..6}),confirm,confirm,confirm" --frames 600
 shot m8-wii "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..8}),confirm,confirm,confirm" --frames 600
@@ -114,18 +118,18 @@ shot m6-search-open "$root/cfg.toml" "down,down,search"
 shot m6-settings-open "$root/cfg.toml" "settings"
 # First-run Setup step 2: Wii U, Switch and PlayStation 3 ticked, then every System
 shot m6-setup-emulators "$root/missing.toml" \
-    "down,right,right,right,right,confirm,right,confirm,down,left,confirm,settings" --missing-emulators switch,ps3
+    "down,right,right,right,confirm,right,confirm,down,left,left,confirm,settings" --missing-emulators switch,ps3
 shot m6-setup-emulators-all "$root/missing.toml" "sort,settings" --missing-emulators wiiu,switch,ps3,ps4
 # First-run Setup step 3: NES, Wii U, Switch and PlayStation 3 ticked, on through step 2, then
 # Create folders, under the Games Root that screenshot mode puts in the data dir
 shot m6-setup-folders "$root/missing.toml" \
-    "confirm,down,right,right,right,right,confirm,right,confirm,down,left,confirm,settings,settings,confirm" \
+    "confirm,down,right,right,right,confirm,right,confirm,down,left,left,confirm,settings,settings,confirm" \
     --missing-emulators switch,ps3
 # First-run Setup step 4: NES and PSP ticked, step 2 passed over, Create folders on step 3, then the
 # Cores, which the smoke data dirs already have, so nothing downloads
-shot m6-setup-cores "$root/missing.toml" "confirm,down,down,right,right,confirm,settings,confirm,settings"
+shot m6-setup-cores "$root/missing.toml" "confirm,down,down,right,confirm,settings,confirm,settings"
 # M8: the same with NES, PlayStation and PlayStation 2 ticked: a BIOS note line for each
-shot m8-setup-cores-bios "$root/missing.toml" "confirm,down,down,confirm,right,confirm,settings,confirm,settings"
+shot m8-setup-cores-bios "$root/missing.toml" "confirm,down,down,confirm,up,right,right,right,right,right,right,confirm,settings,confirm,settings"
 # First-run Setup step 5: NES ticked, step 2 passed over, Create folders on step 3, on through the
 # Cores on step 4 (already in the smoke data dir, so nothing downloads), to the SteamGridDB key
 # field, typing into it on the keyboard without finishing (so no Config appears: the shots here
@@ -161,7 +165,7 @@ shot m6-settings-about "$root/cfg.toml" "settings$(printf ',down%.0s' {1..6})"
 shot m6-settings-bios "$root/cfg.toml" "settings,down,down,right"
 shot m6-settings-cores "$root/cfg.toml" "settings,down,down,down,right"
 # M8: Settings BIOS with the focus on PlayStation 2's row
-shot m8-settings-bios-ps2 "$root/cfg.toml" "settings,down,down,right$(printf ',down%.0s' {1..13})"
+shot m8-settings-bios-ps2 "$root/cfg.toml" "settings,down,down,right$(printf ',down%.0s' {1..14})"
 
 # M6: Settings Controls and Display: the Controls rows, Controls after switching the style to Xbox
 # (its hint glyphs show Xbox labels), and the Display row
