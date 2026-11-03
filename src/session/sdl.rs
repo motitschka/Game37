@@ -11,21 +11,22 @@ use std::time::{Duration, Instant};
 
 use sdl3::AudioSubsystem;
 use sdl3::audio::{AudioFormat, AudioSpec, AudioStreamOwner};
-use sdl3::gamepad::{Axis, Gamepad};
+use sdl3::gamepad::{Axis, Button as PadButton, ButtonLabel, Gamepad};
 use sdl3::keyboard::Scancode;
 use sdl3::sys::video::SDL_GLContext;
 use sdl3::video::Window;
 
 use super::gl::SdlGl;
 use super::glx::GlxGl;
-use super::input::{self, HeldOver, Mouse, PadState, PauseTrigger, TouchControls};
+use super::input::{self, FaceLetters, HeldOver, Mouse, PadState, PauseTrigger, TouchControls};
 use super::saves::{self, Tracker};
 use super::states::{self, SLOTS, StatePaths};
 use super::timing::{self, AUDIO_MAX, PlayTimer, Scheduler};
-use crate::cores::{self, CoreInfo, GlKind};
+use crate::cores::{self, CoreInfo, GlKind, WiiController};
 use crate::ctx::{self, Ctx, Play, Start};
 use crate::launch::{self, FAILED_TITLE};
-use crate::libretro::{Core, CoreDirs, CoreSetup, Frame, GlHost, Stick};
+use crate::library::db::GameRow;
+use crate::libretro::{Core, CoreDirs, CoreSetup, Frame, GlHost, PortDevice, Stick};
 use crate::screens::message::Message;
 use crate::screens::pause::{PauseMenu, Request, SlotInfo};
 use crate::systems::{self, System};
@@ -67,6 +68,8 @@ pub struct Session {
     touch: Option<TouchControls>,
     /// Whether the left stick also presses the d-pad ([`cores::CoreInfo::stick_is_dpad`]).
     stick_dpad: bool,
+    /// Whether a Nintendo-lettered pad's face buttons map by letter ([`input::faces_by_letter`]).
+    by_letter: bool,
     /// How fast the Game really ran, logged when the session ends.
     pace: Pace,
     /// Set once, by [`Session::start`]: the message to show the player when they chose a Save
@@ -177,7 +180,20 @@ pub fn pad_state(gamepad: &Gamepad) -> PadState {
     state.right_y = gamepad.axis(Axis::RightY);
     state.left_trigger = gamepad.axis(Axis::TriggerLeft);
     state.right_trigger = gamepad.axis(Axis::TriggerRight);
+    state.letters = face_letters(gamepad);
     state
+}
+
+/// Which letters an open SDL gamepad's face buttons carry: Nintendo when SDL labels its right
+/// button A or its bottom one B (SDL itself names the buttons by position).
+pub fn face_letters(gamepad: &Gamepad) -> FaceLetters {
+    // The sdl3 crate's name for SDL_GetGamepadButtonLabel.
+    let label = |button| gamepad.button_label_for_gamepad_type(button);
+    if label(PadButton::East) == ButtonLabel::A || label(PadButton::South) == ButtonLabel::B {
+        FaceLetters::Nintendo
+    } else {
+        FaceLetters::Other
+    }
 }
 
 /// The options `core` runs `system`'s Game at `game` with: for a System with two screens, in the
@@ -189,6 +205,20 @@ fn core_options(
     game: &Path,
 ) -> Vec<(&'static str, &'static str)> {
     core.options_for(system, game, ctx.screen_layout(system))
+}
+
+/// The controller `core` is told sits in each port for `game`, of `system`: on Wii the one chosen
+/// for the Game in its Options Menu (FR-NEW-3), which a library error leaves at the default.
+fn port_device(ctx: &Ctx, system: &System, core: &CoreInfo, game: &GameRow) -> PortDevice {
+    let wii = if system.id == "wii" {
+        ctx.library.wii_controller(game.id).unwrap_or_else(|e| {
+            eprintln!("game37: can't read {}'s controller: {e}", game.title);
+            WiiController::default()
+        })
+    } else {
+        WiiController::default()
+    };
+    core.port_device(system, wii)
 }
 
 /// Why [`Session::start`] failed: the title to show it under, besides [`FAILED_TITLE`] for most
@@ -264,7 +294,7 @@ impl Session {
         let options = core_options(ctx, system, core_info, &game_path);
         let setup = CoreSetup {
             options: &options,
-            device: core_info.port_device(system),
+            device: port_device(ctx, system, core_info, game),
             reread_timing: core_info.rereads_timing(),
             address_window: core_info.needs_address_window(),
         };
@@ -317,6 +347,7 @@ impl Session {
             paused: false,
             touch: core_info.touch.map(TouchControls::new),
             stick_dpad: core_info.stick_is_dpad(),
+            by_letter: input::faces_by_letter(system),
             pace: Pace::default(),
             start_message,
         })
@@ -384,8 +415,14 @@ impl Session {
     ) -> bool {
         let keyboard = input::keyboard_buttons(&down);
         let esc = down(Scancode::Escape);
-        let (mut input, paused) =
-            input::frame_input_with(pads, keyboard, esc, &mut self.pause, self.stick_dpad);
+        let (mut input, paused) = input::frame_input_with(
+            pads,
+            keyboard,
+            esc,
+            &mut self.pause,
+            self.stick_dpad,
+            self.by_letter,
+        );
         if paused {
             return true;
         }
@@ -804,7 +841,6 @@ mod tests {
 
     use super::*;
     use crate::app::close;
-    use crate::library::db::GameRow;
     use crate::libretro::tests::serial;
     use crate::ui::input::Input;
 
@@ -1176,6 +1212,114 @@ mod tests {
         );
     }
 
+    /// A Nintendo-lettered pad with its east button (A) held.
+    fn east_held() -> PadState {
+        let mut east = PadState {
+            letters: FaceLetters::Nintendo,
+            ..Default::default()
+        };
+        east.press(PadButton::East);
+        east
+    }
+
+    /// A Nintendo-lettered pad holding its east button (A) maps to the PlayStation symbols for ✕
+    /// (RetroPad B) on a PSP Game (FR-EMB-10), checked on a real Core: `Session::tick` wires
+    /// `self.by_letter` into `input::frame_input_with`. Setting that call's `by_letter` argument
+    /// to `false` makes this fail.
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn a_nintendo_lettered_pad_maps_its_east_button_by_letter_on_a_psp_game() {
+        let _serial = serial();
+        let east = east_held();
+        let root = TempDir::new().unwrap();
+        let game_dir = root.path().join("psp/CMFileManager");
+        fs::create_dir_all(&game_dir).unwrap();
+        for entry in fs::read_dir(Path::new(TESTDATA).join("games/psp/CMFileManager")).unwrap() {
+            let entry = entry.unwrap();
+            fs::copy(entry.path(), game_dir.join(entry.file_name())).unwrap();
+        }
+        let data = TempDir::new().unwrap();
+        for dir in ["cores", "system"] {
+            std::os::unix::fs::symlink(Path::new(TESTDATA).join("data").join(dir), data.path().join(dir))
+                .unwrap();
+        }
+        let mut ctx = Ctx::empty();
+        ctx.games_root = root.path().to_path_buf();
+        ctx.data_dir = data.path().to_path_buf();
+        let game = GameRow {
+            id: 1,
+            system: "psp".into(),
+            rel_path: "psp/CMFileManager/EBOOT.PBP".into(),
+            title: "CMFileManager".into(),
+            date_added: 0,
+            last_played: None,
+            playtime_secs: 0,
+            favorite: false,
+        };
+        let (_sdl, canvas) = offscreen_renderer();
+        let creator = canvas.texture_creator();
+        let mut gfx = Gfx::new(canvas, &creator, crate::ui::text::Fonts::new().unwrap());
+        let frontend = gfx.gl_context();
+        let mut session = Session::start(&Play::resume(game), &ctx, frontend, None, Some(60.0))
+            .unwrap_or_else(|e| panic!("{e}"));
+        // Lets PPSSPP finish booting before it's asked to quit, and settles `HeldOver` on a
+        // frame with no pads, so it doesn't mistake the button pressed afterwards as held over
+        // from before the Game started and mask it out.
+        for _ in 0..900 {
+            assert!(!session.tick(&mut gfx, 1.0 / 60.0, &[], Mouse::default(), |_| false));
+        }
+        assert!(!session.tick(&mut gfx, 1.0 / 60.0, &[(0, east)], Mouse::default(), |_| false));
+        let mask = session.core.last_input().mask(0);
+        gfx.clear(crate::ui::theme::Colour::hex(0x000000));
+        session.draw(&mut gfx, &ctx);
+        drop(session);
+        assert_eq!(
+            mask,
+            1 << crate::libretro::Button::B as u16,
+            "PSP: Nintendo A maps by letter to ✕ (RetroPad B)"
+        );
+    }
+
+    /// The same Nintendo-lettered pad's east button (A) stays by position, RetroPad A, on an
+    /// SNES Game (FR-EMB-10): SNES isn't a PlayStation System, so it maps by position regardless
+    /// of `self.by_letter`, and this still passes with that argument forced to `false`.
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn a_nintendo_lettered_pad_stays_by_position_on_an_snes_game() {
+        let _serial = serial();
+        let east = east_held();
+        let root = TempDir::new().unwrap();
+        let rel = "snes/240p Test Suite (World).sfc";
+        fs::create_dir_all(root.path().join("snes")).unwrap();
+        fs::copy(Path::new(TESTDATA).join("games").join(rel), root.path().join(rel)).unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = root.path().to_path_buf();
+        ctx.data_dir = Path::new(TESTDATA).join("data");
+        let game = GameRow {
+            id: 1,
+            system: "snes".into(),
+            rel_path: rel.into(),
+            title: "240p Test Suite".into(),
+            date_added: 0,
+            last_played: None,
+            playtime_secs: 0,
+            favorite: false,
+        };
+        let mut session =
+            Session::start(&Play::resume(game), &ctx, None, None, None).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!session.tick(&mut NoPicture, 1.0 / 60.0, &[], Mouse::default(), |_| false));
+        assert!(
+            !session.tick(&mut NoPicture, 1.0 / 60.0, &[(0, east)], Mouse::default(), |_| {
+                false
+            })
+        );
+        assert_eq!(
+            session.core.last_input().mask(0),
+            1 << crate::libretro::Button::A as u16,
+            "SNES: Nintendo A stays by position: RetroPad A"
+        );
+    }
+
     /// New frames go nowhere.
     struct NoPicture;
 
@@ -1424,6 +1568,46 @@ mod tests {
         }
         ctx.set_screen_layout(nds, ScreenLayout::SideBySide);
         assert!(options(&ctx).contains(&("melonds_screen_layout1", "left-right")));
+    }
+
+    /// A Wii Game starts Dolphin with the controller chosen for it in its Options Menu: the Wii
+    /// Remote and Nunchuk until set, a Classic Controller once set, while another Wii Game keeps
+    /// its own; a GameCube Game gets a RetroPad (FR-NEW-3).
+    #[test]
+    fn a_wii_game_starts_with_the_controller_chosen_for_it() {
+        use crate::cores::{DOLPHIN, DOLPHIN_CLASSIC_CONTROLLER, DOLPHIN_WII_REMOTE_AND_NUNCHUK};
+        use crate::library::FoundGame;
+        use crate::library::db::SortOrder;
+
+        let mut ctx = Ctx::empty();
+        let found = |system: &'static str, title: &str| FoundGame {
+            system,
+            rel_path: format!("{system}/{title}.iso"),
+            title: title.to_owned(),
+        };
+        let mut games = |system: &'static str, titles: &[&str]| {
+            let found: Vec<_> = titles.iter().map(|t| found(system, t)).collect();
+            ctx.library.sync_system(system, &found, 0).unwrap();
+            ctx.library.system_games(system, SortOrder::AZ).unwrap()
+        };
+        let wii_games = games("wii", &["Kart", "Other"]);
+        let gc_game = games("gc", &["Cube"]).remove(0);
+        let (kart, other) = (&wii_games[0], &wii_games[1]);
+        let (wii, gc) = (systems::by_id("wii").unwrap(), systems::by_id("gc").unwrap());
+        assert_eq!(
+            port_device(&ctx, wii, &DOLPHIN, kart),
+            DOLPHIN_WII_REMOTE_AND_NUNCHUK
+        );
+
+        ctx.library
+            .set_wii_controller(kart.id, WiiController::ClassicController)
+            .unwrap();
+        assert_eq!(port_device(&ctx, wii, &DOLPHIN, kart), DOLPHIN_CLASSIC_CONTROLLER);
+        assert_eq!(
+            port_device(&ctx, wii, &DOLPHIN, other),
+            DOLPHIN_WII_REMOTE_AND_NUNCHUK
+        );
+        assert_eq!(port_device(&ctx, gc, &DOLPHIN, &gc_game), PortDevice::RETROPAD);
     }
 
     /// A PS2 Game, `ps2/<file>`, on a Games Root.
@@ -2432,7 +2616,7 @@ mod tests {
         let (root, data, ctx, game) = dolphin_world("wii");
         let wii = systems::by_id("wii").unwrap();
         assert_eq!(
-            cores::for_system(wii).unwrap().port_device(wii),
+            port_device(&ctx, wii, &cores::DOLPHIN, &game),
             cores::DOLPHIN_WII_REMOTE_AND_NUNCHUK
         );
         let (_sdl, canvas) = offscreen_renderer();
@@ -2475,6 +2659,76 @@ mod tests {
         assert_dolphin_wrote_only_its_own_folders(root.path(), "wii", since);
     }
 
+    /// Wii with Dolphin and a Game set to the Classic Controller (FR-NEW-3): Game37 tells Dolphin
+    /// its Classic Controller (Pro) device, and Dolphin then asks for what that mapping reads: the
+    /// RetroPad's L, R, L2 and R2 as buttons (L, R, ZL and ZR), but neither the mouse nor L3, which
+    /// only its Wii Remote mappings use, nor the analog L2 and R2 its plain Classic Controller reads
+    /// for L and R; those queries are what pin the device. A then opens FCE Ultra GX's folder list (as
+    /// it would with the Nunchuk too): the Game takes input.
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn hw_dolphin_plays_fce_ultra_gx_on_wii_with_the_classic_controller() {
+        use crate::library::FoundGame;
+        use crate::library::db::SortOrder;
+        use crate::libretro::Button;
+        use crate::ui::text::Fonts;
+
+        let _serial = serial();
+        let (_root, data, mut ctx, game) = dolphin_world("wii");
+        let found = FoundGame {
+            system: "wii",
+            rel_path: game.rel_path.clone(),
+            title: game.title.clone(),
+        };
+        ctx.library.sync_system("wii", &[found], 0).unwrap();
+        let game = ctx.library.system_games("wii", SortOrder::AZ).unwrap().remove(0);
+        ctx.library
+            .set_wii_controller(game.id, WiiController::ClassicController)
+            .unwrap();
+        let wii = systems::by_id("wii").unwrap();
+        assert_eq!(
+            port_device(&ctx, wii, &cores::DOLPHIN, &game),
+            cores::DOLPHIN_CLASSIC_CONTROLLER
+        );
+        let (_sdl, canvas) = offscreen_renderer();
+        let creator = canvas.texture_creator();
+        let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
+        let shot = data.path().join("shot.bmp");
+        let mut session = Session::start(&Play::resume(game), &ctx, gfx.gl_context(), None, Some(60.0))
+            .unwrap_or_else(|e| panic!("{e}"));
+        tick_n(&mut session, &mut gfx, 300);
+        let booted = shown_exactly(&mut session, &mut gfx, &ctx, &shot);
+        assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "booted");
+        let queries = session.core.input_queries();
+        let retropad = crate::libretro::PortDevice::RETROPAD.id();
+        for button in [Button::L, Button::R, Button::L2, Button::R2] {
+            assert!(
+                queries.contains_key(&(0, retropad, 0, button as u32)),
+                "{button:?}: {queries:?}"
+            );
+        }
+        assert!(
+            !queries.contains_key(&(0, retropad, 0, Button::L3 as u32)),
+            "L3: {queries:?}"
+        );
+        // RETRO_DEVICE_MOUSE, RETRO_DEVICE_ANALOG and RETRO_DEVICE_INDEX_ANALOG_BUTTON.
+        let (mouse, analog, index_button) = (2, 5, 2);
+        assert!(
+            !queries
+                .keys()
+                .any(|&(_, d, i, _)| d == mouse || (d == analog && i == index_button)),
+            "{queries:?}"
+        );
+
+        let mut a = PadState::default();
+        a.press(sdl3::gamepad::Button::East);
+        press(&mut session, &mut gfx, a);
+        assert!(
+            shown_exactly(&mut session, &mut gfx, &ctx, &shot) != booted,
+            "A opened a list"
+        );
+    }
+
     /// Dolphin, one Core for two Systems, loads again and again in one process, as when the
     /// player quits one Game and starts another: GameCube, then Wii, then GameCube again, each
     /// showing its Game on the renderer in its own shape, with frames run at the Game's own rate
@@ -2512,6 +2766,78 @@ mod tests {
                 "{system}: frames at the Game's own rate, not the previous Game's: {} vs {fps}",
                 session.fps
             );
+        }
+    }
+
+    /// SDL's own label lookup, on virtual gamepads that report the vendor and product of real
+    /// controllers: a Switch Pro Controller is Nintendo-lettered, an Xbox or PlayStation pad is not,
+    /// and the Switch pad's A (right) reaches a PS2 Core as ✕ (RetroPad B) but an SNES Core as A.
+    #[test]
+    fn sdl_labels_a_switch_pro_controller_nintendo_lettered_and_xbox_and_playstation_pads_not() {
+        use sdl3::sys::joystick::{
+            SDL_AttachVirtualJoystick, SDL_DetachVirtualJoystick, SDL_JOYSTICK_TYPE_GAMEPAD,
+            SDL_VirtualJoystickDesc,
+        };
+
+        let _serial = serial();
+        let sdl = sdl3::init().unwrap();
+        let gamepads = sdl.gamepad().unwrap();
+        let open = |vendor: u16, product: u16| {
+            let desc = SDL_VirtualJoystickDesc {
+                r#type: SDL_JOYSTICK_TYPE_GAMEPAD.0 as u16,
+                vendor_id: vendor,
+                product_id: product,
+                naxes: 6,
+                nbuttons: 15,
+                name: c"Game37 test pad".as_ptr(),
+                ..SDL_VirtualJoystickDesc::new()
+            };
+            // SAFETY: `desc` is a valid descriptor, read during the call.
+            let id = unsafe { SDL_AttachVirtualJoystick(&desc) };
+            assert_ne!(id.0, 0, "{}", sdl3::get_error());
+            let pad = gamepads.open(id.into()).unwrap();
+            (id, pad)
+        };
+        let pads = [
+            (
+                open(0x057e, 0x2009),
+                FaceLetters::Nintendo,
+                "Switch Pro Controller",
+            ),
+            (open(0x045e, 0x02ea), FaceLetters::Other, "Xbox One controller"),
+            (open(0x054c, 0x0ce6), FaceLetters::Other, "DualSense"),
+        ];
+        for ((_, pad), want, name) in &pads {
+            assert_eq!(face_letters(pad), *want, "{name}: {:?}", pad.r#type());
+            assert_eq!(pad_state(pad).letters, *want, "{name}");
+        }
+
+        let ((_, switch), _, _) = &pads[0];
+        let mut a = pad_state(switch);
+        a.press(PadButton::East);
+        let on = |system: &str| {
+            let by_letter = input::faces_by_letter(systems::by_id(system).unwrap());
+            let (input, _) = input::frame_input_with(
+                &[(0, a)],
+                Default::default(),
+                false,
+                &mut PauseTrigger::default(),
+                true,
+                by_letter,
+            );
+            input.mask(0)
+        };
+        assert_eq!(on("ps2"), 1 << crate::libretro::Button::B as u16, "A is ✕ on PS2");
+        assert_eq!(
+            on("snes"),
+            1 << crate::libretro::Button::A as u16,
+            "A is A on SNES"
+        );
+
+        for ((id, pad), _, _) in pads {
+            drop(pad);
+            // SAFETY: `id` is a virtual joystick this test attached, now closed.
+            assert!(unsafe { SDL_DetachVirtualJoystick(id) });
         }
     }
 

@@ -74,7 +74,7 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 - **FR-DET-1** Selecting a Game opens its Details Page. Pressing confirm on Play launches it; for an Upcoming System (Switch 2, PS5) it shows a "Not playable yet" message instead and starts nothing.
 - **FR-DET-2** The Details Page shows the hero Artwork as background, plus System, Playtime, last played, date added, Favorite status, number of Save States (embedded only), file name and size.
 - **FR-DET-3** The Options Menu opens with Y or right-click on any highlighted Game (Shelves, grids, search results) and from the Details Page.
-- **FR-DET-4** Options Menu actions: add or remove Favorite, load Save State (with slot picker, embedded only), start from power-on (embedded only), delete save data: Resume State, Save States, In-game Save, or everything (embedded only), choose different Artwork, rename Display Title, hide Game, show file in the file manager.
+- **FR-DET-4** Options Menu actions: add or remove Favorite, load Save State (with slot picker, embedded only), start from power-on (embedded only), delete save data: Resume State, Save States, In-game Save, or everything (embedded only), choose different Artwork, rename Display Title, hide Game, show file in the file manager; for a Wii Game, its Controller: Wii Remote and Nunchuk (the default) or Classic Controller (FR-NEW-3).
 - **FR-DET-5** Renaming never changes the file on disk.
 - **FR-DET-6** Hidden Games appear in no view except Settings → Hidden games, where they can be unhidden.
 
@@ -102,7 +102,7 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 - **FR-EMB-7** In-game Saves are always written to disk, regardless of Save States.
 - **FR-EMB-8** 2–4 controllers are supported. Player order follows connection order.
 - **FR-EMB-9** A fixed default keyboard layout allows playing without a controller.
-- **FR-EMB-10** In-game buttons map by position to the original console's controller.
+- **FR-EMB-10** In-game buttons map by position to the original console's controller. The exception: on PS1, PS2 and PSP, a controller with Nintendo letters on its face buttons (Switch Pro Controller, Joy-Con pair, or a single Joy-Con held sideways: A on the right, B at the bottom) maps them by letter, A to ✕, B to ○, X to □ and Y to △, so its A confirms as on an Xbox controller. Its other buttons, and every other controller, still map by position.
 - **FR-EMB-11** There is no fast-forward.
 - **FR-EMB-12** If a required BIOS is missing, Game37 says which file to place in which folder instead of failing silently.
 - **FR-EMB-13** European (PAL) N64 Games are cropped to their picture, without the PAL frame's black borders.
@@ -115,7 +115,7 @@ Built in milestone 8 (ADR 0016, research in [research/m8-newer-cores.md](researc
 
 - **FR-NEW-1** PS2 Games run with the LRPS2 Core, rendering with OpenGL. It needs the player's PS2 BIOS dump, any file name, in `<Games Root>/bios/pcsx2/bios/`; without one, Game37 says so and names that folder (FR-EMB-12). Each Game gets its own memory card.
 - **FR-NEW-2** 3DS Games run with the Azahar Core, rendering with OpenGL: homebrew and decrypted Games. How the two screens are shown is a choice in Settings → Display, with the same three layouts as DS (FR-DS-1): Large and small (the default, the large screen three times the small one), Side by side, or One screen. R3 (Tab on the keyboard) swaps the screens, as on DS, and the touch screen takes the mouse and a right-stick cursor, which L3 taps with, as on DS (FR-DS-3). An encrypted dump gets a message saying it must be decrypted.
-- **FR-NEW-3** GameCube and Wii Games run with the Dolphin Core, rendering with OpenGL. Game37 downloads Dolphin's system files with the Core. On Wii, the controller stands in for a Wii Remote.
+- **FR-NEW-3** GameCube and Wii Games run with the Dolphin Core, rendering with OpenGL. Game37 downloads Dolphin's system files with the Core. On Wii, the controller stands in for a Wii Remote with a Nunchuk or, for a Game set to it in its Options Menu (FR-DET-4), a Classic Controller; the choice is kept per Game and applies from the Game's next start.
 - **FR-NEW-4** These Systems also take homebrew in the form their Cores load directly: `.elf` for PS2, `.3dsx` for 3DS, `.dol` and `.elf` for GameCube and Wii.
 
 ### Nintendo DS

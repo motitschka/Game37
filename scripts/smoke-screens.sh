@@ -99,6 +99,9 @@ shot m8-ps2-no-bios "$root/cfg.toml" "nexttab,left,left,left,left,left,confirm,c
 shot m8-3ds "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..9}),confirm,confirm,confirm" --frames 600
 shot m8-gc "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..6}),confirm,confirm,confirm" --frames 600
 shot m8-wii "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..8}),confirm,confirm,confirm" --frames 600
+# A Wii Game's Options Menu with its Controller row switched to the Classic Controller (m8-wii left
+# a Resume State, so Delete save data is enabled and three downs reach the row)
+shot m8-options-wii "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..8}),confirm,confirm,options,down,down,down,right"
 # M5: the Details Page, the Options Menu, the Favorite replace picker (six Favorites asked for), the
 # Options Menu's slot picker for the SNES Game (m3-pause-saved filled its slot 1), renaming
 shot m5-details "$root/cfg.toml" "nexttab,right,right,confirm,confirm"

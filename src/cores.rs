@@ -417,7 +417,7 @@ pub static AZAHAR: CoreInfo = CoreInfo {
 /// again after every frame ([`CoreInfo::rereads_timing`]). Dolphin's system files come with it
 /// ([`DOLPHIN_ASSETS`]); its own files, such as GameCube memory cards and the Wii's NAND, go in a
 /// `User/` folder in the System's save folder. On Wii the controller is a Wii Remote with a
-/// Nunchuk ([`CoreInfo::port_device`]).
+/// Nunchuk, or a Classic Controller for a Game set to it ([`CoreInfo::port_device`]).
 pub static DOLPHIN: CoreInfo = CoreInfo {
     name: "Dolphin",
     file: "dolphin_libretro.so",
@@ -440,6 +440,60 @@ pub static DOLPHIN: CoreInfo = CoreInfo {
 /// (the README's Wii table has the rest). Dolphin's plain RetroPad on Wii is a Wii Remote alone,
 /// whose left stick tilts it.
 pub const DOLPHIN_WII_REMOTE_AND_NUNCHUK: PortDevice = PortDevice::retropad_subclass(2);
+
+/// Dolphin's Classic Controller Pro (`RETRO_DEVICE_WIIMOTE_CC_PRO` in its `Input.cpp`), which a Wii
+/// Game sees as a Classic Controller: the RetroPad maps to it by position, A, B, X and Y to its a,
+/// b, x and y, L and R to its L and R, L2 and R2 to its ZL and ZR, Start and Select to + and −,
+/// R3 to HOME, and the sticks to its two sticks. Dolphin's plain Classic Controller device would
+/// put RetroPad L and R on ZL and ZR, and its L and R on the analog L2 and R2, which Game37
+/// answers as released.
+pub const DOLPHIN_CLASSIC_CONTROLLER: PortDevice = PortDevice::retropad_subclass(4);
+
+/// Which controller the player's stands in for in a Wii Game (FR-NEW-3), chosen per Game in its
+/// Options Menu; it applies from the Game's next start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WiiController {
+    /// A Wii Remote with a Nunchuk: what most Wii Games play with.
+    #[default]
+    WiiRemoteAndNunchuk,
+    /// A Classic Controller, as Mario Kart Wii plays like Mario Kart 8 Deluxe with.
+    ClassicController,
+}
+
+impl WiiController {
+    pub const ALL: [WiiController; 2] = [
+        WiiController::WiiRemoteAndNunchuk,
+        WiiController::ClassicController,
+    ];
+
+    /// The name the library stores it under.
+    pub fn id(self) -> &'static str {
+        match self {
+            WiiController::WiiRemoteAndNunchuk => "wii_remote_and_nunchuk",
+            WiiController::ClassicController => "classic_controller",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<WiiController> {
+        WiiController::ALL.into_iter().find(|c| c.id() == id)
+    }
+
+    /// The label its Options Menu row shows.
+    pub fn label(self) -> &'static str {
+        match self {
+            WiiController::WiiRemoteAndNunchuk => "Wii Remote and Nunchuk",
+            WiiController::ClassicController => "Classic Controller",
+        }
+    }
+
+    /// The other one: with two choices, the next and the previous are the same.
+    pub fn other(self) -> WiiController {
+        match self {
+            WiiController::WiiRemoteAndNunchuk => WiiController::ClassicController,
+            WiiController::ClassicController => WiiController::WiiRemoteAndNunchuk,
+        }
+    }
+}
 
 /// How a two-screen System shows its two screens (FR-DS-1, FR-NEW-2), chosen per System in
 /// Settings → Display. R3 swaps the screens in each (FR-DS-2).
@@ -640,13 +694,15 @@ impl CoreInfo {
         std::ptr::eq(self, &LRPS2)
     }
 
-    /// The controller this Core is told sits in each port for `system`'s Games: a RetroPad, but on
-    /// Wii Dolphin's Wii Remote with a Nunchuk.
-    pub fn port_device(&self, system: &System) -> PortDevice {
-        if std::ptr::eq(self, &DOLPHIN) && system.id == "wii" {
-            DOLPHIN_WII_REMOTE_AND_NUNCHUK
-        } else {
-            PortDevice::RETROPAD
+    /// The controller this Core is told sits in each port for a Game of `system`: a RetroPad, but
+    /// on Wii the Dolphin device for the Game's `wii` controller.
+    pub fn port_device(&self, system: &System, wii: WiiController) -> PortDevice {
+        if !(std::ptr::eq(self, &DOLPHIN) && system.id == "wii") {
+            return PortDevice::RETROPAD;
+        }
+        match wii {
+            WiiController::WiiRemoteAndNunchuk => DOLPHIN_WII_REMOTE_AND_NUNCHUK,
+            WiiController::ClassicController => DOLPHIN_CLASSIC_CONTROLLER,
         }
     }
 }
@@ -1493,18 +1549,24 @@ mod tests {
         }
     }
 
-    /// FR-NEW-3: on Wii the controller stands in for a Wii Remote, with a Nunchuk; everywhere
-    /// else it is a RetroPad. Only Dolphin needs its timing reread, and only LRPS2 an address window.
+    /// FR-NEW-3: on Wii the controller stands in for a Wii Remote with a Nunchuk, or for a Game set
+    /// to it a Classic Controller; everywhere else it is a RetroPad, whatever the choice. Only
+    /// Dolphin needs its timing reread, and only LRPS2 an address window.
     #[test]
-    fn dolphin_gets_a_wii_remote_and_nunchuk_on_wii_and_its_timing_reread() {
+    fn dolphin_gets_a_wii_remote_and_nunchuk_or_a_classic_controller_on_wii_and_its_timing_reread() {
         for system in &crate::systems::SYSTEMS {
             let Some(core) = for_system(system) else { continue };
-            let expected = if system.id == "wii" {
-                DOLPHIN_WII_REMOTE_AND_NUNCHUK
-            } else {
-                PortDevice::RETROPAD
-            };
-            assert_eq!(core.port_device(system), expected, "{}", system.id);
+            for (wii, on_wii) in [
+                (WiiController::WiiRemoteAndNunchuk, DOLPHIN_WII_REMOTE_AND_NUNCHUK),
+                (WiiController::ClassicController, DOLPHIN_CLASSIC_CONTROLLER),
+            ] {
+                let expected = if system.id == "wii" {
+                    on_wii
+                } else {
+                    PortDevice::RETROPAD
+                };
+                assert_eq!(core.port_device(system, wii), expected, "{} {wii:?}", system.id);
+            }
             assert_eq!(core.rereads_timing(), core.name == "Dolphin", "{}", system.id);
             assert_eq!(core.needs_address_window(), system.id == "ps2", "{}", system.id);
         }
@@ -1512,6 +1574,11 @@ mod tests {
             DOLPHIN_WII_REMOTE_AND_NUNCHUK.id(),
             (3 << 8) | 1,
             "RETRO_DEVICE_WIIMOTE_NC"
+        );
+        assert_eq!(
+            DOLPHIN_CLASSIC_CONTROLLER.id(),
+            (5 << 8) | 1,
+            "RETRO_DEVICE_WIIMOTE_CC_PRO"
         );
         assert!(std::ptr::eq(
             for_system(crate::systems::by_id("gc").unwrap()).unwrap(),
@@ -1835,8 +1902,9 @@ mod tests {
 
         let wii = crate::systems::by_id("wii").unwrap();
         let gc = crate::systems::by_id("gc").unwrap();
-        assert_eq!(DOLPHIN.port_device(wii), DOLPHIN_WII_REMOTE_AND_NUNCHUK);
-        assert_eq!(DOLPHIN.port_device(gc), PortDevice::RETROPAD);
+        let nunchuk = WiiController::WiiRemoteAndNunchuk;
+        assert_eq!(DOLPHIN.port_device(wii, nunchuk), DOLPHIN_WII_REMOTE_AND_NUNCHUK);
+        assert_eq!(DOLPHIN.port_device(gc, nunchuk), PortDevice::RETROPAD);
 
         assert!(DOLPHIN.rereads_timing());
         for core in [

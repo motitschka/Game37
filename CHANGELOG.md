@@ -1,12 +1,29 @@
 # Changelog
 
-## Unreleased
+## 0.2.0-beta.2 (unreleased)
 
 ### New
 - **Switch 2 and PS5 are listed as Upcoming Systems.** No emulator can play them yet, but Game37
   already makes their `switch2/` and `ps5/` folders, finds their Games (`.nsp` and `.xci` for Switch 2,
   game folders with `eboot.bin` and `sce_sys/` for PS5) and shows them on the Carousel and their
   Console Pages. Play on one of their Games says it isn't playable yet.
+- **Classic Controller on Wii:** a Wii Game's Options Menu has a Controller row, Wii Remote and Nunchuk
+  (the default, as before) or Classic Controller, kept per Game from its next start. With the Classic
+  Controller the pad maps to it button for button (L2 and R2 are ZL and ZR, R3 is HOME), so Mario
+  Kart Wii plays like Mario Kart 8 Deluxe: A accelerates, B brakes, R drifts, L uses an item and X
+  looks behind. See the README's Playing section for the full mapping. A Resume State or Save State
+  keeps the controller it was made with, so after changing it, start the Game with Start from power-on.
+
+### Upgrading
+- This version adds a column to the library database (`library.db`); 0.2.0-beta.1 can't open the
+  library any more once this version has.
+
+### Changed
+- **Switch controllers on PS1, PS2 and PSP:** a controller with Nintendo letters (Switch Pro
+  Controller, Joy-Con pair) maps its face buttons by letter in PlayStation Games: A is ✕, B is ○, X is
+  □ and Y is △, so A confirms and B goes back, as on an Xbox controller. Before, they mapped by
+  position, which made B confirm. On every other System, and for every other controller, buttons
+  still map by position.
 
 ## 0.2.0-beta.1 (2026-11-02)
 

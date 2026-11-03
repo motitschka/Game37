@@ -557,31 +557,61 @@ def screen_details_speedrun():
                  "~/Games/snes/Super Mario World (USA).sfc", favorite=True, speedrun=True)
 
 
-def screen_options():
-    sv = Svg("06-options-menu", "Options Menu")
+OPTIONS_ITEMS = [("★", "Remove from favorites", None), ("↺", "Load save state", "2 of 3"),
+                 ("⏻", "Start from power-on", None), ("⌫", "Delete save data", None),
+                 ("▣", "Choose artwork", None), ("✎", "Rename", None), ("⊘", "Hide game", None),
+                 ("▤", "Show file in file manager", None)]
+# A Wii Game's Controller row (FR-NEW-3): which controller the player's stands in for, cycled like a
+# Settings choice; after Delete save data.
+WII_CONTROLLERS = ["Wii Remote and Nunchuk", "Classic Controller"]
+
+
+def options_panel(sv, g, meta, items, focus, hints):
+    """The Options Menu's list view for `g`: `items` as (icon, label, extra) with the `focus`th one
+    focused; an icon of None draws the Controller row's pad, and its extra is its cycled choice. Nine
+    rows (a Wii Game's) sit closer together, so the last stays clear of the hint bar."""
     home(sv)
     dim(sv, 0.62)
     sx, sw = W - 600, 600
     sv.add(rect(sx, 0, sw, H, C["surface"]), rect(sx, 0, 1, H, C["line"]))
-    g = FAVS[0]
     cover(sv, sx + 48, 64, 96, 144, g, show_sys=False)
-    sv.add(text(sx + 168, 118, g["title"], 28, 800), text(sx + 168, 152, "SNES  ·  12h 40m played", 18, 500,
-                                                            fill=C["muted"]))
-    items = [("★", "Remove from favorites", None), ("↺", "Load save state", "2 of 3"),
-             ("⏻", "Start from power-on", None), ("⌫", "Delete save data", None),
-             ("▣", "Choose artwork", None), ("✎", "Rename", None), ("⊘", "Hide game", None),
-             ("▤", "Show file in file manager", None)]
+    sv.add(text(sx + 168, 118, g["title"], 28, 800), text(sx + 168, 152, meta, 18, 500, fill=C["muted"]))
+    pitch = 86 if len(items) <= 8 else 80
     for i, (icon, label, extra) in enumerate(items):
-        y = 252 + i * 86
-        if i == 1:
+        y = 252 + i * pitch
+        if i == focus:
             sv.add(rect(sx + 24, y, sw - 48, 72, C["surface2"], rx=14), rect(sx + 24, y + 16, 5, 40, C["accent"], rx=2))
-        sv.add(text(sx + 62, y + 46, icon, 24, 600, fill=C["star"] if icon == "★" else C["muted"], anchor="middle"),
-               text(sx + 100, y + 45, label, 22, 600 if i == 1 else 500))
-        if extra:
+        if icon is None:
+            cx, cy = sx + 62, y + 38
+            sv.add(rect(cx - 13, cy - 8, 26, 16, "none", rx=6, stroke=C["muted"], sw=2.5),
+                   rect(cx - 8, cy - 1, 7, 2, C["muted"]), rect(cx - 5.5, cy - 3.5, 2, 7, C["muted"]),
+                   circle(cx + 6, cy, 2, C["muted"]))
+        else:
+            sv.add(text(sx + 62, y + 46, icon, 24, 600, fill=C["star"] if icon == "★" else C["muted"],
+                        anchor="middle"))
+        sv.add(text(sx + 100, y + 45, label, 22, 600 if i == focus else 500))
+        if icon is None:
+            choice_value(sv, W - 48, y, 72, extra)
+        elif extra:
             sv.add(text(sx + sw - 76, y + 45, extra, 18, 500, fill=C["muted"], anchor="end"))
         if label in ("Load save state", "Delete save data", "Choose artwork"):
             sv.add(text(sx + sw - 48, y + 45, "›", 26, 600, fill=C["muted"], anchor="end"))
-    hintbar(sv, [(["A"], "Choose"), (["B"], "Close")])
+    hintbar(sv, hints)
+
+
+def screen_options():
+    sv = Svg("06-options-menu", "Options Menu")
+    options_panel(sv, FAVS[0], "SNES  ·  12h 40m played", OPTIONS_ITEMS, 1, [(["A"], "Choose"), (["B"], "Close")])
+    sv.save()
+
+
+def screen_options_wii():
+    """A Wii Game's Options Menu (FR-NEW-3, FR-DET-3): a Controller row after Delete save data, focused,
+    its choice cycled with Left and Right (or A) and kept for the Game from its next start."""
+    sv = Svg("44-options-menu-wii", "Options Menu: Wii Game")
+    items = OPTIONS_ITEMS[:4] + [(None, "Controller", WII_CONTROLLERS[1])] + OPTIONS_ITEMS[4:]
+    options_panel(sv, game("Mario Kart Wii", "wii", "6h 15m"), "Wii  ·  6h 15m played", items, 4,
+                  [(["←", "→"], "Change"), (["B"], "Close")])
     sv.save()
 
 
@@ -1768,7 +1798,7 @@ def screen_setup_key():
 
 if __name__ == "__main__":
     for fn in [screen_home, screen_home_empty, screen_carousel, screen_console_page, screen_details,
-               screen_options, screen_options_delete, screen_pause, screen_ds, screen_console_missing_emulator,
+               screen_options, screen_options_wii, screen_options_delete, screen_pause, screen_ds, screen_console_missing_emulator,
                screen_details_missing_emulator, screen_speedrun_page, screen_splits_editor,
                screen_speedrun_embedded, screen_pause_run, screen_timer_window, screen_details_speedrun,
                screen_settings_library, screen_settings_bios, screen_settings_cores, screen_settings_api_key,

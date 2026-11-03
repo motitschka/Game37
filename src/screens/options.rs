@@ -7,7 +7,8 @@
 //! the Game from the one chosen. Delete save data shows what the Game has in the same panel, and
 //! deletes the part chosen once a confirmation says so; the menu then shows what is left. Choose
 //! artwork opens the artwork picker over the menu, its own modal, which goes back to the menu when
-//! done.
+//! done. A Wii Game has a Controller row (FR-NEW-3), after `screen_options_wii`: its choice, the Wii
+//! Remote and Nunchuk or the Classic Controller, changes in place and is kept for the Game.
 
 use std::cell::RefCell;
 use std::fs;
@@ -15,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
-use crate::cores::{self, CoreInfo, InGameSaves};
+use crate::cores::{self, CoreInfo, InGameSaves, WiiController};
 use crate::ctx::{self, Ctx, Play, Start};
 use crate::launch;
 use crate::library::db::GameRow;
@@ -41,6 +42,8 @@ const PANEL_W: f32 = 600.0;
 const PANEL_X: f32 = W - PANEL_W;
 const ITEM_Y: f32 = 252.0;
 const ITEM_PITCH: f32 = 86.0;
+/// The rows sit closer when there are nine (a Wii Game's), so the last stays clear of the hint bar.
+const ITEM_PITCH_NINE: f32 = 80.0;
 const PICK_Y: f32 = 290.0;
 const PICK_PITCH: f32 = 112.0;
 /// The rename panel, centred above the hint bar.
@@ -80,6 +83,10 @@ pub enum Item {
     /// Delete the Game's Resume State, Save States, In-game Save or all of it, in a view of its
     /// own; Embedded Systems only, and only selectable when the Game has any (FR-DET-4).
     DeleteSaveData,
+    /// Which controller the player's stands in for, a Wii Remote and Nunchuk or a Classic
+    /// Controller, cycled in place and kept for the Game from its next start; Wii Games only
+    /// (FR-NEW-3).
+    Controller,
     /// Choose different Artwork from SteamGridDB, in the artwork picker (FR-ART-2).
     ChooseArtwork,
     /// Rename the Display Title; the file on disk stays as it is (FR-DET-5).
@@ -96,6 +103,7 @@ impl Item {
             Item::LoadSaveState => "Load save state",
             Item::StartFromPowerOn => "Start from power-on",
             Item::DeleteSaveData => "Delete save data",
+            Item::Controller => "Controller",
             Item::ChooseArtwork => "Choose artwork",
             Item::Rename => "Rename",
             Item::Hide => "Hide game",
@@ -139,6 +147,9 @@ pub struct OptionsMenu {
     /// "<System> · <Playtime> played".
     meta: String,
     items: Vec<Item>,
+    /// The controller a Wii Game plays with, which its Controller row shows; `None` for a Game of
+    /// any other System.
+    wii: Option<WiiController>,
     view: View,
     item: usize,
     /// Every Favorite, newest first, with whether its file is there, while the replace picker is
@@ -199,11 +210,18 @@ impl OptionsMenu {
             secs => format!("{short}  ·  {} played", playtime_label(secs)),
         };
         let embedded = system.is_some_and(|s| s.kind == Kind::Embedded);
+        let wii = (game.system == "wii").then(|| {
+            ctx.library.wii_controller(game.id).unwrap_or_else(|e| {
+                eprintln!("game37: can't read {}'s controller: {e}", game.title);
+                WiiController::default()
+            })
+        });
         let items = [
             Item::Favorite,
             Item::LoadSaveState,
             Item::StartFromPowerOn,
             Item::DeleteSaveData,
+            Item::Controller,
             Item::ChooseArtwork,
             Item::Rename,
             Item::Hide,
@@ -211,11 +229,12 @@ impl OptionsMenu {
         ]
         .into_iter()
         .filter(|&i| {
-            embedded
+            (embedded
                 || !matches!(
                     i,
                     Item::LoadSaveState | Item::StartFromPowerOn | Item::DeleteSaveData
-                )
+                ))
+                && (i != Item::Controller || wii.is_some())
         })
         .collect();
         let rel_path = Path::new(&game.rel_path);
@@ -238,6 +257,7 @@ impl OptionsMenu {
             game,
             meta,
             items,
+            wii,
             view: View::List,
             item: 0,
             favorites: Vec::new(),
@@ -268,6 +288,7 @@ impl OptionsMenu {
             Item::DeleteSaveData => self.has(SaveData::Everything),
             Item::Favorite
             | Item::StartFromPowerOn
+            | Item::Controller
             | Item::ChooseArtwork
             | Item::Rename
             | Item::Hide
@@ -445,6 +466,21 @@ impl OptionsMenu {
         self.items[self.item]
     }
 
+    /// The controller the Controller row shows: a Wii Game's, `None` for any other.
+    pub fn wii_controller(&self) -> Option<WiiController> {
+        self.wii
+    }
+
+    /// Switches a Wii Game's controller to the other one and stores it for the Game; the menu
+    /// stays open. With two choices, Left and Right both do this.
+    fn change_controller(&mut self, ctx: &mut Ctx) {
+        let Some(wii) = self.wii else { return };
+        match ctx.library.set_wii_controller(self.game.id, wii.other()) {
+            Ok(()) => self.wii = Some(wii.other()),
+            Err(e) => eprintln!("game37: can't change {}'s controller: {e}", self.game.title),
+        }
+    }
+
     /// Moves focus one step `dir` (-1 or 1), skipping actions that can't be chosen.
     fn move_item(&mut self, dir: isize) {
         let mut i = self.item as isize + dir;
@@ -574,6 +610,10 @@ impl OptionsMenu {
                 self.pick = self.first_pickable();
                 return Transition::None;
             }
+            Item::Controller => {
+                self.change_controller(ctx);
+                return Transition::None;
+            }
             Item::ChooseArtwork => return Transition::Push(Box::new(ArtworkPicker::new(self.game.clone()))),
         };
         finish(done, ctx)
@@ -636,8 +676,13 @@ impl OptionsMenu {
 
     fn draw_list(&mut self, gfx: &mut Gfx<'_>) {
         self.item_hits.clear();
+        let pitch = if self.items.len() <= 8 {
+            ITEM_PITCH
+        } else {
+            ITEM_PITCH_NINE
+        };
         for (i, &item) in self.items.iter().enumerate() {
-            let y = ITEM_Y + i as f32 * ITEM_PITCH;
+            let y = ITEM_Y + i as f32 * pitch;
             let r = Rect::new(PANEL_X + 24.0, y, PANEL_W - 48.0, 72.0);
             let on = i == self.item;
             if on {
@@ -669,6 +714,16 @@ impl OptionsMenu {
             if item.opens_view() {
                 let arrow = TextStyle::new(26, Weight::SemiBold, side);
                 gfx.text(W - 48.0, y + 45.0, "›", arrow, Align::Right);
+            }
+            // The choice "‹ value ›", as a Settings choice row draws it.
+            if let (Item::Controller, Some(wii)) = (item, self.wii) {
+                let base = y + 36.0 + 9.0;
+                let arrow = TextStyle::new(26, Weight::SemiBold, ACCENT);
+                let value = TextStyle::new(20, Weight::SemiBold, TEXT);
+                gfx.text(W - 48.0, base, "›", arrow, Align::Right);
+                gfx.text(W - 78.0, base - 2.0, wii.label(), value, Align::Right);
+                let value_w = gfx.measure(wii.label(), value);
+                gfx.text(W - 78.0 - value_w - 8.0, base, "‹", arrow, Align::Right);
             }
             self.item_hits.push((r, i));
         }
@@ -856,6 +911,13 @@ fn icon(gfx: &mut Gfx<'_>, item: Item, cx: f32, cy: f32, c: Colour) {
             gfx.fill_rect(Rect::new(cx - 4.0, cy - 11.0, 8.0, 3.0), c);
             gfx.stroke_round_rect(Rect::new(cx - 8.0, cy - 3.0, 16.0, 14.0), 2.0, 2.5, c);
         }
+        // A pad: its outline, a d-pad and a button.
+        Item::Controller => {
+            gfx.stroke_round_rect(Rect::new(cx - 13.0, cy - 8.0, 26.0, 16.0), 6.0, 2.5, c);
+            gfx.fill_rect(Rect::new(cx - 8.0, cy - 1.0, 7.0, 2.0), c);
+            gfx.fill_rect(Rect::new(cx - 5.5, cy - 3.5, 2.0, 7.0), c);
+            gfx.fill_circle(cx + 6.0, cy, 2.0, c);
+        }
         Item::ChooseArtwork => {
             gfx.stroke_round_rect(Rect::new(cx - 10.0, cy - 10.0, 20.0, 20.0), 3.0, 2.5, c);
             gfx.fill_rect(Rect::new(cx - 5.0, cy - 5.0, 10.0, 10.0), c);
@@ -903,6 +965,9 @@ impl Screen for OptionsMenu {
             Input::Action(Action::Up) if list => self.move_item(-1),
             Input::Action(Action::Down) if list => self.move_item(1),
             Input::Action(Action::Confirm) if list => return self.choose(self.item, ctx),
+            Input::Action(Action::Left | Action::Right) if list && self.focused() == Item::Controller => {
+                self.change_controller(ctx)
+            }
             Input::Action(Action::Back) | Input::Pointer(Pointer::Back) if list => return Transition::Pop,
             Input::Action(Action::Up) => self.move_pick(-1),
             Input::Action(Action::Down) => self.move_pick(1),
@@ -988,6 +1053,10 @@ impl Screen for OptionsMenu {
 
     fn hints(&self) -> Vec<Hint> {
         match self.view {
+            View::List if self.focused() == Item::Controller => vec![
+                Hint::new(&[Action::Left, Action::Right], "Change"),
+                Hint::new(&[Action::Back], "Close"),
+            ],
             View::List => vec![
                 Hint::new(&[Action::Confirm], "Choose"),
                 Hint::new(&[Action::Back], "Close"),
@@ -2133,5 +2202,72 @@ mod tests {
             "G0qefs",
             "no Options, Sort or Confirm changed the text"
         );
+    }
+
+    /// A Wii Game's Options Menu has a Controller row after Delete save data, showing the Wii
+    /// Remote and Nunchuk until changed; Left, Right, Confirm or a click switch it and store it for
+    /// that Game alone, and the menu stays open. A GameCube or SNES Game has no such row (FR-NEW-3).
+    #[test]
+    fn only_a_wii_game_has_a_controller_row_and_changing_it_stores_it() {
+        let (_dir, mut ctx, snes) = world(1);
+        let mut games = |system: &'static str, titles: &[&str]| {
+            let found: Vec<_> = titles
+                .iter()
+                .map(|t| FoundGame {
+                    system,
+                    rel_path: format!("{system}/{t}.iso"),
+                    title: (*t).to_owned(),
+                })
+                .collect();
+            ctx.library.sync_system(system, &found, 0).unwrap();
+            ctx.library.system_games(system, SortOrder::AZ).unwrap()
+        };
+        let wii = games("wii", &["Kart", "Other"]);
+        let gc = games("gc", &["Cube"]);
+        let (kart, other) = (&wii[0], &wii[1]);
+
+        for game in [&snes[0], &gc[0]] {
+            let menu = OptionsMenu::new(game.clone(), &ctx);
+            assert!(!menu.items().contains(&Item::Controller), "{}", game.system);
+            assert_eq!(menu.wii_controller(), None);
+        }
+
+        let mut menu = OptionsMenu::new(kart.clone(), &ctx);
+        let at = |menu: &OptionsMenu, item| menu.items().iter().position(|&i| i == item);
+        assert_eq!(
+            at(&menu, Item::Controller),
+            at(&menu, Item::DeleteSaveData).map(|i| i + 1)
+        );
+        assert_eq!(menu.wii_controller(), Some(WiiController::WiiRemoteAndNunchuk));
+        // Load save state and Delete save data have nothing yet, so focus skips them.
+        act(&mut menu, &mut ctx, Action::Down);
+        act(&mut menu, &mut ctx, Action::Down);
+        assert_eq!(menu.focused(), Item::Controller);
+        assert_eq!(
+            menu.hints()[0],
+            Hint::new(&[Action::Left, Action::Right], "Change")
+        );
+
+        let stored = |ctx: &Ctx, game: &GameRow| ctx.library.wii_controller(game.id).unwrap();
+        for (action, want) in [
+            (Action::Right, WiiController::ClassicController),
+            (Action::Left, WiiController::WiiRemoteAndNunchuk),
+            (Action::Confirm, WiiController::ClassicController),
+        ] {
+            assert!(
+                matches!(act(&mut menu, &mut ctx, action), Transition::None),
+                "{action:?}"
+            );
+            assert_eq!(menu.wii_controller(), Some(want), "{action:?}");
+            assert_eq!(stored(&ctx, kart), want, "{action:?}");
+        }
+        assert_eq!(menu.view(), View::List);
+        assert_eq!(stored(&ctx, other), WiiController::WiiRemoteAndNunchuk);
+
+        let mut menu = OptionsMenu::new(kart.clone(), &ctx);
+        assert_eq!(menu.wii_controller(), Some(WiiController::ClassicController));
+        let i = at(&menu, Item::Controller).unwrap();
+        assert!(matches!(menu.choose(i, &mut ctx), Transition::None));
+        assert_eq!(stored(&ctx, kart), WiiController::WiiRemoteAndNunchuk);
     }
 }

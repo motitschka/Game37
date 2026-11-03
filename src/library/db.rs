@@ -13,7 +13,7 @@ use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::is_combining_mark;
 
 use super::FoundGame;
-use crate::cores::ScreenLayout;
+use crate::cores::{ScreenLayout, WiiController};
 use crate::systems;
 use crate::ui::gfx::WindowMode;
 use crate::ui::input::ButtonStyle;
@@ -23,7 +23,8 @@ pub const SHELF_SIZE: usize = 20;
 
 /// Schema migrations, in order. Migration `i` takes the schema from `user_version` `i` to `i + 1`.
 /// Append new ones; never edit one that has shipped.
-const MIGRATIONS: &[&str] = &["
+const MIGRATIONS: &[&str] = &[
+    "
     CREATE TABLE games (
         id INTEGER PRIMARY KEY,
         system TEXT NOT NULL,
@@ -43,7 +44,11 @@ const MIGRATIONS: &[&str] = &["
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
     );
-"];
+",
+    "
+    ALTER TABLE games ADD COLUMN wii_controller TEXT;
+",
+];
 
 /// Games that appear in views: still on disk and not Hidden (FR-DET-6).
 const VISIBLE: &str = "present = 1 AND hidden = 0";
@@ -557,6 +562,30 @@ impl Library {
     pub fn set_artwork(&self, id: i64, record: &str) -> Result<(), DbError> {
         self.conn
             .execute("UPDATE games SET artwork = ?2 WHERE id = ?1", params![id, record])?;
+        Ok(())
+    }
+
+    /// The controller Wii Game `id` plays with (FR-NEW-3); a Wii Remote and Nunchuk until
+    /// changed, or if the stored one is unknown.
+    pub fn wii_controller(&self, id: i64) -> Result<WiiController, DbError> {
+        let value: Option<String> = self
+            .conn
+            .query_row("SELECT wii_controller FROM games WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .optional()?
+            .flatten();
+        Ok(value
+            .as_deref()
+            .and_then(WiiController::from_id)
+            .unwrap_or_default())
+    }
+
+    pub fn set_wii_controller(&self, id: i64, controller: WiiController) -> Result<(), DbError> {
+        self.conn.execute(
+            "UPDATE games SET wii_controller = ?2 WHERE id = ?1",
+            params![id, controller.id()],
+        )?;
         Ok(())
     }
 
@@ -1223,6 +1252,81 @@ mod tests {
         let lib = Library::open(&path).unwrap();
         assert_eq!(lib.artwork(id).unwrap().as_deref(), Some("{\"game\":null}"));
         assert_eq!(lib.artwork(id + 1).unwrap(), None);
+    }
+
+    /// A Wii Game's controller is its own, kept across reopening; a Game never set, or set to
+    /// something unknown, has the Wii Remote and Nunchuk.
+    #[test]
+    fn the_wii_controller_round_trips_per_game() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.db");
+        let (kart, other) = {
+            let mut lib = Library::open(&path).unwrap();
+            lib.sync_system("wii", &games("wii", &["Kart", "Other"]), 100)
+                .unwrap();
+            let (kart, other) = (id_of(&lib, "wii", "Kart"), id_of(&lib, "wii", "Other"));
+            assert_eq!(
+                lib.wii_controller(kart).unwrap(),
+                WiiController::WiiRemoteAndNunchuk
+            );
+            lib.set_wii_controller(kart, WiiController::ClassicController)
+                .unwrap();
+            (kart, other)
+        };
+        let lib = Library::open(&path).unwrap();
+        assert_eq!(
+            lib.wii_controller(kart).unwrap(),
+            WiiController::ClassicController
+        );
+        assert_eq!(
+            lib.wii_controller(other).unwrap(),
+            WiiController::WiiRemoteAndNunchuk
+        );
+        lib.set_wii_controller(kart, WiiController::WiiRemoteAndNunchuk)
+            .unwrap();
+        assert_eq!(
+            lib.wii_controller(kart).unwrap(),
+            WiiController::WiiRemoteAndNunchuk
+        );
+        lib.conn
+            .execute("UPDATE games SET wii_controller = 'wheel' WHERE id = ?1", [other])
+            .unwrap();
+        assert_eq!(
+            lib.wii_controller(other).unwrap(),
+            WiiController::WiiRemoteAndNunchuk
+        );
+    }
+
+    /// A database from before the Wii controller choice (schema version 1) opens with its Games and
+    /// what they record intact, and each Wii Game has the Wii Remote and Nunchuk until set.
+    #[test]
+    fn an_old_database_without_the_wii_controller_reads_as_the_wii_remote_and_nunchuk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(MIGRATIONS[0]).unwrap();
+            conn.pragma_update(None, "user_version", 1).unwrap();
+            conn.execute(
+                "INSERT INTO games (system, rel_path, title, date_added, playtime_secs)
+                 VALUES ('wii', 'wii/Kart.wbfs', 'Kart', 100, 60)",
+                [],
+            )
+            .unwrap();
+        }
+        let lib = Library::open(&path).unwrap();
+        let kart = id_of(&lib, "wii", "Kart");
+        assert_eq!(lib.game(kart).unwrap().unwrap().playtime_secs, 60);
+        assert_eq!(
+            lib.wii_controller(kart).unwrap(),
+            WiiController::WiiRemoteAndNunchuk
+        );
+        lib.set_wii_controller(kart, WiiController::ClassicController)
+            .unwrap();
+        assert_eq!(
+            lib.wii_controller(kart).unwrap(),
+            WiiController::ClassicController
+        );
     }
 
     #[test]
