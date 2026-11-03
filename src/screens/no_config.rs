@@ -7,7 +7,7 @@ use crate::ui::input::{Action, Input, Pointer};
 use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
 use crate::ui::theme::{MUTED, TEXT};
-use crate::ui::{M, W};
+use crate::ui::{self, M, W};
 
 pub struct NoConfig {
     heading: &'static str,
@@ -21,6 +21,11 @@ impl NoConfig {
             body: error.to_string(),
         }
     }
+}
+
+/// Where `n` lines `line_height` apart start, to sit centred on the canvas, however tall (`ui::h`).
+fn body_top(n: usize, line_height: f32) -> f32 {
+    ui::h() / 2.0 - (n as f32 * line_height) / 2.0
 }
 
 impl Screen for NoConfig {
@@ -39,7 +44,7 @@ impl Screen for NoConfig {
         let body = TextStyle::new(22, Weight::Regular, MUTED);
         let lines = gfx.wrap(&self.body, body, W - 4.0 * M);
         let line_height = 34.0;
-        let top = 540.0 - (lines.len() as f32 * line_height) / 2.0;
+        let top = body_top(lines.len(), line_height);
         gfx.text(
             W / 2.0,
             top - 30.0,
@@ -83,5 +88,11 @@ mod tests {
             screen.handle(Input::Action(Action::Confirm), &mut Ctx::empty()),
             Transition::None
         ));
+    }
+
+    #[test]
+    fn the_message_stays_centred_on_a_taller_canvas() {
+        assert_eq!(body_top(2, 34.0), 506.0);
+        ui::with_h(1200.0, || assert_eq!(body_top(2, 34.0), 566.0));
     }
 }
