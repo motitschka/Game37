@@ -1475,7 +1475,7 @@ mod tests {
         assert_eq!(for_system(by_id("psp").unwrap()), Some(&PPSSPP));
         for system in SYSTEMS
             .iter()
-            .filter(|s| s.kind == crate::systems::Kind::External)
+            .filter(|s| s.kind != crate::systems::Kind::Embedded)
         {
             assert_eq!(for_system(system), None, "{}", system.id);
         }

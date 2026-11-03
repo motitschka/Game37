@@ -18,7 +18,7 @@ use crate::ui::theme::{ACCENT, BG, LINE, MUTED, SURFACE2, TEXT, WARN};
 
 /// The first row's top, under the column headers.
 const TABLE_TOP: f32 = TOP + 28.0;
-const PITCH: f32 = 41.0;
+const PITCH: f32 = 36.0;
 /// Left edge of the BIOS column.
 const STATUS_X: f32 = RX + 320.0;
 
@@ -39,10 +39,15 @@ enum Status {
     NotNeeded,
     /// An External System: its Standalone Emulator's name.
     Handled(&'static str),
+    /// An Upcoming System: nothing plays it yet, so nothing needs a BIOS for it yet.
+    Upcoming,
 }
 
 impl Status {
     fn of(system: &System, ctx: &Ctx) -> Status {
+        if system.kind == Kind::Upcoming {
+            return Status::Upcoming;
+        }
         if system.kind == Kind::External
             && let Some(emulator) = emulators::for_system(system)
         {
@@ -63,6 +68,7 @@ impl Status {
             Status::Missing(text) => text.clone(),
             Status::NotNeeded => "No BIOS needed".to_owned(),
             Status::Handled(emulator) => format!("Handled by {emulator}"),
+            Status::Upcoming => "Not playable yet".to_owned(),
         }
     }
 }
@@ -182,7 +188,7 @@ mod tests {
         let rows = Bios::default().rows(&ctx);
         let labels: Vec<_> = rows.iter().map(|r| r.label).collect();
         let names: Vec<_> = SYSTEMS.iter().map(|s| s.name).collect();
-        assert_eq!((rows.len(), labels), (17, names));
+        assert_eq!((rows.len(), labels), (19, names));
         assert!(rows.iter().all(|r| r.inert));
     }
 
@@ -200,6 +206,9 @@ mod tests {
             assert_eq!(value(&rows, id), "No BIOS needed", "{id}");
         }
         assert_eq!(value(&rows, "wiiu"), "Handled by Cemu");
+        for id in ["switch2", "ps5"] {
+            assert_eq!(value(&rows, id), "Not playable yet", "{id}");
+        }
         assert_eq!(
             value(&rows, "ps2"),
             format!("Missing: put your own BIOS dump, any file name, in {dir}/pcsx2/bios/")

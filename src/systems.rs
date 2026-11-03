@@ -1,4 +1,4 @@
-//! The 17 Systems Game37 knows about, defined once in System Order (FR-CAR-8).
+//! The 19 Systems Game37 knows about, defined once in System Order (FR-CAR-8).
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Maker {
@@ -19,6 +19,9 @@ impl Maker {
 pub enum Kind {
     Embedded,
     External,
+    /// An Upcoming System: no emulator can play it yet. Game37 lists its Games, and Play explains
+    /// why it can't start them.
+    Upcoming,
 }
 
 #[derive(Debug)]
@@ -53,7 +56,7 @@ impl System {
 }
 
 /// Every System, in System Order: Nintendo first, then Sony, each by European release year.
-pub static SYSTEMS: [System; 17] = [
+pub static SYSTEMS: [System; 19] = [
     System {
         id: "nes",
         name: "NES",
@@ -197,6 +200,17 @@ pub static SYSTEMS: [System; 17] = [
         folder_markers: &[],
     },
     System {
+        id: "switch2",
+        name: "Switch 2",
+        short: "SWITCH 2",
+        maker: Maker::Nintendo,
+        year: 2025,
+        kind: Kind::Upcoming,
+        colour: 0xE8590C,
+        extensions: &["nsp", "xci"],
+        folder_markers: &[],
+    },
+    System {
         id: "ps1",
         name: "PlayStation",
         short: "PS1",
@@ -254,6 +268,18 @@ pub static SYSTEMS: [System; 17] = [
         extensions: &[],
         folder_markers: &[&["eboot.bin", "sce_sys"]],
     },
+    System {
+        id: "ps5",
+        name: "PlayStation 5",
+        short: "PS5",
+        maker: Maker::Sony,
+        year: 2020,
+        kind: Kind::Upcoming,
+        colour: 0x00897B,
+        // A dump is a folder like a PS4 Game's.
+        extensions: &[],
+        folder_markers: &[&["eboot.bin", "sce_sys"]],
+    },
 ];
 
 pub fn by_id(id: &str) -> Option<&'static System> {
@@ -271,7 +297,7 @@ mod tests {
 
     #[test]
     fn system_order_is_nintendo_then_sony_by_year() {
-        assert_eq!(SYSTEMS.len(), 17);
+        assert_eq!(SYSTEMS.len(), 19);
         let first_sony = SYSTEMS.iter().position(|s| s.maker == Maker::Sony).unwrap();
         assert!(SYSTEMS[first_sony..].iter().all(|s| s.maker == Maker::Sony));
         for pair in SYSTEMS[..first_sony]
@@ -286,7 +312,7 @@ mod tests {
             );
         }
         assert_eq!(SYSTEMS[0].id, "nes");
-        assert_eq!(SYSTEMS[16].id, "ps4");
+        assert_eq!(SYSTEMS[18].id, "ps5");
     }
 
     #[test]
@@ -299,13 +325,13 @@ mod tests {
     }
 
     #[test]
-    fn folder_game_systems_are_ps3_ps4_wiiu() {
+    fn folder_game_systems_are_wiiu_ps3_ps4_and_ps5() {
         let ids: Vec<_> = SYSTEMS
             .iter()
             .filter(|s| s.has_folder_games())
             .map(|s| s.id)
             .collect();
-        assert_eq!(ids, ["wiiu", "ps3", "ps4"]);
+        assert_eq!(ids, ["wiiu", "ps3", "ps4", "ps5"]);
         assert!(
             SYSTEMS
                 .iter()
@@ -327,6 +353,16 @@ mod tests {
             .map(|s| s.id)
             .collect();
         assert_eq!(external, ["wiiu", "switch", "ps3", "ps4"]);
+    }
+
+    #[test]
+    fn switch_2_and_ps5_are_the_upcoming_systems() {
+        let upcoming: Vec<_> = SYSTEMS
+            .iter()
+            .filter(|s| s.kind == Kind::Upcoming)
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(upcoming, ["switch2", "ps5"]);
     }
 
     #[test]

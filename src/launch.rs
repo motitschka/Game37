@@ -34,7 +34,8 @@ const NOT_PLAYABLE_TITLE: &str = "Not playable yet";
 /// What Play on a Game's Details Page does (FR-DET-1): asks to play it when its System's
 /// Core or Standalone Emulator is installed, downloads an Embedded System's Core first when it
 /// isn't (FR-EMB-2, US-23), checks for a required BIOS (FR-EMB-12), else explains why it can't be
-/// played. An Embedded Game continues from its Resume State (FR-EMB-6).
+/// played, as for every Upcoming System's Game. An Embedded Game continues from its Resume State
+/// (FR-EMB-6).
 pub fn confirm_game(game: &GameRow, ctx: &mut Ctx) -> Transition {
     confirm_play(Play::resume(game.clone()), ctx)
 }
@@ -107,8 +108,17 @@ fn why_not_playable(play: Play, ctx: &mut Ctx) -> Option<String> {
                 return None;
             }
         },
+        Kind::Upcoming => upcoming(system),
     };
     Some(message)
+}
+
+/// Why an Upcoming System's Game doesn't start.
+fn upcoming(system: &System) -> String {
+    format!(
+        "No emulator can play {} games yet. Game37 will play them once one does.",
+        system.name
+    )
 }
 
 fn later_update(system: &System) -> String {
@@ -903,6 +913,30 @@ mod tests {
         let nds = game_of(&w, "nds");
         assert!(matches!(confirm_game(&nds, &mut w.ctx), Transition::None));
         assert_eq!(w.ctx.play.take().map(|p| p.game.system), Some("nds".to_owned()));
+    }
+
+    #[test]
+    fn confirm_on_a_switch_2_or_ps5_game_says_it_is_not_playable_yet_and_starts_nothing() {
+        let mut w = world("exit 0");
+        w.ctx.data_dir = w._dir.path().join("data");
+        // Never touches the network: a download would fail at once and leave a screen to check.
+        w.ctx.start_download = Box::new(cores::testing::spawn_failing);
+        for id in ["switch2", "ps5"] {
+            let game = game_of(&w, id);
+            let Transition::Push(screen) = confirm_game(&game, &mut w.ctx) else {
+                panic!("{id}: expected a message to be pushed");
+            };
+            assert_eq!(screen.title(), "Not playable yet", "{id}");
+            assert!(w.ctx.play.is_none() && w.ctx.launch.is_none(), "{id}");
+        }
+    }
+
+    #[test]
+    fn the_upcoming_message_names_the_system() {
+        assert_eq!(
+            upcoming(systems::by_id("switch2").unwrap()),
+            "No emulator can play Switch 2 games yet. Game37 will play them once one does."
+        );
     }
 
     #[test]

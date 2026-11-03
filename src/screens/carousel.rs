@@ -473,27 +473,27 @@ mod tests {
 
     #[test]
     fn wrap_goes_round_both_ends() {
-        assert_eq!(wrap(at("ps4"), 1), at("nes"));
-        assert_eq!(wrap(at("nes"), -1), at("ps4"));
+        assert_eq!(wrap(at("ps5"), 1), at("nes"));
+        assert_eq!(wrap(at("nes"), -1), at("ps5"));
         assert_eq!(wrap(at("nes"), 1), at("gb"));
-        assert_eq!(wrap(at("nes"), -2), at("ps3"));
+        assert_eq!(wrap(at("nes"), -2), at("ps4"));
         assert_eq!(wrap(at("nes"), SYSTEMS.len() as i32), at("nes"));
     }
 
     #[test]
-    fn right_on_ps4_goes_to_nes_and_left_on_nes_goes_to_ps4() {
+    fn right_on_ps5_goes_to_nes_and_left_on_nes_goes_to_ps5() {
         let mut ctx = Ctx::empty();
-        ctx.library.set_last_system("ps4").unwrap();
+        ctx.library.set_last_system("ps5").unwrap();
         let mut carousel = Carousel::new(&ctx.library);
-        assert_eq!(carousel.system().id, "ps4");
+        assert_eq!(carousel.system().id, "ps5");
         act(&mut carousel, &mut ctx, Input::Action(Action::Right));
         assert_eq!(carousel.system().id, "nes");
         act(&mut carousel, &mut ctx, Input::Action(Action::Left));
-        assert_eq!(carousel.system().id, "ps4");
+        assert_eq!(carousel.system().id, "ps5");
         for _ in 0..SYSTEMS.len() * 3 {
             act(&mut carousel, &mut ctx, Input::Action(Action::Left));
         }
-        assert_eq!(carousel.system().id, "ps4", "whole laps come back to the start");
+        assert_eq!(carousel.system().id, "ps5", "whole laps come back to the start");
         assert!((0..SYSTEMS.len() as i32).contains(&carousel.target));
     }
 
@@ -502,8 +502,8 @@ mod tests {
         let mut cards = visible(at("nes") as f32);
         cards.sort_by(|a, b| a.1.total_cmp(&b.1));
         let expected = [
-            (at("ps3"), -2.0),
-            (at("ps4"), -1.0),
+            (at("ps4"), -2.0),
+            (at("ps5"), -1.0),
             (at("nes"), 0.0),
             (at("gb"), 1.0),
             (at("snes"), 2.0),
@@ -588,12 +588,12 @@ mod tests {
         let mut carousel = Carousel::new(&ctx.library);
         let click = |x, y| Input::Pointer(Pointer::Click { x, y });
         assert_eq!(opened(act(&mut carousel, &mut ctx, click(160.0, 450.0))), None);
-        assert_eq!(carousel.system().id, "ps3");
-        assert_eq!(opened(act(&mut carousel, &mut ctx, click(1450.0, 450.0))), None);
         assert_eq!(carousel.system().id, "ps4");
+        assert_eq!(opened(act(&mut carousel, &mut ctx, click(1450.0, 450.0))), None);
+        assert_eq!(carousel.system().id, "ps5");
         assert_eq!(
             opened(act(&mut carousel, &mut ctx, click(960.0, 450.0))).as_deref(),
-            Some("PlayStation 4")
+            Some("PlayStation 5")
         );
         assert_eq!(opened(act(&mut carousel, &mut ctx, click(960.0, 900.0))), None);
     }
@@ -618,9 +618,9 @@ mod tests {
             &mut ctx,
             Input::Pointer(Pointer::Wheel { dy: 1.0 }),
         );
-        assert_eq!(carousel.system().id, "ps4");
+        assert_eq!(carousel.system().id, "ps5");
         let t = act(&mut carousel, &mut ctx, Input::Action(Action::Confirm));
-        assert_eq!(opened(t).as_deref(), Some("PlayStation 4"));
+        assert_eq!(opened(t).as_deref(), Some("PlayStation 5"));
     }
 
     #[test]
@@ -632,8 +632,8 @@ mod tests {
         carousel.advance(ctx.animate);
         carousel.settle(&ctx);
         let reopened = Carousel::new(&ctx.library);
-        assert_eq!(reopened.system().id, "ps4");
-        assert_eq!(reopened.position, at("ps4") as f32, "starts settled");
+        assert_eq!(reopened.system().id, "ps5");
+        assert_eq!(reopened.position, at("ps5") as f32, "starts settled");
     }
 
     #[test]
@@ -708,14 +708,14 @@ mod tests {
         let mut carousel = Carousel::new(&ctx.library);
         carousel.advance(true);
         act(&mut carousel, &mut ctx, Input::Action(Action::Left));
-        assert_eq!(carousel.target, at("ps4") as i32);
+        assert_eq!(carousel.target, at("ps5") as i32);
         assert_eq!(
             carousel.position,
             SYSTEMS.len() as f32,
             "slides the short way from NES"
         );
         carousel.advance(false);
-        assert_eq!(carousel.position, at("ps4") as f32);
+        assert_eq!(carousel.position, at("ps5") as f32);
     }
 
     #[test]

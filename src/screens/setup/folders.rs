@@ -483,6 +483,18 @@ mod tests {
     }
 
     #[test]
+    fn create_makes_the_switch_2_and_ps5_folders_when_ticked() {
+        let root = tempfile::tempdir().unwrap();
+        let games = root.path().join("Games");
+        let (mut setup, mut ctx) = on_folders(&games, &["switch2", "ps5"]);
+        act(&mut setup, &mut ctx, Action::Confirm);
+        for id in ["switch2", "ps5", "bios"] {
+            assert!(games.join(id).is_dir(), "{id}");
+        }
+        assert_eq!(made(&setup.model), 3);
+    }
+
+    #[test]
     fn continue_waits_for_the_folders_and_back_and_forward_keep_them() {
         let root = tempfile::tempdir().unwrap();
         let (mut setup, mut ctx) = on_folders(root.path(), &["gba"]);

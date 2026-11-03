@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **Switch 2 and PS5 are listed as Upcoming Systems.** No emulator can play them yet, but Game37
+  already makes their `switch2/` and `ps5/` folders, finds their Games (`.nsp` and `.xci` for Switch 2,
+  game folders with `eboot.bin` and `sce_sys/` for PS5) and shows them on the Carousel and their
+  Console Pages. Play on one of their Games says it isn't playable yet.
+
 ## 0.2.0-beta.1 (2026-11-02)
 
 PS2, 3DS, GameCube and Wii now play inside Game37, like the older Systems, with libretro Cores in

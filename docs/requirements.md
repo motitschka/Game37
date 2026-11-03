@@ -20,11 +20,13 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 | 3DS | `3ds` | 2011 | Embedded | Azahar core |
 | Wii U | `wiiu` | 2012 | External | Cemu |
 | Switch | `switch` | 2017 | External | Ryubing |
+| Switch 2 | `switch2` | 2025 | Upcoming | not playable yet |
 | PlayStation | `ps1` | 1995 | Embedded | Beetle PSX HW core |
 | PlayStation 2 | `ps2` | 2000 | Embedded | LRPS2 core |
 | PSP | `psp` | 2005 | Embedded | PPSSPP core |
 | PlayStation 3 | `ps3` | 2007 | External | RPCS3 |
 | PlayStation 4 | `ps4` | 2013 | External | shadPS4 |
+| PlayStation 5 | `ps5` | 2020 | Upcoming | not playable yet |
 
 ## Functional requirements
 
@@ -52,7 +54,7 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 ### Carousel and Console Pages
 
 - **FR-CAR-1** L1/R1, or clicking a tab, switches between Home and Carousel.
-- **FR-CAR-2** The Carousel always lists all 17 Systems in System Order, whatever was picked in First-run Setup. Each card shows the maker and European release year (e.g. "Nintendo · 2002"). There are no maker labels or dividers. The background colour changes with the highlighted System.
+- **FR-CAR-2** The Carousel always lists all 19 Systems in System Order, whatever was picked in First-run Setup. Each card shows the maker and European release year (e.g. "Nintendo · 2002"). There are no maker labels or dividers. The background colour changes with the highlighted System.
 - **FR-CAR-3** Selecting a System opens its Console Page, a grid of tall covers.
 - **FR-CAR-4** A System with no Games keeps its place in the Carousel but its card is slightly dimmed. Its Console Page explains which folder to put files in.
 - **FR-CAR-5** Console Pages can be sorted A–Z, by Last played, by Most played, or by Recently added. The sort order is global: changing it on one Console Page applies to all of them until it is changed again. It persists across restarts.

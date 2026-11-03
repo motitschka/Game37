@@ -29,7 +29,7 @@ M7 from `main`, on a new branch `m7-…`.
 
 | Path | What it is |
 |---|---|
-| `src/systems.rs` | The 17 Systems in System Order, the only place Systems are listed |
+| `src/systems.rs` | The 19 Systems in System Order, the only place Systems are listed |
 | `src/config.rs` | Config loading (`~/.config/game37/config.toml`), the SteamGridDB key from `secrets.toml` next to it (`ApiKey`, redacted `Debug`), XDG dirs |
 | `src/library/` | `scan.rs` (folder scan, folder Games, PS1 `.m3u`, PSP `EBOOT.PBP` titles), `title.rs` (Display Titles), `db.rs` (SQLite library, Shelves, sort, settings, Favorites incl. `replace_favorite`/`all_favorites`, rename, hide, Artwork records), `watch.rs` (live Games Root watching) |
 | `src/emulators.rs`, `src/launch.rs` | Standalone Emulators for External Systems, Flatpak detection, launching with Playtime; `confirm_game`/`confirm_play` decide what Play does (a `Play` carries an optional Save State slot) |

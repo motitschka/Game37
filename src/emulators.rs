@@ -144,11 +144,11 @@ mod tests {
     use crate::systems::{SYSTEMS, by_id};
 
     #[test]
-    fn every_external_system_has_an_emulator_and_no_embedded_one_does() {
+    fn every_external_system_has_an_emulator_and_no_embedded_or_upcoming_one_does() {
         for system in &SYSTEMS {
             match system.kind {
                 Kind::External => assert!(for_system(system).is_some(), "{}", system.id),
-                Kind::Embedded => assert!(for_system(system).is_none(), "{}", system.id),
+                Kind::Embedded | Kind::Upcoming => assert!(for_system(system).is_none(), "{}", system.id),
             }
         }
     }

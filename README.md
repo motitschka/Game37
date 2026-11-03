@@ -12,7 +12,7 @@
 ![Linux](https://img.shields.io/badge/Linux-Arch%20%C2%B7%20Fedora%20%C2%B7%20Ubuntu%20%C2%B7%20Debian%20%C2%B7%20NixOS-lightgrey?logo=linux&logoColor=white)
 ![Rust](https://img.shields.io/badge/rust-2024%20edition-orange?logo=rust&logoColor=white)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
-![Systems](https://img.shields.io/badge/Systems-17%2C%20NES%20%E2%86%92%20PS4-8B7BFF)
+![Systems](https://img.shields.io/badge/Systems-19%2C%20NES%20%E2%86%92%20PS5-8B7BFF)
 
 [**Install**](#install) &nbsp;·&nbsp;
 [Systems](#systems) &nbsp;·&nbsp;
@@ -60,7 +60,7 @@ Details are in [docs/milestones.md](docs/milestones.md), and the current state i
 
 ## What it does
 
-- **One library for 17 Systems.** Game37 scans one folder per System, cleans up file names into Display
+- **One library for 19 Systems.** Game37 scans one folder per System, cleans up file names into Display
   Titles (`Super Mario World (USA) [!].sfc` becomes "Super Mario World"), and notices added, removed and
   renamed Games while it runs.
 - **Home:** four Shelves (Favorites, Continue playing, Recently added, Most played) with up to 20 Games
@@ -101,13 +101,17 @@ Listed in System Order: Nintendo first, then Sony, each by European release date
 | 3DS | `3ds` | Azahar Core | `.3ds` `.cci` `.cxi` `.3dsx` `.app` `.elf` `.axf` `.zcci` `.zcxi` `.z3dsx` `.bcci` `.bcxi` |
 | Wii U | `wiiu` | Cemu | `.wua` `.wud` `.wux`, or a game folder with `code/`, `content/` and `meta/` |
 | Switch | `switch` | Ryubing | `.nsp` `.xci` `.nro` |
+| Switch 2 | `switch2` | not playable yet | `.nsp` `.xci` |
 | PlayStation | `ps1` | Beetle PSX HW Core | `.cue` (with its `.bin`) `.chd` `.pbp` `.m3u` |
 | PlayStation 2 | `ps2` | LRPS2 Core | `.iso` `.chd` `.cso` `.zso` `.ciso` `.cue` (with its `.bin`) `.elf` |
 | PSP | `psp` | PPSSPP Core | `.iso` `.cso` `.pbp` `.chd` |
 | PlayStation 3 | `ps3` | RPCS3 | a game folder with `PS3_GAME/`, or with `PARAM.SFO` and `USRDIR/` |
 | PlayStation 4 | `ps4` | shadPS4 | a game folder with `eboot.bin` and `sce_sys/` |
+| PlayStation 5 | `ps5` | not playable yet | a game folder with `eboot.bin` and `sce_sys/` |
 
-Systems played with a Core are **Embedded Systems**; the other four are **External Systems**. `.dol`
+Systems played with a Core are **Embedded Systems**; Wii U, Switch, PS3 and PS4 are **External
+Systems**. Switch 2 and PS5 are **Upcoming Systems**: no emulator can play them yet, so Game37 makes
+their folders and lists their Games, and Play says they aren't playable yet. `.dol`
 and `.elf` files on GameCube, Wii and PS2, and `.3dsx`, `.elf` and `.axf` on 3DS, are homebrew. 3DS
 Games must be decrypted dumps; a `.cia` is an installer, which the Azahar Core can't play.
 
