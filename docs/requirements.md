@@ -138,6 +138,12 @@ Built in milestone 8 (ADR 0016, research in [research/m8-newer-cores.md](researc
 - **FR-UI-3** Startup window mode setting: Remember last (default), Always fullscreen, Always windowed.
 - **FR-UI-4** Game37 has a dark theme only.
 - **FR-UI-5** Game37 does not start automatically on login.
+- **FR-UI-6** The menus fill a screen taller than 16:9, such as a 16:10 laptop screen: they are laid out
+  1920 wide and as tall as the screen's shape needs (up to 4:3), with nothing stretched. The extra
+  height goes to the lists and grids, and whatever sits at the bottom (the hint bar, Setup's buttons)
+  stays at the bottom. A Game's picture, the Pause Menu and anything else shown over a running Game
+  keep their 16:9 frame, with the Game in its own aspect ratio inside it. A screen wider than 16:9
+  shows bars at the sides.
 
 ### Settings
 
