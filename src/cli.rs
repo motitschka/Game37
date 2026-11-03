@@ -8,7 +8,7 @@ use crate::ui::input::{Action, Input, Pointer, TextInput};
 
 pub const USAGE: &str = "usage: game37 [--config <path>] [--data-dir <path>] \
 [--screenshot <out.bmp> [--actions <a,b,...>] [--missing-emulators <system ids>] [--frames <n>] \
-[--artwork] [--screen controller-test]]\n\
+[--artwork] [--screen controller-test] [--size <W>x<H>]]\n\
 --screenshot needs --config and --data-dir too, so it never touches your real Config and data";
 
 #[derive(Debug, Default, PartialEq)]
@@ -39,7 +39,14 @@ pub struct Screenshot {
     /// `--screen`: a screen to open over the start screen before the steps, with the state it shows
     /// faked.
     pub screen: Option<ShotScreen>,
+    /// `--size`: the window's size in pixels, (1920, 1080) when not given; e.g. 1920x1200 to see
+    /// the menus on a 16:10 screen.
+    pub size: (u32, u32),
 }
+
+/// The smallest and largest `--size`.
+const MIN_SIZE: (u32, u32) = (640, 360);
+const MAX_SIZE: (u32, u32) = (7680, 4320);
 
 /// A screen `--screen` opens, for screens no step sequence can reach on its own.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -51,7 +58,7 @@ pub enum ShotScreen {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Step {
     Action(Action),
-    /// A left click at logical coordinates.
+    /// A left click at logical coordinates: 1920 wide and as tall as the canvas (`ui::h`).
     Click(f32, f32),
     /// `wait:N`: N frames without input, e.g. to let a running Game get going.
     Wait(u32),
@@ -89,6 +96,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
     let mut frames = None;
     let mut artwork = false;
     let mut screen = None;
+    let mut size = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or_else(|| format!("{arg} needs a value"));
@@ -101,6 +109,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
             "--frames" => frames = Some(value()?),
             "--artwork" => artwork = true,
             "--screen" => screen = Some(value()?),
+            "--size" => size = Some(value()?),
             _ => return Err(format!("unknown argument {arg:?}")),
         }
     }
@@ -111,6 +120,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
             ("--frames", frames.is_some()),
             ("--artwork", artwork),
             ("--screen", screen.is_some()),
+            ("--size", size.is_some()),
         ];
         if let Some((flag, _)) = given.iter().find(|(_, given)| *given) {
             return Err(format!("{flag} only works with --screenshot"));
@@ -141,8 +151,26 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
             Some("controller-test") => Some(ShotScreen::ControllerTest),
             Some(other) => return Err(format!("bad --screen {other:?}: expected controller-test")),
         },
+        size: match size {
+            None => (1920, 1080),
+            Some(s) => parse_size(&s)?,
+        },
     });
     Ok(options)
+}
+
+/// A `--size` value, `WxH` in pixels, within `MIN_SIZE` and `MAX_SIZE`.
+fn parse_size(s: &str) -> Result<(u32, u32), String> {
+    let (min, max) = (MIN_SIZE, MAX_SIZE);
+    s.split_once('x')
+        .and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?)))
+        .filter(|&(w, h)| (min.0..=max.0).contains(&w) && (min.1..=max.1).contains(&h))
+        .ok_or_else(|| {
+            format!(
+                "bad --size {s:?}: expected WxH in pixels, from {}x{} to {}x{}, e.g. 1920x1200",
+                min.0, min.1, max.0, max.1
+            )
+        })
 }
 
 /// The `--missing-emulators` ids, resolved to the `Emulators` state they stand for: every
@@ -201,7 +229,7 @@ fn parse_step(step: &str) -> Result<Step, String> {
             .split_once(':')
             .and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?)));
         return coords.map(|(x, y)| Step::Click(x, y)).ok_or_else(|| {
-            format!("bad click {step:?}: expected click:X:Y in logical 1920x1080 coordinates")
+            format!("bad click {step:?}: expected click:X:Y in logical coordinates (1920 wide)")
         });
     }
     if let Some(text) = step.strip_prefix("text:") {
@@ -324,6 +352,38 @@ mod tests {
         let err = parse(shot_args("--screenshot o.bmp --screen settings")).unwrap_err();
         assert!(err.contains("controller-test"), "{err}");
         assert!(USAGE.contains("[--screen controller-test]"));
+    }
+
+    #[test]
+    fn size_defaults_to_1920x1080_takes_wxh_and_only_works_with_screenshot() {
+        let shot = |a: &str| parse(shot_args(a)).unwrap().screenshot.unwrap();
+        assert_eq!(shot("--screenshot o.bmp").size, (1920, 1080));
+        assert_eq!(shot("--screenshot o.bmp --size 1920x1200").size, (1920, 1200));
+        assert_eq!(shot("--size 640x360 --screenshot o.bmp").size, (640, 360));
+        for bad in [
+            "0x5",
+            "1920x0",
+            "1920",
+            "1920x",
+            "x1200",
+            "1920x1200x1",
+            "-1920x1200",
+            "abc",
+            "",
+            "639x360",
+        ] {
+            let err = parse(shot_args_vec(vec![
+                "--screenshot".into(),
+                "o.bmp".into(),
+                "--size".into(),
+                bad.into(),
+            ]))
+            .unwrap_err();
+            assert!(err.contains("--size") && err.contains("WxH"), "{bad:?}: {err}");
+        }
+        let err = parse(args("--size 1920x1200")).unwrap_err();
+        assert!(err.contains("--size") && err.contains("--screenshot"), "{err}");
+        assert!(USAGE.contains("[--size <W>x<H>]"));
     }
 
     #[test]

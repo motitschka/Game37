@@ -73,7 +73,7 @@ impl Action {
     }
 }
 
-/// Mouse input, in logical 1920×1080 coordinates.
+/// Mouse input, in logical coordinates: 1920 wide and as tall as the canvas (`ui::h`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Pointer {
     Move {

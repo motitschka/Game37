@@ -185,4 +185,35 @@ shot m6-settings-key "$root/cfg.toml" "settings,down,right,confirm,text:abcdef01
 # M6: Settings Library: the Games Root entry, prefilled with the current Games Root (not saved)
 shot m6-settings-games-root "$root/cfg.toml" "settings,right,confirm"
 
+# 16:10: the menus fill a 1920x1200 window (as on a 1920x1200 laptop); each shot repeats the 1080
+# shot named in its comment. A running Game and its Pause Menu stay 1920x1080, so that shot comes
+# out 1920x1080. Last, so the shared games dir is as the shots above left it (the Pause Menu shot
+# overwrites slot 1, which m3-pause-saved already filled).
+tall=(--size 1920x1200)
+shot tall-home "$root/cfg.toml" "" "${tall[@]}"                                         # m1-home
+shot tall-carousel "$root/cfg.toml" "nexttab,right,right" "${tall[@]}"                  # m1-carousel
+shot tall-console-page "$root/cfg.toml" "nexttab,right,right,confirm,sort" "${tall[@]}" # m1-console-page
+shot tall-details "$root/cfg.toml" "nexttab,right,right,confirm,confirm" "${tall[@]}"   # m5-details
+shot tall-options "$root/cfg.toml" "down,down,options" "${tall[@]}"                    # m5-options
+shot tall-choose-artwork "$root/cfg.toml" "down,down,options,down,down,down,confirm" \
+    "${tall[@]}"                                                                         # m5-choose-artwork
+shot tall-search-open "$root/cfg.toml" "down,down,search" "${tall[@]}"                 # m6-search-open
+shot tall-search-results "$root/cfg.toml" "search,text:test,down,right" "${tall[@]}"   # m6-search-results
+shot tall-settings-library "$root/cfg.toml" "settings,right,down,down" "${tall[@]}"    # m6-settings-library
+shot tall-settings-bios "$root/cfg.toml" "settings,down,down,right" "${tall[@]}"       # m6-settings-bios
+shot tall-settings-hidden "$root/cfg.toml" \
+    "down,down,options,down,down,down,down,down,confirm,settings,right,down,down,confirm" \
+    "${tall[@]}"                                                                         # m6-settings-hidden
+shot tall-settings-games-root "$root/cfg.toml" "settings,right,confirm" "${tall[@]}"   # m6-settings-games-root
+shot tall-setup "$root/missing.toml" "" "${tall[@]}"                                    # m1-no-config
+shot tall-setup-folders "$root/missing.toml" \
+    "confirm,down,right,right,right,confirm,right,confirm,down,left,left,confirm,settings,settings,confirm" \
+    --missing-emulators switch,ps3 "${tall[@]}"                                          # m6-setup-folders
+shot tall-notice "$root/cfg.toml" "nexttab,left,left,left,left,left,left,left,left,left,confirm" \
+    --missing-emulators wiiu "${tall[@]}"                                                # m2-notice
+shot tall-pause-saved "$root/cfg.toml" \
+    "nexttab,right,right,confirm,confirm,confirm,wait:120,back,down,confirm,confirm,confirm" \
+    "${tall[@]}"                                                                         # m3-pause-saved
+[ ! -e "$root/missing.toml" ] || echo "FAIL $root/missing.toml exists, so the no-Config shots had a Config"
+
 echo "screenshots in $out"
