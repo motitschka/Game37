@@ -159,7 +159,7 @@ impl Key {
         let skip_w = pill_width(gfx, "Skip");
         let continue_x = W - M - continue_w;
         let back_x = continue_x - 16.0 - back_w;
-        let skip_r = Rect::new(back_x - 16.0 - skip_w, super::BUTTONS_Y, skip_w, super::PILL_H);
+        let skip_r = Rect::new(back_x - 16.0 - skip_w, super::buttons_y(), skip_w, super::PILL_H);
         pill(
             gfx,
             skip_r,

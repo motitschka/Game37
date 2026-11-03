@@ -15,6 +15,7 @@ mod hidden;
 mod library;
 
 use crate::ctx::Ctx;
+use crate::ui::chrome;
 use crate::ui::cover::ellipsize;
 use crate::ui::gfx::{Align, Gfx, TextStyle};
 use crate::ui::input::{Action, Input, Pointer};
@@ -349,6 +350,11 @@ impl Settings {
 }
 
 /// Where section `i` is drawn.
+/// The rule between the sections and the rows, from their top to 30 above the hint bar.
+fn divider() -> Rect {
+    Rect::new(M + 400.0, TOP, 1.0, chrome::hintbar_top() - 30.0 - TOP)
+}
+
 fn section_rect(i: usize) -> Rect {
     Rect::new(M - 24.0, TOP + i as f32 * SECTION_PITCH, SECTION_W, SECTION_H)
 }
@@ -414,7 +420,7 @@ impl Screen for Settings {
             Align::Left,
         );
         self.draw_sections(gfx);
-        gfx.fill_rect(Rect::new(M + 400.0, TOP, 1.0, 740.0), LINE);
+        gfx.fill_rect(divider(), LINE);
         let focused = (self.focus == Focus::Rows).then_some(self.row);
         if self.rows.is_empty() {
             self.sections[self.section].draw_body(gfx, ctx);
@@ -464,6 +470,14 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    #[test]
+    fn the_divider_ends_30_above_the_hint_bar_however_tall_the_canvas() {
+        assert_eq!(divider(), Rect::new(M + 400.0, TOP, 1.0, 740.0));
+        crate::ui::with_h(1200.0, || {
+            assert_eq!(divider(), Rect::new(M + 400.0, TOP, 1.0, 860.0));
+        });
+    }
 
     /// A section with `n` rows that logs what reaches it.
     struct Fake {

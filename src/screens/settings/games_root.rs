@@ -6,7 +6,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use super::artwork::{CARD_H, CARD_W, CARD_X, CARD_Y};
+use super::artwork::{CARD_H, CARD_W, CARD_X, card_y};
 use crate::config::{self, Config};
 use crate::ctx::{self, Ctx};
 use crate::screens::home::tilde;
@@ -139,13 +139,14 @@ impl Screen for GamesRootEntry {
     fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
         self.kind = ctx.input_kind;
         dim(gfx);
-        let card = Rect::new(CARD_X, CARD_Y, CARD_W, CARD_H);
+        let card_y = card_y();
+        let card = Rect::new(CARD_X, card_y, CARD_W, CARD_H);
         gfx.fill_round_rect(card, 20.0, SURFACE);
         gfx.stroke_round_rect(card, 20.0, 1.0, LINE);
         let x = CARD_X + (CARD_W - KEYBOARD_W) / 2.0;
         let heading = TextStyle::new(28, Weight::ExtraBold, TEXT);
-        gfx.text(x, CARD_Y + 72.0, self.title(), heading, Align::Left);
-        let field = Rect::new(x, CARD_Y + 136.0, KEYBOARD_W, 88.0);
+        gfx.text(x, card_y + 72.0, self.title(), heading, Align::Left);
+        let field = Rect::new(x, card_y + 136.0, KEYBOARD_W, 88.0);
         self.entry.draw_field(gfx, field, "");
         let (line, ink) = match &self.error {
             Some(error) => (error.as_str(), DANGER),
@@ -153,12 +154,12 @@ impl Screen for GamesRootEntry {
         };
         gfx.text(
             x,
-            CARD_Y + 256.0,
+            card_y + 256.0,
             line,
             TextStyle::new(16, Weight::Medium, ink),
             Align::Left,
         );
-        let top = CARD_Y + CARD_H - 48.0 - KEYBOARD_H;
+        let top = card_y + CARD_H - 48.0 - KEYBOARD_H;
         self.entry.draw_keyboard(gfx, x, top);
     }
 
