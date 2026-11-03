@@ -6,14 +6,16 @@ menus to fill the screen and the Games to keep their own aspect ratios.
 
 The logical canvas stays 1920 wide, and its height now follows the window's shape: 1920 × height ÷
 width in pixels, at least 1080 and at most 1440 (4:3), so a 16:10 screen gets 1920×1200. `Gfx::fit`
-sets it at the start of every frame and stores it in a per-thread value that screens read with
-`ui::h()`, in `handle` as well as in `draw`. Whenever a Game is the base screen it is held at 1080, so a
+sets it before the mouse is mapped and before every draw, and stores it in a per-thread value that
+screens read with `ui::h()`, in `handle` as well as in `draw`; input is handled against the height of
+the frame last drawn. Whenever a Game is the base screen it is held at 1080, so a
 Game's picture, the Pause Menu and any message over a Game are drawn exactly as before.
 
 Screens lay out against `ui::h()`: what hangs from the top stays where it is, and what sits at the
 bottom keeps its distance from the bottom (the hint bar, Setup's buttons, the ends of lists and grids,
 fades, full-height panels); dialogs and the Carousel stay centred. At a height of 1080 every screen
-draws exactly as it did, which the 1080 smoke shots check pixel for pixel. Nothing is stretched.
+draws exactly as it did: when this was made, every 1080 smoke shot was compared pixel for pixel with
+the 0.2.0-beta.2 ones, and only the clock and on-screen temp paths differed. Nothing is stretched.
 
 ## Considered
 

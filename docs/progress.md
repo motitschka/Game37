@@ -55,8 +55,9 @@ Start M7 from `main`, on a new branch `m7-…`.
 - `cargo test`: 674 unit and integration tests, no external data or network needed.
 - `cargo test -- --ignored`: 13 tests against real Cores and test ROMs in `.testdata/` (below).
 - `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check`.
-- `scripts/smoke-screens.sh [out-dir]` renders every screen and flow from M1–M6 headless (52 shots,
-  about a minute) into `target/smoke/`. Look at them before every new milestone, and add a shot for
+- `scripts/smoke-screens.sh [out-dir]` renders every screen and flow headless (87 shots, 20 of
+  them at 1920×1200, about two minutes) into `target/smoke/`; it prints FAIL if a shot fails or a tall
+  shot has the wrong size. Look at them before every new milestone, and add a shot for
   every new screen. A worktree has no `.testdata/`: symlink it in (it's gitignored) and remove the
   link afterwards.
 
@@ -64,7 +65,8 @@ Screenshot mode drives the real app headless: `cargo run -- --screenshot out.bmp
 --data-dir <dir> --actions nexttab,right,confirm,wait:120,back --frames 300`. Actions are `up`,
 `down`, `left`, `right`, `confirm`, `back`, `options`, `sort`, `prevtab`, `nexttab`, `start`, `search`,
 `settings`, `paste`, `click:X:Y`, `text:<chars>` (types them; no commas) and `wait:N`. A `text:` or
-`click:` step switches the input kind to the keyboard, any other step to the controller. While a Game runs, `back` is Esc. `--missing-emulators wiiu,ps3` simulates missing
+`click:` step switches the input kind to the keyboard, any other step to the controller. While a Game runs, `back` is Esc. `--size WxH` sets the window (default 1920x1080; the `tall-` shots use 1920x1200, and `click:X:Y` is then in
+logical coordinates up to the canvas height). `--missing-emulators wiiu,ps3` simulates missing
 Standalone Emulators. `--artwork` turns real Artwork on (key from `secrets.toml` next to `--config`,
 cache under `--data-dir`); without it screenshot mode stays offline with placeholders. **Use a fresh
 `--data-dir` per run**: the Carousel remembers its position in the library database, so a reused one

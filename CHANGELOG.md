@@ -2,12 +2,14 @@
 
 ## 0.2.0-beta.3 (2026-11-03)
 
-The menus fill screens taller than 16:9, such as 16:10 laptop screens.
+The menus fill screens taller than 16:9, such as 16:10 and 3:2 laptop screens.
 
 ### Changed
-- **The menus fill 16:10 screens:** on a screen taller than 16:9, such as a 1920×1200 laptop screen, the
-  menus now fill the whole screen instead of showing black bars above and below. The extra height goes
-  to the lists and grids, and nothing is stretched. Games keep their own aspect ratio, as before.
+- **The menus fill 16:10 screens:** on a screen taller than 16:9, up to 4:3, such as a 1920×1200 laptop
+  screen, the menus now fill the whole screen instead of showing black bars above and below. The extra
+  height goes to the lists and grids, and nothing is stretched. A screen taller than 4:3 (such as 5:4)
+  still shows thin bars above and below, and one wider than 16:9 bars at the sides. Games keep their
+  own aspect ratio, as before.
 
 ## 0.2.0-beta.2 (2026-11-03)
 
