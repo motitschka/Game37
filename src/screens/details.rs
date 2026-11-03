@@ -339,9 +339,6 @@ impl DetailsPage {
     }
 }
 
-/// The hero behind the page (FR-DET-2): the Game's hero Artwork `art` filling the screen, or while
-/// there is none a gradient in the System's colour with soft shapes. Either is darkened towards the
-/// text on the left and the bottom.
 /// Where the hero goes: the whole canvas, however tall (`ui::h`).
 fn hero_rect() -> Rect {
     Rect::new(0.0, 0.0, W, ui::h())
@@ -352,6 +349,9 @@ fn bottom_fade() -> Rect {
     Rect::new(0.0, 640.0, W, ui::h() - 640.0)
 }
 
+/// The hero behind the page (FR-DET-2): the Game's hero Artwork `art` filling the screen, or while
+/// there is none a gradient in the System's colour with soft shapes. Either is darkened towards the
+/// text on the left and the bottom.
 fn draw_hero(gfx: &mut Gfx<'_>, colour: Colour, art: &Art) {
     let screen = hero_rect();
     match art {

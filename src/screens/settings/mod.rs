@@ -349,12 +349,12 @@ impl Settings {
     }
 }
 
-/// Where section `i` is drawn.
 /// The rule between the sections and the rows, from their top to 30 above the hint bar.
 fn divider() -> Rect {
     Rect::new(M + 400.0, TOP, 1.0, chrome::hintbar_top() - 30.0 - TOP)
 }
 
+/// Where section `i` is drawn.
 fn section_rect(i: usize) -> Rect {
     Rect::new(M - 24.0, TOP + i as f32 * SECTION_PITCH, SECTION_W, SECTION_H)
 }
