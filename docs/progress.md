@@ -93,7 +93,9 @@ The owner's `~/.config/game37/secrets.toml` holds a real SteamGridDB key (mode 6
   rows, so Playtime survives a re-add. Recently added's See all lists every Game, newest first.
   Wii U also accepts `.wua`/`.wud`/`.wux` files (FR-LIB-4 updated). PSP `EBOOT.PBP` takes its
   folder's name as its Display Title.
-- **UI:** everything is drawn by hand on SDL_Renderer (OpenGL backend) at a logical 1920×1080. The
+- **UI:** everything is drawn by hand on SDL_Renderer (OpenGL backend) at a logical 1920 wide and
+  1080 to 1440 tall: the menus follow the window's shape (`ui::h()`, set each frame by `Gfx::fit`;
+  FR-UI-6, ADR 0018), a running Game stays at 1920×1080. The
   font is Adwaita Sans, found via `fc-match`. Keyboard: arrows, Enter/Space confirm, Esc/Backspace
   back, Q/E/Tab switch tabs, F options, S sort, F11 fullscreen. The controller's Start is
   `Action::Start` (saves a text field).

@@ -5,6 +5,7 @@ use super::TOP;
 use crate::ctx::Ctx;
 use crate::library::db::GameRow;
 use crate::systems;
+use crate::ui::chrome;
 use crate::ui::cover::{self, ellipsize};
 use crate::ui::gfx::{Align, Gfx, TextStyle};
 use crate::ui::input::{Action, Input, Pointer};
@@ -16,10 +17,13 @@ use crate::ui::{M, Rect, W, hit};
 
 const ROW_H: f32 = 112.0;
 const ROW_PITCH: f32 = 124.0;
-/// The list's bottom edge, above the hint bar.
-const BOTTOM: f32 = 990.0;
 const THUMB_W: f32 = 64.0;
 const THUMB_H: f32 = 96.0;
+
+/// The list's bottom edge, 20 above the hint bar however tall the canvas is: 990 on 1080.
+fn bottom() -> f32 {
+    chrome::hintbar_top() - 20.0
+}
 
 pub struct HiddenGames {
     games: Vec<GameRow>,
@@ -72,8 +76,22 @@ impl HiddenGames {
     fn row_hits(&self) -> Vec<(Rect, usize)> {
         (0..self.games.len())
             .map(|i| (self.row_rect(i), i))
-            .filter(|(r, _)| r.y + r.h > TOP && r.y < BOTTOM)
+            .filter(|(r, _)| r.y + r.h > TOP && r.y < bottom())
             .collect()
+    }
+
+    /// Scrolls so the focused row shows, within the list as tall as this frame's canvas leaves it;
+    /// run every frame, so a change of height (F11, a resize) re-clamps it. Returns the view's height.
+    fn fit_scroll(&mut self) -> f32 {
+        let content = self.games.len() as f32 * ROW_PITCH - (ROW_PITCH - ROW_H);
+        let view = bottom() - TOP;
+        let start = self.focus as f32 * ROW_PITCH;
+        self.scroll = scroll::clamp(
+            scroll::keep_visible(self.scroll, start, ROW_H, view),
+            content,
+            view,
+        );
+        view
     }
 }
 
@@ -108,14 +126,7 @@ impl Screen for HiddenGames {
             gfx.text(M, TOP + 40.0, text, style, Align::Left);
             return;
         }
-        let content = self.games.len() as f32 * ROW_PITCH - (ROW_PITCH - ROW_H);
-        let view = BOTTOM - TOP;
-        let start = self.focus as f32 * ROW_PITCH;
-        self.scroll = scroll::clamp(
-            scroll::keep_visible(self.scroll, start, ROW_H, view),
-            content,
-            view,
-        );
+        let view = self.fit_scroll();
         gfx.clip(Some(Rect::new(0.0, TOP - 16.0, W, view + 16.0)));
         for (r, i) in self.row_hits() {
             let game = &self.games[i];
@@ -148,5 +159,61 @@ impl Screen for HiddenGames {
         } else {
             vec![Hint::new(&[Action::Confirm], "Unhide"), back]
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui;
+
+    fn screen(n: i64, focus: usize) -> HiddenGames {
+        let games = (0..n)
+            .map(|id| GameRow {
+                id,
+                system: "snes".into(),
+                rel_path: format!("snes/{id}.sfc"),
+                title: format!("Game {id}"),
+                date_added: 0,
+                last_played: None,
+                playtime_secs: 0,
+                favorite: false,
+            })
+            .collect();
+        HiddenGames {
+            games,
+            focus,
+            scroll: 0.0,
+        }
+    }
+
+    #[test]
+    fn a_taller_canvas_shows_and_clicks_more_rows() {
+        let mut ctx = Ctx::empty();
+        let mut hidden = screen(20, 0);
+        assert_eq!(hidden.row_hits().len(), 7);
+        ui::with_h(1200.0, || {
+            assert_eq!(hidden.row_hits().len(), 8);
+            let eighth = hidden.row_rect(7);
+            let click = Pointer::Click {
+                x: eighth.x + 10.0,
+                y: eighth.y + 10.0,
+            };
+            hidden.handle(Input::Pointer(click), &mut ctx);
+        });
+        assert_eq!(hidden.focus, 7);
+    }
+
+    #[test]
+    fn the_scroll_is_re_clamped_when_the_canvas_grows() {
+        let mut hidden = screen(20, 19);
+        // The last row's bottom at the bottom of the 750-tall list.
+        assert_eq!(hidden.fit_scroll(), 750.0);
+        assert_eq!(hidden.scroll, 19.0 * ROW_PITCH + ROW_H - 750.0);
+        ui::with_h(1200.0, || {
+            assert_eq!(hidden.fit_scroll(), 870.0);
+            // No empty space left below the last row.
+            assert_eq!(hidden.scroll, 20.0 * ROW_PITCH - (ROW_PITCH - ROW_H) - 870.0);
+        });
     }
 }

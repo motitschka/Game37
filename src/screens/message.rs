@@ -7,7 +7,7 @@ use crate::ui::input::{Action, Input, Pointer};
 use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
 use crate::ui::theme::{Colour, LINE, MUTED, SURFACE, SURFACE2, TEXT};
-use crate::ui::{H, Rect, W};
+use crate::ui::{self, Rect, W};
 
 pub const PANEL_W: f32 = 960.0;
 const PAD: f32 = 56.0;
@@ -17,12 +17,17 @@ const BUTTON_H: f32 = 64.0;
 
 /// Dims everything drawn so far, top bar included, as `dim` does in `design/generate_mockups.py`.
 pub fn dim(gfx: &mut Gfx<'_>) {
-    gfx.fill_rect(Rect::new(0.0, 0.0, W, H), Colour::hex(0x000000).alpha(0.62));
+    gfx.fill_rect(Rect::new(0.0, 0.0, W, ui::h()), Colour::hex(0x000000).alpha(0.62));
+}
+
+/// Where a panel `h` tall goes: centred on the canvas, however tall (`ui::h`).
+fn panel_rect(h: f32) -> Rect {
+    Rect::new((W - PANEL_W) / 2.0, (ui::h() - h) / 2.0, PANEL_W, h)
 }
 
 /// A centred panel `h` tall; returns its rect.
 pub fn panel(gfx: &mut Gfx<'_>, h: f32) -> Rect {
-    let r = Rect::new((W - PANEL_W) / 2.0, (H - h) / 2.0, PANEL_W, h);
+    let r = panel_rect(h);
     gfx.fill_round_rect(r, 20.0, SURFACE);
     gfx.stroke_round_rect(r, 20.0, 1.0, LINE);
     r
@@ -110,6 +115,14 @@ impl Screen for Message {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_panel_is_centred_on_the_canvas_however_tall() {
+        assert_eq!(panel_rect(400.0), Rect::new(480.0, 340.0, PANEL_W, 400.0));
+        ui::with_h(1200.0, || {
+            assert_eq!(panel_rect(400.0), Rect::new(480.0, 400.0, PANEL_W, 400.0));
+        });
+    }
 
     #[test]
     fn confirm_back_or_a_click_on_ok_closes_it_and_nothing_else_does() {

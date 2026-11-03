@@ -1,5 +1,6 @@
 //! All drawing goes through [`Gfx`], so the SDL_Renderer backend can be swapped without touching
-//! screens. Coordinates are logical 1920×1080 pixels, letterboxed into the window.
+//! screens. Coordinates are logical pixels, 1920 wide and [`Gfx::h`] tall, letterboxed into the
+//! window: see [`Gfx::fit`].
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -7,6 +8,7 @@ use std::path::Path;
 
 use sdl3::pixels::FColor;
 use sdl3::render::{BlendMode, FPoint, FRect, Texture, TextureCreator, Vertex, VertexIndices, WindowCanvas};
+use sdl3::sys::render::SDL_RendererLogicalPresentation;
 use sdl3::video::{WindowContext, WindowFlags};
 
 use super::Rect;
@@ -252,6 +254,18 @@ pub struct Gfx<'tc> {
     images: HashMap<&'static str, Texture<'tc>>,
     /// Artwork textures, or `None` where making one failed, so it isn't retried every frame.
     pictures: PictureCache<Option<Texture<'tc>>>,
+    /// The renderer's logical height, as last set: `app::canvas` starts it at 1080.
+    logical_h: u32,
+}
+
+/// The logical height to draw at in a window `pixel_w`×`pixel_h` pixels: a running Game (and what
+/// is drawn over it) keeps the mockups' 1080, the menus fill the window's shape.
+fn fit_height(game: bool, pixel_w: u32, pixel_h: u32) -> u32 {
+    if game {
+        super::H as u32
+    } else {
+        super::logical_height(pixel_w, pixel_h)
+    }
 }
 
 struct GameTexture<'tc> {
@@ -390,7 +404,34 @@ impl<'tc> Gfx<'tc> {
             game: None,
             images: HashMap::new(),
             pictures: PictureCache::new(),
+            logical_h: super::H as u32,
         }
+    }
+
+    /// Sets the logical size for this frame from the window's size in pixels: 1920×1080 for a
+    /// running Game (`game`), so it and the Pause Menu look as on a 16:9 screen; for the menus 1920
+    /// wide and as tall as the window's shape asks, so they fill a 16:10 screen. Sets `ui::h` to
+    /// match. Call it before drawing a frame and before converting the mouse.
+    pub fn fit(&mut self, game: bool) {
+        let (mut w, mut h) = (0, 0);
+        // SAFETY: the renderer is alive for as long as `self.canvas`. Not the "Current" variant,
+        // which follows a render target: the window's own size is wanted.
+        unsafe { sdl3::sys::render::SDL_GetRenderOutputSize(self.canvas.raw(), &mut w, &mut h) };
+        let logical_h = fit_height(game, w.max(0) as u32, h.max(0) as u32);
+        if logical_h != self.logical_h
+            && self
+                .canvas
+                .set_logical_size(1920, logical_h, SDL_RendererLogicalPresentation::LETTERBOX)
+                .is_ok()
+        {
+            self.logical_h = logical_h;
+        }
+        super::set_h(self.logical_h as f32);
+    }
+
+    /// The logical height this frame is drawn at (`ui::h`).
+    pub fn h(&self) -> f32 {
+        self.logical_h as f32
     }
 
     /// Copies a Core's video frame into the game texture, remaking it when the frame's size or
@@ -930,6 +971,14 @@ impl<'tc> Gfx<'tc> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_running_game_keeps_1080_and_the_menus_fill_the_window() {
+        assert_eq!(fit_height(true, 1920, 1200), 1080);
+        assert_eq!(fit_height(true, 1024, 768), 1080);
+        assert_eq!(fit_height(false, 1920, 1200), 1200);
+        assert_eq!(fit_height(false, 1920, 1080), 1080);
+    }
 
     #[test]
     fn window_modes_cycle_both_ways_and_wrap() {

@@ -28,7 +28,7 @@ use crate::ui::input::{Action, Input, Pointer, glyph_label};
 use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
 use crate::ui::theme::{BG, Colour, DIM, LINE, MUTED, STAR, SURFACE, SURFACE2, TEXT, WARN};
-use crate::ui::{H, M, Rect, W, chrome, hit};
+use crate::ui::{self, M, Rect, W, chrome, hit};
 
 /// Left edge of everything beside the cover.
 const X: f32 = 560.0;
@@ -339,11 +339,21 @@ impl DetailsPage {
     }
 }
 
+/// Where the hero goes: the whole canvas, however tall (`ui::h`).
+fn hero_rect() -> Rect {
+    Rect::new(0.0, 0.0, W, ui::h())
+}
+
+/// The darkening towards the bottom, from under the content to the bottom of the canvas.
+fn bottom_fade() -> Rect {
+    Rect::new(0.0, 640.0, W, ui::h() - 640.0)
+}
+
 /// The hero behind the page (FR-DET-2): the Game's hero Artwork `art` filling the screen, or while
 /// there is none a gradient in the System's colour with soft shapes. Either is darkened towards the
 /// text on the left and the bottom.
 fn draw_hero(gfx: &mut Gfx<'_>, colour: Colour, art: &Art) {
-    let screen = Rect::new(0.0, 0.0, W, H);
+    let screen = hero_rect();
     match art {
         Art::Ready(picture) => gfx.draw_picture(picture, screen, 0.0),
         Art::Loading | Art::Placeholder => {
@@ -355,20 +365,20 @@ fn draw_hero(gfx: &mut Gfx<'_>, colour: Colour, art: &Art) {
     }
     let mid = 0.55 * W;
     gfx.fill_round_rect_gradient(
-        Rect::new(0.0, 0.0, mid, H),
+        Rect::new(0.0, 0.0, mid, screen.h),
         0.0,
         BG.alpha(0.97),
         BG.alpha(0.82),
         (1.0, 0.0),
     );
     gfx.fill_round_rect_gradient(
-        Rect::new(mid, 0.0, W - mid, H),
+        Rect::new(mid, 0.0, W - mid, screen.h),
         0.0,
         BG.alpha(0.82),
         BG.alpha(0.35),
         (1.0, 0.0),
     );
-    gfx.fill_round_rect_vgradient(Rect::new(0.0, 640.0, W, H - 640.0), 0.0, BG.alpha(0.0), BG);
+    gfx.fill_round_rect_vgradient(bottom_fade(), 0.0, BG.alpha(0.0), BG);
 }
 
 /// The Confirm glyph inside the Play button: dark on white, or an outline when Play is off.
@@ -882,5 +892,17 @@ mod tests {
         for id in ["switch2", "ps5"] {
             assert_eq!(opens_in(by_id(id)).as_deref(), Some("Not playable yet"), "{id}");
         }
+    }
+
+    #[test]
+    fn the_hero_and_its_darkening_fill_a_taller_canvas() {
+        assert_eq!(
+            (hero_rect(), bottom_fade()),
+            (Rect::new(0.0, 0.0, W, 1080.0), Rect::new(0.0, 640.0, W, 440.0))
+        );
+        ui::with_h(1200.0, || {
+            assert_eq!(hero_rect(), Rect::new(0.0, 0.0, W, 1200.0));
+            assert_eq!(bottom_fade(), Rect::new(0.0, 640.0, W, 560.0));
+        });
     }
 }

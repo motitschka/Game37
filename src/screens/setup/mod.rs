@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use crate::config::{self, Config, ConfigError};
 use crate::ctx::Ctx;
 use crate::systems::{SYSTEMS, System};
+use crate::ui::chrome;
 use crate::ui::cover::ellipsize;
 use crate::ui::gfx::{Align, Gfx, TextStyle};
 use crate::ui::input::{Action, Input, InputKind, Pointer};
@@ -33,9 +34,12 @@ const STEPS: usize = 5;
 const CONTENT_Y: f32 = 296.0;
 /// Width of the lists and boxes below the title, left-aligned at `M`.
 const SETUP_W: f32 = 1200.0;
-/// Top of the pill buttons above the hint bar.
-const BUTTONS_Y: f32 = 906.0;
 const PILL_H: f32 = 64.0;
+
+/// Top of the pill buttons, 104 above the hint bar however tall the canvas is: 906 on 1080.
+fn buttons_y() -> f32 {
+    chrome::hintbar_top() - 104.0
+}
 
 /// What the player has chosen so far.
 pub struct Model {
@@ -316,9 +320,9 @@ impl Screen for Setup {
         };
         let continue_label = self.continue_label();
         let continue_w = pill_width(gfx, continue_label);
-        let continue_r = Rect::new(W - M - continue_w, BUTTONS_Y, continue_w, PILL_H);
+        let continue_r = Rect::new(W - M - continue_w, buttons_y(), continue_w, PILL_H);
         let back_w = pill_width(gfx, back_label);
-        let back_r = Rect::new(continue_r.x - 16.0 - back_w, BUTTONS_Y, back_w, PILL_H);
+        let back_r = Rect::new(continue_r.x - 16.0 - back_w, buttons_y(), back_w, PILL_H);
         let back_kind = Pill::Normal {
             focused: focused == Some(Button::Back),
         };
@@ -327,7 +331,7 @@ impl Screen for Setup {
         if let Some(error) = &self.error {
             let style = TextStyle::new(20, Weight::Medium, DANGER);
             let error = ellipsize(error, back_r.x - 32.0 - M, |s| gfx.measure(s, style));
-            gfx.text(M, BUTTONS_Y + PILL_H / 2.0 + 7.0, &error, style, Align::Left);
+            gfx.text(M, buttons_y() + PILL_H / 2.0 + 7.0, &error, style, Align::Left);
         }
         self.buttons = vec![(back_r, Button::Back), (continue_r, Button::Continue)];
     }
@@ -452,6 +456,12 @@ fn checkbox(gfx: &mut Gfx<'_>, x: f32, y: f32, on: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_buttons_sit_104_above_the_hint_bar_however_tall_the_canvas() {
+        assert_eq!(buttons_y(), 906.0);
+        crate::ui::with_h(1200.0, || assert_eq!(buttons_y(), 1026.0));
+    }
 
     pub(super) fn act(setup: &mut Setup, ctx: &mut Ctx, action: Action) -> Transition {
         setup.handle(Input::Action(action), ctx)

@@ -13,7 +13,7 @@ use crate::ui::input::{Action, ButtonStyle, Input, InputKind, button_action, gly
 use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
 use crate::ui::theme::{ACCENT, BG, Colour, LINE, MUTED, SURFACE, SURFACE2, TEXT};
-use crate::ui::{M, Rect, W};
+use crate::ui::{self, M, Rect, W};
 
 /// How long Back must be held on a controller to leave.
 const HOLD_TO_EXIT_MS: u64 = 1500;
@@ -25,6 +25,12 @@ const RX: f32 = M + 448.0;
 const CX: f32 = (RX + W - M) / 2.0;
 const CARD_W: f32 = 400.0;
 const CARD_PITCH: f32 = 76.0;
+
+/// The line between the controller list and the pad, down to 100 above the bottom of the canvas,
+/// however tall (`ui::h`).
+fn divider() -> Rect {
+    Rect::new(M + CARD_W, TOP, 1.0, ui::h() - 100.0 - TOP)
+}
 /// How far a stick's cap moves at full deflection.
 const STICK_TRAVEL: f32 = 26.0;
 
@@ -250,11 +256,11 @@ impl Screen for ControllerTest {
             let name = ellipsize(&controller.name, CARD_W - 48.0, |s| gfx.measure(s, style));
             gfx.text(M, y + 40.0, &name, style, Align::Left);
         }
-        gfx.fill_rect(Rect::new(M + CARD_W, TOP, 1.0, 740.0), LINE);
+        gfx.fill_rect(divider(), LINE);
         let Some(shown) = shown else {
             gfx.text(
                 CX,
-                540.0,
+                ui::h() / 2.0,
                 "Connect a controller to test it.",
                 TextStyle::new(28, Weight::Medium, MUTED),
                 Align::Centre,
@@ -638,5 +644,13 @@ mod tests {
         ctx.input_kind = InputKind::Keyboard;
         tick_at(&mut nav, ctx, 0);
         assert_eq!(nav.top().hints(), vec![Hint::new(&[Action::Back], "Back")]);
+    }
+
+    #[test]
+    fn the_divider_runs_down_to_near_the_bottom_of_a_taller_canvas() {
+        assert_eq!(divider(), Rect::new(M + CARD_W, TOP, 1.0, 740.0));
+        ui::with_h(1200.0, || {
+            assert_eq!(divider(), Rect::new(M + CARD_W, TOP, 1.0, 860.0))
+        });
     }
 }

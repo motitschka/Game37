@@ -6,7 +6,7 @@ use super::input::{Action, ButtonStyle, InputKind, glyph_label};
 use super::nav::Hint;
 use super::text::Weight;
 use super::theme::{ACCENT, BG, Colour, LINE, MUTED, SURFACE, SURFACE2, TEXT};
-use super::{H, M, Rect, W};
+use super::{M, Rect, W};
 
 pub fn background(gfx: &mut Gfx<'_>) {
     background_tinted(gfx, ACCENT, 0.18);
@@ -14,6 +14,7 @@ pub fn background(gfx: &mut Gfx<'_>) {
 
 /// The background glow in a chosen colour and opacity, e.g. a System's colour on its Console
 /// Page (FR-CAR-3), subtler than the Carousel's tint.
+/// The glow is anchored at the top; the clear fills the whole canvas, however tall.
 pub fn background_tinted(gfx: &mut Gfx<'_>, colour: Colour, opacity: f32) {
     gfx.clear(BG);
     gfx.radial_glow(W / 2.0, 0.0, 0.9 * W, 0.9 * 520.0, colour, opacity);
@@ -98,6 +99,21 @@ pub fn glyph(gfx: &mut Gfx<'_>, x: f32, cy: f32, label: &str) -> f32 {
     w
 }
 
+/// The hint bar's height, along the bottom of the canvas.
+pub const HINTBAR_H: f32 = 70.0;
+
+/// Where the hint bar starts: [`HINTBAR_H`] above the bottom of the canvas (`ui::h`), 1010 on a
+/// 1080 canvas. Screens anchor what sits above it here.
+pub fn hintbar_top() -> f32 {
+    super::h() - HINTBAR_H
+}
+
+/// Where each hint can be clicked: the hint bar below its top rule, `x` to `right`.
+fn hint_area(x: f32, right: f32) -> Rect {
+    let top = hintbar_top() + 1.0;
+    Rect::new(x - 6.0, top, right - x + 18.0, super::h() - top)
+}
+
 /// Draws the hint bar, right-aligned; returns each hint's clickable area and the action it
 /// performs.
 pub fn hintbar(
@@ -107,8 +123,9 @@ pub fn hintbar(
     style: ButtonStyle,
     pointer: Option<(f32, f32)>,
 ) -> Vec<(Rect, Action)> {
-    gfx.fill_rect(Rect::new(0.0, 1010.0, W, 70.0), BG.alpha(0.92));
-    gfx.fill_rect(Rect::new(0.0, 1010.0, W, 1.0), LINE);
+    let top = hintbar_top();
+    gfx.fill_rect(Rect::new(0.0, top, W, HINTBAR_H), BG.alpha(0.92));
+    gfx.fill_rect(Rect::new(0.0, top, W, 1.0), LINE);
     let mut hits = Vec::new();
     let mut x = W - M;
     for hint in hints.iter().rev() {
@@ -120,17 +137,17 @@ pub fn hintbar(
         for &action in hint.actions.iter().rev() {
             let label = glyph_label(action, kind, style);
             x -= glyph_width(gfx, label);
-            glyph(gfx, x, 1046.0, label);
+            glyph(gfx, x, top + 36.0, label);
             x -= 6.0;
         }
-        let area = Rect::new(x - 6.0, 1011.0, right - x + 18.0, H - 1011.0);
+        let area = hint_area(x, right);
         let hover = pointer.is_some_and(|(px, py)| area.contains(px, py));
         let desc = if hover {
             TextStyle { colour: TEXT, ..desc }
         } else {
             desc
         };
-        gfx.text(desc_x, 1052.0, hint.text, desc, Align::Left);
+        gfx.text(desc_x, top + 42.0, hint.text, desc, Align::Left);
         if let Some(&first) = hint.actions.first() {
             hits.push((area, first));
         }
@@ -305,4 +322,19 @@ fn gear(gfx: &mut Gfx<'_>, cx: f32, cy: f32, r: f32, fill: Colour, hole: Colour)
     points.push(points[1]);
     gfx.fill_polygon(&points, fill);
     gfx.fill_circle(cx, cy, r * 0.36, hole);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_hint_bar_sits_along_the_bottom_of_the_canvas_however_tall() {
+        assert_eq!(hintbar_top(), 1010.0);
+        assert_eq!(hint_area(100.0, 200.0), Rect::new(94.0, 1011.0, 118.0, 69.0));
+        super::super::with_h(1200.0, || {
+            assert_eq!(hintbar_top(), 1130.0);
+            assert_eq!(hint_area(100.0, 200.0), Rect::new(94.0, 1131.0, 118.0, 69.0));
+        });
+    }
 }

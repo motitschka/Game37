@@ -190,7 +190,8 @@ fn starts_fullscreen(mode: WindowMode, last_fullscreen: bool) -> bool {
     }
 }
 
-/// A window with an SDL_Renderer on the named backend, presenting logical 1920×1080 letterboxed.
+/// A window with an SDL_Renderer on the named backend, presenting logical 1920×1080 letterboxed
+/// until the first `Gfx::fit`, which makes the menus as tall as the window's shape asks.
 fn canvas(video: &VideoSubsystem, w: u32, h: u32, driver: &CStr) -> Result<WindowCanvas, String> {
     let window = video
         .window("Game37", w, h)
@@ -365,6 +366,8 @@ fn interactive(
         }
         let keys = events.keyboard_state();
         let pads = input.pad_states();
+        // A Game's first frame maps its touch screen with the Game's own presentation.
+        gfx.fit(!nav.base().chrome());
         let state = events.mouse_state();
         let mouse = Mouse {
             at: Some(gfx.to_logical(state.x(), state.y())),
@@ -406,9 +409,10 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
     let video = sdl.video().map_err(|e| e.to_string())?;
     let audio = sdl.audio().map_err(|e| eprintln!("game37: no sound: {e}")).ok();
     let fonts = Fonts::new()?;
-    let canvas = canvas(&video, 1920, 1080, c"opengl").or_else(|e| {
+    let (w, h) = shot.size;
+    let canvas = canvas(&video, w, h, c"opengl").or_else(|e| {
         eprintln!("game37: {e}; using the software renderer for the screenshot");
-        canvas(&video, 1920, 1080, c"software")
+        canvas(&video, w, h, c"software")
     })?;
     let creator = canvas.texture_creator();
     let mut gfx = Gfx::new(canvas, &creator, fonts);
@@ -554,6 +558,8 @@ struct View {
 
 /// Draws a frame (without presenting it) and returns where its clickable chrome went.
 fn draw(gfx: &mut Gfx<'_>, nav: &mut Nav, ctx: &Ctx, view: &View, clock: &str) -> Hits {
+    // A running Game (no chrome) stays at 1080; the menus fill the window.
+    gfx.fit(!nav.base().chrome());
     if !nav.base().chrome() {
         gfx.clear(BLACK);
         nav.base().draw(gfx, ctx);

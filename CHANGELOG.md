@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **The menus fill 16:10 screens:** on a screen taller than 16:9, such as a 1920×1200 laptop screen, the
+  menus now fill the whole screen instead of showing black bars above and below. The extra height goes
+  to the lists and grids, and nothing is stretched. Games keep their own aspect ratio, as before.
+
 ## 0.2.0-beta.2 (2026-11-03)
 
 Switch 2 and PS5 join the library ahead of an emulator that can play them, Wii Games can use a
