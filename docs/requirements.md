@@ -38,7 +38,7 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 - **FR-LIB-4** In `ps3`, `ps4`, `ps5` and `wiiu`, each subfolder that contains the System's expected game structure counts as one Game. In `wiiu`, a single `.wua`, `.wud` or `.wux` file is also one Game. Elsewhere, each file with a recognised extension is one Game.
 - **FR-LIB-5** Games installed inside a Standalone Emulator's own storage (e.g. RPCS3 `.pkg` installs, Azahar `.cia` installs) are not listed.
 - **FR-LIB-6** The Display Title is derived from the file or folder name with region, revision and dump tags removed. For example, `Super Mario World (USA) [!].sfc` becomes "Super Mario World".
-- **FR-LIB-7** Game37 records, per Game: date added, last played, Playtime, Favorite flag, Hidden flag, renamed title, and chosen Artwork.
+- **FR-LIB-7** Game37 records, per Game: date added, last played, Playtime, Favorite flag, Hidden flag, renamed title, chosen Artwork, and for a Wii Game its controller.
 - **FR-LIB-8** Playtime for External Systems is measured as the Standalone Emulator process's running time.
 - **FR-LIB-9** BIOS files live in `<Games Root>/bios/`, In-game Saves in `<Games Root>/saves/<system>/`, and Save States and Resume States in `<Games Root>/states/<system>/`.
 

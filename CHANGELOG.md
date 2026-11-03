@@ -7,9 +7,11 @@ Classic Controller, and Switch controllers press the right buttons in PlayStatio
 
 ### New
 - **Switch 2 and PS5 are listed as Upcoming Systems.** No emulator can play them yet, but Game37
-  already makes their `switch2/` and `ps5/` folders, finds their Games (`.nsp` and `.xci` for Switch 2,
-  game folders with `eboot.bin` and `sce_sys/` for PS5) and shows them on the Carousel and their
-  Console Pages. Play on one of their Games says it isn't playable yet.
+  already finds their Games in `switch2/` and `ps5/` (`.nsp` and `.xci` for Switch 2, game folders with
+  `eboot.bin` and `sce_sys/` for PS5) and shows them on the Carousel and their Console Pages. Setup
+  offers both, makes their folders when you tick them, and lays its Systems out in 7 columns. Setup,
+  Settings → BIOS and the Details Page mark them "Not playable yet", and Play on one of their Games
+  says so and starts nothing.
 - **Classic Controller on Wii:** a Wii Game's Options Menu has a Controller row, Wii Remote and Nunchuk
   (the default, as before) or Classic Controller, kept per Game from its next start. With the Classic
   Controller the pad maps to it button for button (L2 and R2 are ZL and ZR, R3 is HOME), so Mario
@@ -18,6 +20,8 @@ Classic Controller, and Switch controllers press the right buttons in PlayStatio
   keeps the controller it was made with, so after changing it, start the Game with Start from power-on.
 
 ### Upgrading
+- Setup only runs on a new install, so an existing Games Root gets no `switch2/` or `ps5/` folder. To
+  add Switch 2 or PS5 Games, make the folder yourself, e.g. `mkdir -p ~/Games/switch2 ~/Games/ps5`.
 - This version adds a column to the library database (`library.db`); 0.2.0-beta.1 can't open the
   library any more once this version has.
 

@@ -363,7 +363,7 @@ new player needs:
 1. **Pick your Systems:** tick every System you want to play.
 2. **Install the emulators:** for each ticked External System, its Standalone Emulator and whether it's
    already installed, and one `flatpak install flathub …` command for the ones that aren't, with a Copy
-   button. Passed over if you ticked only Embedded Systems.
+   button. Passed over if you ticked no External System.
 3. **Make your folders:** the Games Root, defaulting to `~/Games` (Change lets you pick another), and
    one folder per ticked System plus `bios/`, which this step creates.
 4. **Download the Cores** for the Embedded Systems you ticked, from the libretro buildbot.
@@ -406,7 +406,7 @@ Then make the System folders in the Games Root yourself, the same ones Setup's "
 would:
 
 ```bash
-mkdir -p ~/Games/{nes,gb,snes,n64,gbc,gba,gc,nds,wii,3ds,wiiu,switch,ps1,ps2,psp,ps3,ps4,bios}
+mkdir -p ~/Games/{nes,gb,snes,n64,gbc,gba,gc,nds,wii,3ds,wiiu,switch,switch2,ps1,ps2,psp,ps3,ps4,ps5,bios}
 ```
 
 To add a SteamGridDB API key without using Settings → Artwork, save it where only you can read it:
@@ -557,7 +557,7 @@ GameCube and Wii need a controller for those.
 | `~/Games/states/<system>/` | Save States and Resume States |
 | `~/.local/share/game37/cores/` | Downloaded Cores |
 | `~/.local/share/game37/system/` | Files some Cores download with them, such as Dolphin's system files |
-| `~/.local/share/game37/library.db` | The library: Playtime, last played, date added, Favorites, renames, hidden Games, chosen Artwork, sort order |
+| `~/.local/share/game37/library.db` | The library: Playtime, last played, date added, Favorites, renames, hidden Games, chosen Artwork, each Wii Game's controller, sort order |
 | `~/.local/share/game37/artwork/` | Cached covers and hero images |
 
 `secrets.toml` only exists once you've added a SteamGridDB API key, from Setup, Settings → Artwork, or

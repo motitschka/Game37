@@ -64,6 +64,18 @@ The story in brackets stays open on GitHub until its checks pass.
       Side by side, One screen), chosen in Settings → Display.
 - [ ] Wii: a real Wii Game plays with the Wii Remote and Nunchuk, buttons mapped as in the README's
       Playing section.
+- [ ] PS2: loading a Save State in a real Game brings back the saved moment (on a still screen, a
+      button press brings the picture back: a known LRPS2 bug).
+- [ ] PS2: Delete save data on a Game deletes its memory card in `~/Games/saves/ps2/`, and the
+      next start makes a new formatted one.
+
+## 8. Switch 2, PS5 and the Wii Classic Controller (0.2.0-beta.2)
+
+The Switch controller in PlayStation Games is checked in section 5.
+
+- [ ] An existing install (Setup already done) shows Switch 2 and PS5 on the Carousel; after making
+      `~/Games/switch2/` and `~/Games/ps5/` by hand, a Switch 2 `.xci` and a PS5 game folder show up
+      on their Console Pages, and Play on either says "Not playable yet" and starts nothing.
 - [ ] Wii: Mario Kart Wii with its Controller set to Classic Controller in its Options Menu: the Game
       shows the Classic Controller's controls; A accelerates, B brakes, R drifts, L uses an item, X
       looks behind, the left stick steers, and + pauses. Set back to Wii Remote and Nunchuk, the next
@@ -71,15 +83,3 @@ The story in brackets stays open on GitHub until its checks pass.
 - [ ] Wii: on a Game with a Resume State made with the Wii Remote and Nunchuk, switch its Controller to
       Classic Controller and press Play: note what the Game does (it resumes with the Nunchuk state);
       then Start from power-on: the Classic Controller works from the title screen.
-- [ ] PS2: loading a Save State in a real Game brings back the saved moment (on a still screen, a
-      button press brings the picture back: a known LRPS2 bug).
-- [ ] PS2: Delete save data on a Game deletes its memory card in `~/Games/saves/ps2/`, and the
-      next start makes a new formatted one.
-
-## 8. Switch 2, PS5 and PlayStation buttons by letter (0.2.0-beta.2)
-
-- [ ] An existing install (Setup already done) shows Switch 2 and PS5 on the Carousel; after making
-      `~/Games/switch2/` and `~/Games/ps5/` by hand, a Switch 2 `.xci` and a PS5 game folder show up
-      on their Console Pages, and Play on either says "Not playable yet" and starts nothing.
-- [ ] A Switch Pro Controller (or Joy-Con pair) in a PS1, PS2 and PSP Game: A is ✕ and B is ○ (A
-      confirms, B goes back); in a Nintendo Game the same controller still maps by position.

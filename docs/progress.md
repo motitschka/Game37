@@ -25,7 +25,7 @@ Each milestone branch builds on the previous one. `main` has everything through 
 in [manual-checks.md](manual-checks.md#7-ps2-3ds-gamecube-and-wii-inside-game37-m8-020-beta1).
 0.2.0-beta.2 (2026-11-03) adds Switch 2 and PS5 as Upcoming Systems (ADR 0017), the Classic
 Controller on Wii and PlayStation buttons by letter for Nintendo-lettered pads; its manual checks are
-in [manual-checks.md](manual-checks.md#8-switch-2-ps5-and-playstation-buttons-by-letter-020-beta2).
+in [manual-checks.md](manual-checks.md#8-switch-2-ps5-and-the-wii-classic-controller-020-beta2).
 Start M7 from `main`, on a new branch `m7-…`.
 
 ## Code map

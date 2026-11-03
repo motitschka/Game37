@@ -5,7 +5,7 @@ An all-in-one game library for Nintendo and Sony consoles that plays older syste
 ## Systems and emulation
 
 **System**:
-One console Game37 knows about (e.g. SNES, PS2). Each System has exactly one folder under the Games Root and exactly one way of being played.
+One console Game37 knows about (e.g. SNES, PS2). Each System has exactly one folder under the Games Root and at most one way of being played (none yet for an Upcoming System).
 _Avoid_: Platform, console (in code and docs)
 
 **Embedded System**:
@@ -43,7 +43,7 @@ The single folder (default `~/Games/`) that holds one folder per System plus BIO
 _Avoid_: ROM folder, library path
 
 **Game**:
-One playable title found in a System folder: a single file, or a folder for PS3, PS4, PS5 and Wii U.
+One title found in a System folder: a single file, or a folder for PS3, PS4, PS5 and Wii U.
 _Avoid_: ROM, title, entry
 
 **Display Title**:
