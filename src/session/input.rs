@@ -164,7 +164,7 @@ const NINTENDO_BY_LETTER: [(Pad, Button); 4] = [
 /// ([`NINTENDO_BY_LETTER`]) rather than by position: the PlayStation Systems. Every other pad, and
 /// every pad on the other Systems, maps by position.
 ///
-/// This also covers PS3 and PS4 by `maker`, though neither has a Core in `cores::for_system` and
+/// This also covers PS3, PS4 and PS5 by `maker`, though none has a Core in `cores::for_system` and
 /// so never reaches this function in Game37; that is fine, not a gap to close.
 pub fn faces_by_letter(system: &System) -> bool {
     system.maker == Maker::Sony
@@ -708,7 +708,7 @@ mod tests {
             .filter(|s| faces_by_letter(s))
             .map(|s| s.id)
             .collect();
-        assert_eq!(by_letter, ["ps1", "ps2", "psp", "ps3", "ps4"]);
+        assert_eq!(by_letter, ["ps1", "ps2", "psp", "ps3", "ps4", "ps5"]);
     }
 
     #[test]
