@@ -35,7 +35,7 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 - **FR-LIB-1** Game37 scans the Games Root at startup. Each System folder is scanned only for that System.
 - **FR-LIB-2** Game37 watches the Games Root while running. Added, removed and renamed Games appear without a restart.
 - **FR-LIB-3** Settings offers a manual "Rescan library" action.
-- **FR-LIB-4** In `ps3`, `ps4` and `wiiu`, each subfolder that contains the System's expected game structure counts as one Game. In `wiiu`, a single `.wua`, `.wud` or `.wux` file is also one Game. Elsewhere, each file with a recognised extension is one Game.
+- **FR-LIB-4** In `ps3`, `ps4`, `ps5` and `wiiu`, each subfolder that contains the System's expected game structure counts as one Game. In `wiiu`, a single `.wua`, `.wud` or `.wux` file is also one Game. Elsewhere, each file with a recognised extension is one Game.
 - **FR-LIB-5** Games installed inside a Standalone Emulator's own storage (e.g. RPCS3 `.pkg` installs, Azahar `.cia` installs) are not listed.
 - **FR-LIB-6** The Display Title is derived from the file or folder name with region, revision and dump tags removed. For example, `Super Mario World (USA) [!].sfc` becomes "Super Mario World".
 - **FR-LIB-7** Game37 records, per Game: date added, last played, Playtime, Favorite flag, Hidden flag, renamed title, and chosen Artwork.
@@ -71,7 +71,7 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 
 ### Details and Options
 
-- **FR-DET-1** Selecting a Game opens its Details Page. Pressing confirm on Play launches it.
+- **FR-DET-1** Selecting a Game opens its Details Page. Pressing confirm on Play launches it; for an Upcoming System (Switch 2, PS5) it shows a "Not playable yet" message instead and starts nothing.
 - **FR-DET-2** The Details Page shows the hero Artwork as background, plus System, Playtime, last played, date added, Favorite status, number of Save States (embedded only), file name and size.
 - **FR-DET-3** The Options Menu opens with Y or right-click on any highlighted Game (Shelves, grids, search results) and from the Details Page.
 - **FR-DET-4** Options Menu actions: add or remove Favorite, load Save State (with slot picker, embedded only), start from power-on (embedded only), delete save data: Resume State, Save States, In-game Save, or everything (embedded only), choose different Artwork, rename Display Title, hide Game, show file in the file manager.

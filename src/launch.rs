@@ -927,6 +927,12 @@ mod tests {
                 panic!("{id}: expected a message to be pushed");
             };
             assert_eq!(screen.title(), "Not playable yet", "{id}");
+            let upcoming_message = upcoming(systems::by_id(id).unwrap());
+            assert_eq!(
+                why_not_playable(Play::resume(game), &mut w.ctx),
+                Some(upcoming_message),
+                "{id}"
+            );
             assert!(w.ctx.play.is_none() && w.ctx.launch.is_none(), "{id}");
         }
     }

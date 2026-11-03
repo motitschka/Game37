@@ -14,7 +14,7 @@ Two people use Game37:
 - Settings → Rescan library finds changes made while Game37 was closed.
 - *Covers FR-LIB-1, FR-LIB-2, FR-LIB-3*
 
-**US-2 Folder games.** As a player with PS3, PS4 or Wii U games, I want a game folder to count as one Game, so these Systems work like the others.
+**US-2 Folder games.** As a player with PS3, PS4, PS5 or Wii U games, I want a game folder to count as one Game, so these Systems work like the others.
 - A `BLUS12345/` folder containing `PS3_GAME/` appears as one Game in PS3.
 - The files inside a game folder never appear as separate Games.
 - *Covers FR-LIB-4, FR-LIB-5*

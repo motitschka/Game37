@@ -62,7 +62,7 @@ enum Button {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Measured {
     pub bytes: u64,
-    /// A folder Game (PS3, PS4, Wii U), whose size is the sum of its files.
+    /// A folder Game (PS3, PS4, PS5, Wii U), whose size is the sum of its files.
     pub folder: bool,
 }
 
