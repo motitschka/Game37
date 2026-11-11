@@ -592,10 +592,7 @@ impl OptionsMenu {
                 Err(e) => Err(e),
             },
             // A Hidden Game is no Favorite: it would count towards the five unseen.
-            Item::Hide => ctx
-                .library
-                .set_hidden(id, true)
-                .and_then(|()| ctx.library.set_favorite(id, false, ctx::now())),
+            Item::Hide => ctx.library.hide_game(id),
             Item::ShowFile => {
                 ctx.show_file_request = Some(ctx.games_root.join(&self.game.rel_path));
                 return Transition::Pop;

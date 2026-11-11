@@ -477,12 +477,13 @@ impl Library {
 
     /// Every Favorite, newest first, each with whether its file is there: the limit of 5
     /// (FR-HOME-6) counts them all, so a Favorite whose file is away for now (a drive unplugged)
-    /// keeps its place, and the replace picker offers it too.
+    /// keeps its place, and the replace picker offers it too. Hidden Games are left out: they show
+    /// nowhere, so they take no place.
     pub fn all_favorites(&self) -> Result<Vec<(GameRow, bool)>, DbError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, system, rel_path, COALESCE(renamed_title, title), date_added, last_played,
                     playtime_secs, favorited_at, present
-             FROM games WHERE favorited_at IS NOT NULL",
+             FROM games WHERE favorited_at IS NOT NULL AND hidden = 0",
         )?;
         let mut games = stmt
             .query_map([], |r| Ok((Fetched::from_row(r)?, r.get::<_, bool>(8)?)))?
@@ -522,6 +523,15 @@ impl Library {
         self.conn.execute(
             "UPDATE games SET last_played = ?2, playtime_secs = playtime_secs + ?3 WHERE id = ?1",
             [id, ended_at, secs],
+        )?;
+        Ok(())
+    }
+
+    /// Hides a Game and clears its Favorite in one UPDATE, so no Game is left hidden and favorited.
+    pub fn hide_game(&self, id: i64) -> Result<(), DbError> {
+        self.conn.execute(
+            "UPDATE games SET hidden = 1, favorited_at = NULL WHERE id = ?1",
+            [id],
         )?;
         Ok(())
     }
@@ -917,6 +927,36 @@ mod tests {
             1,
             "the Shelf shows B only"
         );
+    }
+
+    #[test]
+    fn a_hidden_favorite_is_not_among_all_favorites() {
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_system("snes", &games("snes", &["A", "B"]), 0).unwrap();
+        let (a, b) = (id_of(&lib, "snes", "A"), id_of(&lib, "snes", "B"));
+        lib.set_favorite(a, true, 1).unwrap();
+        lib.set_favorite(b, true, 2).unwrap();
+        lib.set_hidden(a, true).unwrap();
+        let titles: Vec<_> = lib
+            .all_favorites()
+            .unwrap()
+            .into_iter()
+            .map(|(g, _)| g.title)
+            .collect();
+        assert_eq!(titles, ["B"]);
+    }
+
+    #[test]
+    fn hiding_a_game_clears_its_favorite_in_one_call() {
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_system("snes", &games("snes", &["A"]), 0).unwrap();
+        let a = id_of(&lib, "snes", "A");
+        lib.set_favorite(a, true, 1).unwrap();
+        lib.hide_game(a).unwrap();
+        assert!(lib.game(a).unwrap().is_none(), "hidden");
+        let hidden = lib.hidden_games().unwrap();
+        assert_eq!(titles(&hidden), ["A"]);
+        assert!(!hidden[0].favorite, "no longer a Favorite");
     }
 
     #[test]
