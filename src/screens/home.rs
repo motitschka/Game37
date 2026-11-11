@@ -16,7 +16,7 @@ use crate::ui::gfx::{Align, Gfx, TextStyle};
 use crate::ui::input::{Action, Input, Pointer, glyph_label};
 use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
-use crate::ui::theme::{BG, LINE, MUTED, SURFACE, SURFACE2, TEXT};
+use crate::ui::theme::{ACCENT, BG, LINE, MUTED, SURFACE, SURFACE2, TEXT};
 use crate::ui::{M, Rect, W, hit, scroll};
 
 const SHELVES: usize = Shelf::ALL.len();
@@ -361,11 +361,13 @@ impl Home {
 
     fn draw_empty(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx, i: usize, base: f32) {
         let r = Rect::new(M, base + 22.0, VIEW_W, 140.0);
-        if self.focus.shelf == i {
-            cover::focus_ring(gfx, r, 14.0);
-        }
         gfx.fill_round_rect(r, 14.0, SURFACE.alpha(0.6));
-        gfx.stroke_round_rect_dashed(r, 14.0, 2.0, 10.0, 8.0, LINE);
+        // An empty Shelf only holds a hint, so its focus is a quiet outline, not a cover's ring.
+        if self.focus.shelf == i {
+            gfx.stroke_round_rect(r, 14.0, 2.0, ACCENT.alpha(0.85));
+        } else {
+            gfx.stroke_round_rect_dashed(r, 14.0, 2.0, 10.0, 8.0, LINE);
+        }
         for k in 0..5 {
             let sq = Rect::new(M + 28.0 + k as f32 * 116.0, base + 44.0, 96.0, 96.0);
             gfx.fill_round_rect(sq, 8.0, SURFACE2.alpha(0.7));
