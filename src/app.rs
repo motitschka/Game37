@@ -27,7 +27,7 @@ use crate::session::input::{self, Mouse, Ports};
 use crate::session::sdl;
 use crate::ui::chrome::{self, TopBar};
 use crate::ui::controls::{ControlEvent, Controls, StickAxis};
-use crate::ui::gfx::{Gfx, WindowMode};
+use crate::ui::gfx::{Gfx, Layer, WindowMode};
 use crate::ui::hit;
 use crate::ui::input::{Action, ButtonStyle, Input, InputKind, Pointer, TextInput, button_action};
 use crate::ui::nav::{Flow, Hits, Nav};
@@ -620,6 +620,9 @@ struct View {
     pointer: Option<(f32, f32)>,
 }
 
+/// How far a screen fading in rises from, in logical pixels.
+const RISE: f32 = 16.0;
+
 /// Draws a frame (without presenting it) and returns where its clickable chrome went.
 fn draw(gfx: &mut Gfx<'_>, nav: &mut Nav, ctx: &Ctx, view: &View, clock: &str) -> Hits {
     // A running Game (no chrome) stays at 1080; the menus fill the window.
@@ -639,7 +642,14 @@ fn draw(gfx: &mut Gfx<'_>, nav: &mut Nav, ctx: &Ctx, view: &View, clock: &str) -
         };
     }
     chrome::background(gfx);
-    nav.base().draw(gfx, ctx);
+    // A screen opened, closed back to or switched to fades in and rises into place.
+    let t = nav.base_appearance(ctx.animate);
+    let layer = Layer {
+        dx: 0.0,
+        dy: (1.0 - t) * RISE,
+        opacity: t,
+    };
+    gfx.with_layer(layer, |gfx| nav.base().draw(gfx, ctx));
     let labels = nav.tab_labels();
     let library = nav.has_library();
     let pill = nav.base().search_pill();

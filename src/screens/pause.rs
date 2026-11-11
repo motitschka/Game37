@@ -4,8 +4,9 @@
 
 use crate::ctx::Ctx;
 use crate::session::states::{Rgb, SLOTS};
+use crate::ui::anim::{Eased, FADE_TAU};
 use crate::ui::cover::{fit_lines, focus_ring};
-use crate::ui::gfx::{Align, Gfx, TextStyle};
+use crate::ui::gfx::{Align, Gfx, Layer, TextStyle};
 use crate::ui::input::{Action, Input, Pointer};
 use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
@@ -73,6 +74,8 @@ struct Slot {
 }
 
 pub struct PauseMenu {
+    /// How far the menu has come in, 0 to 1: it slides and fades in over the dimmed Game.
+    appear: Eased,
     title: String,
     /// "<System> · <Playtime> played".
     meta: String,
@@ -94,6 +97,7 @@ pub struct PauseMenu {
 impl PauseMenu {
     pub fn new(title: &str, meta: String, slots: Vec<Option<SlotInfo>>) -> PauseMenu {
         let mut menu = PauseMenu {
+            appear: Eased::new(0.0),
             title: title.to_owned(),
             meta,
             view: View::List,
@@ -326,11 +330,47 @@ impl Screen for PauseMenu {
         Transition::None
     }
 
-    fn draw(&mut self, gfx: &mut Gfx<'_>, _: &Ctx) {
+    fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
         for (i, thumb) in self.uploads.drain(..) {
             gfx.set_image(THUMB_KEYS[i], thumb.as_ref());
         }
-        gfx.fill_rect(Rect::new(0.0, 0.0, W, H), Colour::hex(0x000000).alpha(BACKDROP));
+        self.appear.set(1.0);
+        let t = self.appear.step(ctx.animate, FADE_TAU);
+        gfx.fill_rect(
+            Rect::new(0.0, 0.0, W, H),
+            Colour::hex(0x000000).alpha(BACKDROP * t),
+        );
+        let layer = Layer {
+            dx: -(1.0 - t) * SLIDE_IN,
+            dy: 0.0,
+            opacity: t,
+        };
+        gfx.with_layer(layer, |gfx| self.draw_panel(gfx));
+    }
+    fn hints(&self) -> Vec<Hint> {
+        let (confirm, back) = match self.view {
+            View::List => ("Select", "Resume"),
+            View::Save => ("Save here", "Back"),
+            View::Load => ("Load", "Back"),
+            View::ConfirmRestart => ("Choose", "Cancel"),
+        };
+        vec![
+            Hint::new(&[Action::Confirm], confirm),
+            Hint::new(&[Action::Back], back),
+        ]
+    }
+
+    fn pause_menu(&mut self) -> Option<&mut PauseMenu> {
+        Some(self)
+    }
+}
+
+/// How far the panel slides in from, in logical pixels.
+const SLIDE_IN: f32 = 72.0;
+
+impl PauseMenu {
+    /// Everything but the dimmed Game behind: the panel and what the current view shows.
+    fn draw_panel(&mut self, gfx: &mut Gfx<'_>) {
         gfx.fill_rect(Rect::new(0.0, 0.0, 600.0, H), SURFACE.alpha(0.94));
         gfx.fill_rect(Rect::new(600.0, 0.0, 1.0, H), LINE);
         let mut x = M;
@@ -417,23 +457,6 @@ impl Screen for PauseMenu {
             gfx.text(r.x, r.y + 340.0, line, style, Align::Left);
             self.slot_hits.push((r, i));
         }
-    }
-
-    fn hints(&self) -> Vec<Hint> {
-        let (confirm, back) = match self.view {
-            View::List => ("Select", "Resume"),
-            View::Save => ("Save here", "Back"),
-            View::Load => ("Load", "Back"),
-            View::ConfirmRestart => ("Choose", "Cancel"),
-        };
-        vec![
-            Hint::new(&[Action::Confirm], confirm),
-            Hint::new(&[Action::Back], back),
-        ]
-    }
-
-    fn pause_menu(&mut self) -> Option<&mut PauseMenu> {
-        Some(self)
     }
 }
 

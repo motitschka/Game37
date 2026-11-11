@@ -26,8 +26,9 @@ use crate::screens::message::Message;
 use crate::session::states::{self, Rgb, SLOTS, SaveData, StatePaths};
 use crate::session::{saves, sdl};
 use crate::systems::{self, Kind};
+use crate::ui::anim::{Eased, FADE_TAU};
 use crate::ui::cover::{self, ellipsize, playtime_label};
-use crate::ui::gfx::{Align, Gfx, TextStyle};
+use crate::ui::gfx::{Align, Gfx, Layer, TextStyle};
 use crate::ui::input::{Action, Input, InputKind, Pointer};
 use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
@@ -155,6 +156,8 @@ struct Slot {
 type ReadSlot = Option<(Slot, Option<Rgb>)>;
 
 pub struct OptionsMenu {
+    /// How far the menu has come in, 0 to 1: the panel slides and fades in over the dimmed screen.
+    appear: Eased,
     game: GameRow,
     /// "<System> · <Playtime> played".
     meta: String,
@@ -278,6 +281,7 @@ impl OptionsMenu {
             Vec::new()
         };
         OptionsMenu {
+            appear: Eased::new(0.0),
             game,
             meta,
             items,
@@ -1083,7 +1087,32 @@ impl Screen for OptionsMenu {
         for (i, thumb) in self.uploads.drain(..) {
             gfx.set_image(THUMB_KEYS[i], thumb.as_ref());
         }
-        gfx.fill_rect(dim_rect(), Colour::hex(0x000000).alpha(0.62));
+        self.appear.set(1.0);
+        let t = self.appear.step(ctx.animate, FADE_TAU);
+        gfx.fill_rect(dim_rect(), Colour::hex(0x000000).alpha(0.62 * t));
+        let layer = Layer {
+            dx: (1.0 - t) * SLIDE_IN,
+            dy: 0.0,
+            opacity: t,
+        };
+        gfx.with_layer(layer, |gfx| self.draw_panel(gfx, ctx));
+    }
+
+    fn hints(&self) -> Vec<Hint> {
+        self.hints_for_view()
+    }
+
+    fn text_input(&self) -> bool {
+        self.view == View::Rename
+    }
+}
+
+/// How far the panel slides in from, in logical pixels.
+const SLIDE_IN: f32 = 72.0;
+
+impl OptionsMenu {
+    /// Everything but the dimmed screen behind: the panel and what the current view shows in it.
+    fn draw_panel(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
         if self.view == View::Rename {
             self.item_hits.clear();
             return self.draw_rename(gfx);
@@ -1125,7 +1154,7 @@ impl Screen for OptionsMenu {
         }
     }
 
-    fn hints(&self) -> Vec<Hint> {
+    fn hints_for_view(&self) -> Vec<Hint> {
         match self.view {
             View::List if self.focused() == Item::Controller => vec![
                 Hint::new(&[Action::Left, Action::Right], "Change"),
@@ -1149,10 +1178,6 @@ impl Screen for OptionsMenu {
                 Hint::new(&[Action::Back], "Back"),
             ],
         }
-    }
-
-    fn text_input(&self) -> bool {
-        self.view == View::Rename
     }
 }
 
