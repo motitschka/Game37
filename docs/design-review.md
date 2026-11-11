@@ -28,7 +28,9 @@ focus again.
   for this.
 - [x] **List highlights glide** in the Options menu and the Pause Menu: the highlight bar eases
   between rows instead of jumping.
-- [ ] The same for Settings sections and rows, and Setup's rows.
+- [x] The same for Settings: its section highlight and its row highlight (which also eases its
+  height, as rows with a subtitle are taller) glide.
+- [ ] The same for Setup's rows.
 - [x] **Artwork fades in** over its placeholder (180 ms) when it arrives, instead of swapping from
   placeholder to picture in one frame (most visible on a first scroll through a big library).
 - [x] **Reduced motion.** Settings → Display → Motion: Full or Reduced. Reduced turns all of this
