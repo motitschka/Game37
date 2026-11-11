@@ -1721,10 +1721,15 @@ mod tests {
     /// The opengl renderer of a hidden offscreen window, as `app.rs` makes it. SDL must outlive
     /// the canvas.
     fn offscreen_renderer() -> (sdl3::Sdl, sdl3::render::Canvas<Window>) {
-        sdl3::hint::set("SDL_VIDEO_DRIVER", "offscreen");
+        let driver = std::env::var("SPIKE_VIDEO_DRIVER").unwrap_or("offscreen".into());
+        sdl3::hint::set("SDL_VIDEO_DRIVER", &driver);
         let sdl = sdl3::init().unwrap();
         let video = sdl.video().unwrap();
-        let window = video.window("hw", 1280, 720).hidden().build().unwrap();
+        let mut window = video.window("hw", 1280, 720);
+        if driver == "offscreen" {
+            window.hidden();
+        }
+        let window = window.build().unwrap();
         let mut canvas = sdl3::render::create_renderer(window, Some(c"opengl")).unwrap();
         // As the app's window shows it (`app::canvas`): Game37 draws in logical 1920×1080.
         canvas
@@ -3066,5 +3071,155 @@ mod tests {
             colours.len() > 1,
             "the renderer shows a single colour: {colours:?}"
         );
+    }
+    /// SPIKE (Phase 0 of docs/roadmap-external-systems.md, not for main): runs the Game
+    /// `.testdata/spike/<SPIKE_SYSTEM>/<SPIKE_GAME>` through a real Session on the offscreen
+    /// renderer for SPIKE_FRAMES frames, saving what the renderer shows every SPIKE_EVERY frames
+    /// into SPIKE_OUT, and timing the start, the frames and the quit. SPIKE_ROOT keeps the Games
+    /// Root (and so the Core's caches) between runs.
+    #[test]
+    #[ignore = "spike"]
+    fn spike_run_a_game() {
+        use crate::ui::text::Fonts;
+        use std::time::Instant;
+        let var = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("set {k}"));
+        let system = var("SPIKE_SYSTEM");
+        let file = var("SPIKE_GAME");
+        let frames: usize = var("SPIKE_FRAMES").parse().unwrap();
+        let every: usize = std::env::var("SPIKE_EVERY").map_or(60, |v| v.parse().unwrap());
+        let out = PathBuf::from(var("SPIKE_OUT"));
+        fs::create_dir_all(&out).unwrap();
+
+        let _serial = serial();
+        let temp = TempDir::new().unwrap();
+        let root = std::env::var("SPIKE_ROOT").map_or(temp.path().join("root"), PathBuf::from);
+        fs::create_dir_all(root.join(&system)).unwrap();
+        fs::create_dir_all(root.join("bios")).unwrap();
+        let spike = Path::new(TESTDATA).join("spike");
+        if !root.join(&system).join(&file).exists() {
+            fs::copy(spike.join(&system).join(&file), root.join(&system).join(&file)).unwrap();
+        }
+        if let Ok(bios) = std::env::var("SPIKE_BIOS") {
+            let to = root.join("bios").join(Path::new(&bios).file_name().unwrap());
+            if !to.exists() {
+                std::os::unix::fs::symlink(&bios, to).unwrap();
+            }
+        }
+        let data = temp.path().join("data");
+        fs::create_dir_all(&data).unwrap();
+        std::os::unix::fs::symlink(spike.join("cores"), data.join("cores")).unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = root.clone();
+        ctx.data_dir = data;
+        let game = GameRow {
+            id: 1,
+            system: system.clone(),
+            rel_path: format!("{system}/{file}"),
+            title: file.clone(),
+            date_added: 0,
+            last_played: None,
+            playtime_secs: 0,
+            favorite: false,
+        };
+
+        let (_sdl, canvas) = offscreen_renderer();
+        let creator = canvas.texture_creator();
+        let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
+        let t = Instant::now();
+        let mut session = Session::start(&Play::resume(game), &ctx, gfx.gl_context(), None, Some(60.0))
+            .unwrap_or_else(|e| panic!("start: {}: {}", e.title, e.message));
+        eprintln!(
+            "SPIKE start took {:?}; av {:?}",
+            t.elapsed(),
+            session.core.av_info()
+        );
+        let t = Instant::now();
+        // SPIKE_PRESS="300:X,420:Down": the key held for 10 frames from that frame.
+        let presses: Vec<(usize, Scancode)> = std::env::var("SPIKE_PRESS")
+            .unwrap_or_default()
+            .split(',')
+            .filter(|p| !p.is_empty())
+            .map(|p| {
+                let (at, key) = p.split_once(':').unwrap();
+                (at.parse().unwrap(), Scancode::from_name(key).expect("key name"))
+            })
+            .collect();
+        let hold: usize = std::env::var("SPIKE_HOLD").map_or(10, |v| v.parse().unwrap());
+        let realtime = std::env::var_os("SPIKE_REALTIME").is_some();
+        let paced = Instant::now();
+        for i in 1..=frames {
+            if realtime {
+                let due = std::time::Duration::from_secs_f64(i as f64 / 60.0);
+                if let Some(wait) = due.checked_sub(paced.elapsed()) {
+                    std::thread::sleep(wait);
+                }
+            }
+            let held: Vec<Scancode> = presses
+                .iter()
+                .filter(|(at, _)| (*at..*at + hold).contains(&i))
+                .map(|p| p.1)
+                .collect();
+            assert!(!session.tick(&mut gfx, 1.0 / 60.0, &[], Mouse::default(), |k| held.contains(&k)));
+            if !held.is_empty() && presses.iter().any(|(at, _)| *at + 5 == i) {
+                let mut q: Vec<_> = session
+                    .core
+                    .input_queries()
+                    .into_iter()
+                    .filter(|(k, v)| *v != 0 && k.1 != 6)
+                    .collect();
+                q.sort();
+                eprintln!("SPIKE frame {i}, holding {held:?}: non-zero answers {q:?}");
+            }
+            // SPIKE_PAUSE="900:3": at that frame, a shot, N seconds without ticking (as under the Pause
+            // Menu), one tick, another shot.
+            if let Some((at, secs)) = std::env::var("SPIKE_PAUSE").ok().and_then(|p| {
+                let (a, b) = p.split_once(':')?;
+                Some((a.parse::<usize>().ok()?, b.parse::<f64>().ok()?))
+            }) {
+                if i == at {
+                    let before = out.join(format!("{system}-pause-before.bmp"));
+                    let after = out.join(format!("{system}-pause-after.bmp"));
+                    let next = out.join(format!("{system}-pause-control.bmp"));
+                    shown(&mut session, &mut gfx, &ctx, &before);
+                    assert!(!session.tick(&mut gfx, 1.0 / 60.0, &[], Mouse::default(), |_| false));
+                    std::thread::sleep(std::time::Duration::from_millis(16));
+                    shown(&mut session, &mut gfx, &ctx, &next);
+                    std::thread::sleep(std::time::Duration::from_secs_f64(secs));
+                    assert!(!session.tick(&mut gfx, 1.0 / 60.0, &[], Mouse::default(), |_| false));
+                    shown(&mut session, &mut gfx, &ctx, &after);
+                    eprintln!("SPIKE paused {secs} s at frame {at}: shots in {}", out.display());
+                }
+            }
+            if i % every == 0 || i == frames {
+                let shot = out.join(format!("{system}-{i:05}.bmp"));
+                let colours = shown(&mut session, &mut gfx, &ctx, &shot);
+                let f = session.core.frame();
+                eprintln!(
+                    "SPIKE frame {i} at {:?}: {}x{} {:?}, {} colours shown",
+                    t.elapsed(),
+                    f.width,
+                    f.height,
+                    f.format,
+                    colours.len()
+                );
+            }
+        }
+        eprintln!("SPIKE {frames} frames took {:?}", t.elapsed());
+        let t = Instant::now();
+        let audio = frames_with(&mut session, &Default::default(), 120);
+        let av = session.core.av_info();
+        eprintln!(
+            "SPIKE audio: {} samples in 120 frames ({:?}), {:.0} expected, loudest {}",
+            audio.len(),
+            t.elapsed(),
+            120.0 / av.fps * 2.0 * av.sample_rate,
+            audio.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0)
+        );
+        let mut asked: Vec<_> = session.core.input_queries().into_iter().collect();
+        asked.sort();
+        eprintln!("SPIKE input queries (port, device, index, id) = last answer: {asked:?}");
+        let t = Instant::now();
+        drop(session);
+        eprintln!("SPIKE quit took {:?}", t.elapsed());
     }
 }

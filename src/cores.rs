@@ -671,6 +671,17 @@ impl CoreInfo {
             &[]
         };
         let mut options = [self.options, own].concat();
+        // SPIKE: extra options from SPIKE_OPTS="key=value,key=value", replacing the same keys.
+        if let Ok(extra) = std::env::var("SPIKE_OPTS") {
+            for pair in Box::leak(extra.into_boxed_str())
+                .split(',')
+                .filter(|p| !p.is_empty())
+            {
+                let (key, value) = pair.split_once('=').expect("SPIKE_OPTS: key=value");
+                options.retain(|(k, _)| *k != key);
+                options.push((key, value));
+            }
+        }
         let screens = screen_layouts(system).map_or(&[][..], |layouts| layouts.options(layout));
         for &(key, value) in screens {
             match options.iter_mut().find(|(k, _)| *k == key) {
@@ -683,7 +694,9 @@ impl CoreInfo {
 
     /// Which OpenGL host this Core's context must be made on.
     pub fn gl(&self) -> GlKind {
-        if std::ptr::eq(self, &PPSSPP) {
+        if std::ptr::eq(self, &PPSSPP)
+            || (std::ptr::eq(self, &CEMU) && std::env::var_os("SPIKE_CEMU_GLX").is_some())
+        {
             GlKind::Glx
         } else {
             GlKind::Sdl
@@ -696,7 +709,7 @@ impl CoreInfo {
     /// LRPS2 is set to its OpenGL renderer. Beetle PSX HW and melonDS DS fall back to their own
     /// software renderers, and PPSSPP's host is GLX's, made apart from the renderer.
     pub fn needs_gl(&self) -> bool {
-        [&MUPEN64PLUS_NEXT, &AZAHAR, &DOLPHIN, &LRPS2]
+        [&MUPEN64PLUS_NEXT, &AZAHAR, &DOLPHIN, &LRPS2, &CEMU, &RPCS3]
             .iter()
             .any(|core| std::ptr::eq(self, *core))
     }
@@ -705,9 +718,18 @@ impl CoreInfo {
     /// GameCube, Wii (the Nunchuk's), PSP, PS2 and 3DS have one, so their Cores read it as analog
     /// only.
     pub fn stick_is_dpad(&self) -> bool {
-        ![&MUPEN64PLUS_NEXT, &PPSSPP, &LRPS2, &AZAHAR, &DOLPHIN]
-            .iter()
-            .any(|core| std::ptr::eq(self, *core))
+        ![
+            &MUPEN64PLUS_NEXT,
+            &PPSSPP,
+            &LRPS2,
+            &AZAHAR,
+            &DOLPHIN,
+            &CEMU,
+            &RPCS3,
+            &SUYU,
+        ]
+        .iter()
+        .any(|core| std::ptr::eq(self, *core))
     }
 
     /// Whether Game37 reads this Core's frame rate and sample rate again after every frame
@@ -739,6 +761,39 @@ impl CoreInfo {
     }
 }
 
+/// SPIKE (Phase 0, not for main): Cemu for Wii U, on its OpenGL 4.5 path.
+pub static CEMU: CoreInfo = CoreInfo {
+    name: "Cemu",
+    file: "cemu_libretro.so",
+    options: &[("cemu_gpu_api", "OpenGL")],
+    bios: None,
+    assets: None,
+    saves: InGameSaves::Shared,
+    touch: None,
+};
+/// SPIKE (Phase 0, not for main): RPCS3 for PS3; its renderer comes from `SPIKE_RPCS3_RENDERER`.
+pub static RPCS3: CoreInfo = CoreInfo {
+    name: "RPCS3",
+    file: "rpcs3_libretro.so",
+    options: &[],
+    bios: None,
+    assets: None,
+    saves: InGameSaves::Shared,
+    touch: None,
+};
+
+/// SPIKE (not for main): suyu for Switch. It renders with its own Vulkan device and hands over
+/// XRGB8888 frames, so it needs no OpenGL host.
+pub static SUYU: CoreInfo = CoreInfo {
+    name: "suyu",
+    file: "suyu_libretro.so",
+    options: &[("suyu_show_perf", "disabled")],
+    bios: None,
+    assets: None,
+    saves: InGameSaves::Shared,
+    touch: None,
+};
+
 /// The Core for a System, or `None` for an External System, which never uses a Core, or for an
 /// Embedded System with no Core yet.
 pub fn for_system(system: &System) -> Option<&'static CoreInfo> {
@@ -754,6 +809,9 @@ pub fn for_system(system: &System) -> Option<&'static CoreInfo> {
         "3ds" => Some(&AZAHAR),
         "ps2" => Some(&LRPS2),
         "psp" => Some(&PPSSPP),
+        "wiiu" => Some(&CEMU),
+        "ps3" => Some(&RPCS3),
+        "switch" => Some(&SUYU),
         _ => None,
     }
 }

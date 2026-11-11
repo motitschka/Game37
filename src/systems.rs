@@ -183,9 +183,9 @@ pub static SYSTEMS: [System; 19] = [
         short: "WII U",
         maker: Maker::Nintendo,
         year: 2012,
-        kind: Kind::External,
+        kind: Kind::Embedded,
         colour: 0x0A8FBF,
-        extensions: &["wua", "wud", "wux"],
+        extensions: &["wua", "wud", "wux", "rpx"],
         folder_markers: &[&["code", "content", "meta"]],
     },
     System {
@@ -194,7 +194,7 @@ pub static SYSTEMS: [System; 19] = [
         short: "SWITCH",
         maker: Maker::Nintendo,
         year: 2017,
-        kind: Kind::External,
+        kind: Kind::Embedded,
         colour: 0xE60012,
         extensions: &["nsp", "xci", "nro"],
         folder_markers: &[],
@@ -251,10 +251,10 @@ pub static SYSTEMS: [System; 19] = [
         short: "PS3",
         maker: Maker::Sony,
         year: 2007,
-        kind: Kind::External,
+        kind: Kind::Embedded,
         colour: 0x2B2F3A,
         // A disc dump has PS3_GAME/; an extracted game has PARAM.SFO next to USRDIR/.
-        extensions: &[],
+        extensions: &["elf"],
         folder_markers: &[&["PS3_GAME"], &["PARAM.SFO", "USRDIR"]],
     },
     System {
