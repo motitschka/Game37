@@ -926,10 +926,15 @@ fn stray_thumbs(states: &StatePaths) -> usize {
 /// gone isn't listed: the library doesn't offer it.
 fn same_stem_games(ctx: &Ctx, game: &GameRow, rel_path: &Path) -> Vec<String> {
     let (stem, folder) = (rel_path.file_stem(), rel_path.parent());
-    ctx.library
+    // Hidden Games lose the files too, so they are named as well.
+    let visible = ctx
+        .library
         .system_games(&game.system, Default::default())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let hidden = ctx.library.hidden_games().unwrap_or_default();
+    visible
         .into_iter()
+        .chain(hidden.into_iter().filter(|g| g.system == game.system))
         .filter(|other| {
             let other_path = Path::new(&other.rel_path);
             other.id != game.id && other_path.file_stem() == stem && other_path.parent() == folder
@@ -1868,6 +1873,14 @@ mod tests {
         for what in DELETE_ROWS {
             assert!(!menu.delete_body(what).contains("shares"), "{what:?}");
         }
+        // A hidden sibling loses them too, so it is named as well.
+        ctx.library.hide_game(by("Zelda (Hack)").id).unwrap();
+        let menu = OptionsMenu::new(by("Zelda"), &ctx);
+        let body = menu.delete_body(SaveData::Everything);
+        assert!(
+            body.ends_with("Zelda (Hack) shares these save files and loses them too."),
+            "{body}"
+        );
     }
 
     #[test]
