@@ -704,7 +704,14 @@ fn feed(
             Feed::Quit => return Flow::Quit,
             Feed::Control(at, event) => controls.handle(at, event, &mut inputs),
             Feed::Typed(text) => controls.typed(&text, &mut inputs),
-            Feed::Input(input) => inputs.push(input),
+            Feed::Input(input) => {
+                // The mouse shows keyboard glyphs; set here, in event order with the keys and
+                // pads, so the frame's last input decides them.
+                if let Input::Pointer(_) = input {
+                    controls.kind = InputKind::Keyboard;
+                }
+                inputs.push(input);
+            }
             Feed::Repeat(at) => inputs.extend(controls.poll(at)),
         }
         for input in inputs.drain(..) {
@@ -901,13 +908,11 @@ impl InputState {
 
             Event::MouseMotion { x, y, .. } => {
                 let (x, y) = gfx.to_logical(x, y);
-                self.controls.kind = InputKind::Keyboard;
                 self.pointer = Some((x, y));
                 return Some(Feed::Input(Input::Pointer(Pointer::Move { x, y })));
             }
             Event::MouseButtonUp { mouse_btn, x, y, .. } => {
                 let (x, y) = gfx.to_logical(x, y);
-                self.controls.kind = InputKind::Keyboard;
                 let pointer = match mouse_btn {
                     MouseButton::Left => Pointer::Click { x, y },
                     MouseButton::Right => Pointer::RightClick { x, y },
@@ -917,7 +922,6 @@ impl InputState {
                 return Some(Feed::Input(Input::Pointer(pointer)));
             }
             Event::MouseWheel { y, .. } => {
-                self.controls.kind = InputKind::Keyboard;
                 return Some(Feed::Input(Input::Pointer(Pointer::Wheel { dy: y })));
             }
             _ => return None,
@@ -1032,6 +1036,43 @@ mod tests {
             "G0",
             "F erased nothing"
         );
+    }
+
+    /// The glyphs follow the frame's last input in event order, the mouse counting as the
+    /// keyboard: a pad press then a mouse move ends on Keyboard, a mouse move then a pad press on
+    /// Controller.
+    #[test]
+    fn the_input_kind_follows_the_frames_last_input() {
+        let pad = JoystickId::new(1);
+        let press = Feed::Control(
+            0,
+            ControlEvent::PadButtonDown {
+                pad,
+                button: Button::DPadDown,
+            },
+        );
+        let mouse = Feed::Input(Input::Pointer(Pointer::Move { x: 5.0, y: 5.0 }));
+        let cases = [
+            ([press.clone(), mouse.clone()], InputKind::Keyboard),
+            ([mouse, press], InputKind::Controller),
+        ];
+        for (feeds, after) in cases {
+            let log = std::rc::Rc::default();
+            let mut nav = Nav::single(Box::new(StyleRow(log)));
+            let mut ctx = Ctx::empty();
+            let mut controls = Controls::new(InputKind::Keyboard);
+            let flow = feed(
+                &mut controls,
+                feeds.clone(),
+                &mut nav,
+                &Hits::default(),
+                &mut ctx,
+                String::new,
+                |_, _| {},
+            );
+            assert_eq!(flow, Flow::Continue);
+            assert_eq!(controls.kind, after, "after {feeds:?}");
+        }
     }
 
     /// Stands in for a Core download: counts the frames it is ticked.
