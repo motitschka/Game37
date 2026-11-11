@@ -122,15 +122,16 @@ shot m5-rename "$root/cfg.toml" \
 # M6: top bar entries
 shot m6-search-open "$root/cfg.toml" "down,down,search"
 shot m6-settings-open "$root/cfg.toml" "settings"
-# First-run Setup step 2: Wii U, Switch and PlayStation 3 ticked, then every System
+# First-run Setup step 2: Wii U, Switch and PlayStation 3 ticked (Switch plays in Game37, so its
+# row is not here), then every System
 shot m6-setup-emulators "$root/missing.toml" \
-    "down,right,right,right,confirm,right,confirm,down,left,left,confirm,settings" --missing-emulators switch,ps3
-shot m6-setup-emulators-all "$root/missing.toml" "sort,settings" --missing-emulators wiiu,switch,ps3,ps4
+    "down,right,right,right,confirm,right,confirm,down,left,left,confirm,settings" --missing-emulators ps3
+shot m6-setup-emulators-all "$root/missing.toml" "sort,settings" --missing-emulators wiiu,ps3,ps4
 # First-run Setup step 3: NES, Wii U, Switch and PlayStation 3 ticked, on through step 2, then
 # Create folders, under the Games Root that screenshot mode puts in the data dir
 shot m6-setup-folders "$root/missing.toml" \
     "confirm,down,right,right,right,confirm,right,confirm,down,left,left,confirm,settings,settings,confirm" \
-    --missing-emulators switch,ps3
+    --missing-emulators ps3
 # First-run Setup step 4: NES and PSP ticked, step 2 passed over, Create folders on step 3, then the
 # Cores, which the smoke data dirs already have, so nothing downloads
 shot m6-setup-cores "$root/missing.toml" "confirm,down,down,right,confirm,settings,confirm,settings"
@@ -211,7 +212,7 @@ shot tall-settings-games-root "$root/cfg.toml" "settings,right,confirm" "${tall[
 shot tall-setup "$root/missing.toml" "" "${tall[@]}"                                    # m1-no-config
 shot tall-setup-folders "$root/missing.toml" \
     "confirm,down,right,right,right,confirm,right,confirm,down,left,left,confirm,settings,settings,confirm" \
-    --missing-emulators switch,ps3 "${tall[@]}"                                          # m6-setup-folders
+    --missing-emulators ps3 "${tall[@]}"                                          # m6-setup-folders
 shot tall-notice "$root/cfg.toml" "nexttab,left,left,left,left,left,left,left,left,left,confirm" \
     --missing-emulators wiiu "${tall[@]}"                                                # m2-notice
 shot tall-rename "$root/cfg.toml" \
