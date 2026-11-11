@@ -1034,13 +1034,8 @@ mod tests {
         );
     }
 
-    /// A chosen slot the Core refuses (a junk file, e.g. after a Core update) starts the Game
-    /// fresh and tells the player, instead of staying silent (FR-DET-4).
-    #[test]
-    #[ignore = "needs /home/matei/Game37/.testdata"]
-    fn a_junk_chosen_slot_starts_fresh_and_tells_the_player() {
-        let _serial = serial();
-        let root = TempDir::new().unwrap();
+    /// A SNES Game in `root` with junk in Save State slot 2, and the Play that starts from it.
+    fn junk_slot_2(root: &TempDir) -> (Ctx, Play) {
         let rel = "snes/240p Test Suite (World).sfc";
         fs::create_dir_all(root.path().join("snes")).unwrap();
         fs::copy(Path::new(TESTDATA).join("games").join(rel), root.path().join(rel)).unwrap();
@@ -1060,11 +1055,21 @@ mod tests {
         let states = StatePaths::new(&ctx.games_root, "snes", Path::new(rel));
         fs::create_dir_all(states.slot(2).parent().unwrap()).unwrap();
         fs::write(states.slot(2), b"not a real save state").unwrap();
-
         let play = Play {
             game,
             start: Start::Slot(2),
         };
+        (ctx, play)
+    }
+
+    /// A chosen slot the Core refuses (a junk file, e.g. after a Core update) starts the Game
+    /// fresh and tells the player, instead of staying silent (FR-DET-4).
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn a_junk_chosen_slot_starts_fresh_and_tells_the_player() {
+        let _serial = serial();
+        let root = TempDir::new().unwrap();
+        let (ctx, play) = junk_slot_2(&root);
         let mut session = Session::start(&play, &ctx, None, None, None).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(
             session.start_message.as_deref(),
@@ -1072,6 +1077,27 @@ mod tests {
             "the player is told, instead of a silent fresh start"
         );
         run(&mut session, 2);
+    }
+
+    /// #47: `start` puts the slot failure up as a Message over the running session, which stays
+    /// below it, rather than in place of it.
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn start_puts_the_slot_failure_message_over_the_session() {
+        let _serial = serial();
+        let root = TempDir::new().unwrap();
+        let (ctx, play) = junk_slot_2(&root);
+        let mut nav = Nav::single(Box::new(crate::screens::Stub::new("Home")));
+        start(&play, &mut nav, &ctx, None, None, None);
+        assert_eq!(nav.depth(), 3, "Home, the session and the Message");
+        assert_eq!(nav.top().title(), SLOT_FAILED_TITLE);
+        assert!(nav.top().is_modal(), "the Message is over the session");
+        assert!(running(&mut nav).is_some(), "the Game runs below the Message");
+        assert_eq!(
+            running(&mut nav).unwrap().start_message,
+            None,
+            "the message was handed to the Message"
+        );
     }
 
     #[test]
