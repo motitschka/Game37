@@ -126,6 +126,10 @@ impl Section for Cores {
         self.queue.tick(ctx);
     }
 
+    fn working(&self) -> bool {
+        self.queue.running()
+    }
+
     fn layout(&self, rows: &[Row]) -> Vec<(Rect, usize)> {
         (0..rows.len())
             .map(|i| match i {
@@ -391,6 +395,24 @@ mod tests {
             ["mGBA", "Mesen"],
             "the queued Core starts while something covers Settings"
         );
+    }
+
+    /// #51: Settings counts as working while a Core is waiting or downloading, so opening Search
+    /// from it doesn't drop it, and stops once the downloads are over.
+    #[test]
+    fn settings_is_working_while_a_core_downloads() {
+        let (_dir, mut ctx, started) = world();
+        let mut s = Settings::with_sections(vec![Box::new(Cores::default())]);
+        assert!(!s.working());
+        let mut cores = Cores::default();
+        cores.confirm(row_of(&MGBA), &mut ctx);
+        s = Settings::with_sections(vec![Box::new(cores)]);
+        s.tick_covered(&mut ctx);
+        assert!(s.working(), "downloading");
+
+        set(&started, 0, DownloadState::Failed("no network".to_owned()));
+        s.tick_covered(&mut ctx);
+        assert!(!s.working(), "the download is over");
     }
 
     #[test]

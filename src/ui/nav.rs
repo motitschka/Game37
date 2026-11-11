@@ -43,6 +43,11 @@ pub trait Screen {
     /// Hidden games, Controller test, a confirm modal or Search over Settings. No transition: a
     /// covered screen can't leave or push on its own.
     fn tick_covered(&mut self, _ctx: &mut Ctx) {}
+    /// Whether dropping the screen now would cancel work the player started, such as a Core
+    /// download in Settings: [`Nav`] then keeps it rather than popping past it (#51).
+    fn working(&self) -> bool {
+        false
+    }
     /// Whether the screen has asynchronous work pending that screenshot mode should keep
     /// ticking through before drawing the next step, e.g. a Core still downloading.
     fn busy(&self) -> bool {
@@ -276,16 +281,23 @@ impl Nav {
     /// modal nor typing into a field opens it, and only in a Nav with a library; anywhere else
     /// `input` goes to the top screen as usual. When the entry screen is already somewhere on the
     /// active tab's stack, opening it pops back to it and hands it the entry's action instead of a
-    /// second copy being pushed (opening one while it is already open does nothing).
+    /// second copy being pushed (opening one while it is already open does nothing). When a screen
+    /// above it is [working](Screen::working), popping back would cancel that work, so the entry
+    /// screen moves to the top instead and the screens above it stay (#51).
     fn open(&mut self, entry: Entry, input: Input, ctx: &mut Ctx) -> Flow {
         let top = self.top();
         let shut = top.is_modal() || !top.chrome() || top.text_input();
         let Some(entries) = self.entries.as_ref().filter(|_| !shut) else {
             return self.apply(input, ctx);
         };
-        let stack = &self.tabs[self.active].stack;
+        let stack = &mut self.tabs[self.active].stack;
         if let Some(i) = stack.iter().rposition(|s| s.entry() == Some(entry)) {
-            self.tabs[self.active].stack.truncate(i + 1);
+            if stack[i + 1..].iter().any(|s| s.working()) {
+                let screen = stack.remove(i);
+                stack.push(screen);
+            } else {
+                stack.truncate(i + 1);
+            }
             return self.apply(Input::Action(entry.action()), ctx);
         }
         let screen = match entry {
@@ -644,6 +656,7 @@ mod tests {
         no_chrome: bool,
         typing: bool,
         entry: Option<Entry>,
+        working: bool,
     }
 
     impl Screen for Spot {
@@ -672,6 +685,9 @@ mod tests {
         }
         fn entry(&self) -> Option<Entry> {
             self.entry
+        }
+        fn working(&self) -> bool {
+            self.working
         }
     }
 
@@ -813,6 +829,34 @@ mod tests {
             Some(&("Search", Input::Action(Action::Search))),
             "Search gets the action"
         );
+    }
+
+    /// #51: Search lower on the stack, then Settings with a Core downloading over it. Opening Search
+    /// brings it to the top instead of popping past Settings, which would cancel the download; Back
+    /// from Search returns to Settings.
+    #[test]
+    fn opening_search_below_a_working_screen_brings_search_up_and_keeps_it() {
+        let log = Log::default();
+        let mut nav = library(&log);
+        act(&mut nav, Action::Search);
+        nav.push(Box::new(Spot {
+            working: true,
+            ..spot("Downloading", &log)
+        }));
+        assert_eq!(titles(&nav), ["Home", "Search", "Downloading"]);
+        act(&mut nav, Action::Search);
+        assert_eq!(
+            titles(&nav),
+            ["Home", "Downloading", "Search"],
+            "nothing is dropped"
+        );
+        assert_eq!(
+            log.borrow().last(),
+            Some(&("Search", Input::Action(Action::Search))),
+            "Search gets the action"
+        );
+        act(&mut nav, Action::Back);
+        assert_eq!(titles(&nav), ["Home", "Downloading"]);
     }
 
     #[test]

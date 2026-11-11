@@ -156,6 +156,10 @@ pub trait Section {
     fn shown(&mut self, _ctx: &Ctx) {}
     /// Called once a frame for every section, focused or not, so a download goes on meanwhile.
     fn tick(&mut self, _ctx: &mut Ctx) {}
+    /// Whether it has work going that closing Settings would cancel: a Core download.
+    fn working(&self) -> bool {
+        false
+    }
     /// Where each of `rows` is drawn, with its index, for the mouse: the cards of [`row_rects`]
     /// unless the section lays out its rows itself.
     fn layout(&self, rows: &[Row]) -> Vec<(Rect, usize)> {
@@ -440,6 +444,10 @@ impl Screen for Settings {
         for section in &mut self.sections {
             section.tick(ctx);
         }
+    }
+
+    fn working(&self) -> bool {
+        self.sections.iter().any(|s| s.working())
     }
 
     fn hints(&self) -> Vec<Hint> {
