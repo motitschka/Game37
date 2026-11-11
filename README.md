@@ -387,6 +387,10 @@ After Setup, or once it's done:
   says so and names that folder; Settings → BIOS has a PS2 row, and Setup's BIOS note names every
   ticked System that needs a BIOS. No other Embedded System needs one: the Dolphin Core downloads
   Dolphin's system files for GameCube and Wii with it, and 3DS plays without the 3DS's system files.
+- **The DS BIOS and firmware (optional).** DS plays without them, on melonDS DS's built-in
+  replacements, but some Games are more stable with the real ones. Dump `bios7.bin`, `bios9.bin` and
+  `firmware.bin` from your own DS and put all three, named exactly so, in the Games Root's `bios/`
+  folder. Game37 uses them only when all three are there; Settings → BIOS says which are missing.
 - **Emulators that need files from your own console**, set up inside the emulator itself rather than in
   the Games Root: Switch keys for Ryubing, the PS3 firmware for RPCS3, and the PS4 modules for shadPS4.
 

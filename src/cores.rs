@@ -323,6 +323,27 @@ pub static BEETLE_PSX_HW: CoreInfo = CoreInfo {
     saves: InGameSaves::SaveMemory,
     touch: None,
 };
+
+/// The DS's own BIOS and firmware, dumped from a DS. They're optional: without all three in
+/// `<Games Root>/bios/`, melonDS DS plays on its built-in FreeBIOS and firmware, which run most
+/// Games but are less compatible (issue #42). It uses none of them unless its firmware option names
+/// the firmware, and never mixes its own with these.
+pub const DS_SYSFILES: [&str; 3] = ["bios7.bin", "bios9.bin", "firmware.bin"];
+
+/// melonDS DS's option naming the DS firmware it loads from its system directory, `/notfound`
+/// (none) by default.
+pub const DS_FIRMWARE_OPTION: &str = "melonds_firmware_nds_path";
+
+/// The [`DS_SYSFILES`] missing from `<games_root>/bios/`, in order. melonDS DS opens them by these
+/// exact names, so case counts here, unlike for the PS1 and PS2 BIOS. Empty files don't count.
+pub fn missing_ds_sysfiles(games_root: &Path) -> Vec<&'static str> {
+    let bios = games_root.join("bios");
+    DS_SYSFILES
+        .into_iter()
+        .filter(|name| !fs::metadata(bios.join(name)).is_ok_and(|m| m.is_file() && m.len() > 0))
+        .collect()
+}
+
 /// Options chosen for FR-DS-1–3: two hybrid layouts (one large screen, one small), the touch
 /// pointer and joystick cursor both live, and a visible cursor for aiming it.
 pub static MELONDS_DS: CoreInfo = CoreInfo {

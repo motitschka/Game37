@@ -204,7 +204,13 @@ fn core_options(
     core: &CoreInfo,
     game: &Path,
 ) -> Vec<(&'static str, &'static str)> {
-    core.options_for(system, game, ctx.screen_layout(system))
+    let mut options = core.options_for(system, game, ctx.screen_layout(system));
+    // With the DS's own BIOS and firmware all there, name the firmware, without which melonDS DS
+    // ignores the BIOS too and plays on its built-in ones (#42).
+    if std::ptr::eq(core, &cores::MELONDS_DS) && cores::missing_ds_sysfiles(&ctx.games_root).is_empty() {
+        options.push((cores::DS_FIRMWARE_OPTION, "firmware.bin"));
+    }
+    options
 }
 
 /// The controller `core` is told sits in each port for `game`, of `system`: on Wii the one chosen
@@ -1607,6 +1613,32 @@ mod tests {
         }
         ctx.set_screen_layout(nds, ScreenLayout::SideBySide);
         assert!(options(&ctx).contains(&("melonds_screen_layout1", "left-right")));
+    }
+
+    /// #42: melonDS DS is told to load `firmware.bin`, and so the DS's own BIOS too, only once all
+    /// three of the DS's files are in the BIOS folder; until then it keeps its built-in ones.
+    #[test]
+    fn a_ds_game_names_the_firmware_once_the_ds_bios_and_firmware_are_all_there() {
+        let dir = TempDir::new().unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = dir.path().to_path_buf();
+        let bios = dir.path().join("bios");
+        fs::create_dir_all(&bios).unwrap();
+        let nds = systems::by_id("nds").unwrap();
+        let game = dir.path().join("nds/Game.nds");
+        let firmware = (cores::DS_FIRMWARE_OPTION, "firmware.bin");
+        let options = |ctx: &Ctx| core_options(ctx, nds, &cores::MELONDS_DS, &game);
+
+        fs::write(bios.join("bios7.bin"), b"x").unwrap();
+        fs::write(bios.join("firmware.bin"), b"x").unwrap();
+        assert!(
+            !options(&ctx).iter().any(|(k, _)| *k == cores::DS_FIRMWARE_OPTION),
+            "bios9.bin is missing, and melonDS DS doesn't mix its own files with the DS's"
+        );
+        fs::write(bios.join("bios9.bin"), b"x").unwrap();
+        assert!(options(&ctx).contains(&firmware));
+        let gba = core_options(&ctx, systems::by_id("gba").unwrap(), &cores::MGBA, &game);
+        assert!(!gba.contains(&firmware), "only melonDS DS is told");
     }
 
     /// A Wii Game starts Dolphin with the controller chosen for it in its Options Menu: the Wii
