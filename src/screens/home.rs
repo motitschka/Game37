@@ -42,6 +42,8 @@ const PITCH: f32 = COVER_W + COVER_GAP;
 const SEE_ALL_W: f32 = 150.0;
 /// The focused cover grows by this much on each side.
 const GROW: f32 = 8.0;
+/// How wide the fade under a Shelf's paging arrow is.
+const EDGE_FADE_W: f32 = 140.0;
 const WHEEL_STEP: f32 = 120.0;
 
 pub fn name(shelf: Shelf) -> &'static str {
@@ -347,6 +349,20 @@ impl Home {
             (self.hscroll[i] < max, W - M / 2.0, 1.0),
         ] {
             if show {
+                // The Shelf fades into the background under the arrow, so the arrow sits on an
+                // edge rather than on a cover, and the cut-off cover reads as "more this way".
+                let scrim = Rect::new(
+                    if dir < 0.0 { 0.0 } else { W - EDGE_FADE_W },
+                    y - 16.0,
+                    EDGE_FADE_W,
+                    COVER_H + 32.0,
+                );
+                let (from, to) = if dir < 0.0 {
+                    (BG.alpha(0.9), BG.alpha(0.0))
+                } else {
+                    (BG.alpha(0.0), BG.alpha(0.9))
+                };
+                gfx.fill_round_rect_gradient(scrim, 0.0, from, to, (1.0, 0.0));
                 gfx.fill_circle(x, cy, 26.0, SURFACE2.alpha(0.92));
                 let d = 6.0 * dir;
                 gfx.line(x - d, cy - 12.0, x + d, cy, 3.0, TEXT);

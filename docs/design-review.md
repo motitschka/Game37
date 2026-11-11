@@ -40,8 +40,9 @@ focus again.
 - [x] **Home, an empty Shelf with focus** drew the full white focus ring with its violet glow around
   a box that only holds a hint: the loudest thing on the screen for something you can't act on. It
   now gets a quiet accent outline in place of its dashed border.
-- [ ] **Home, the paging arrows** sit on top of the last visible cover. Put them in the side margin,
-  or fade the Shelf's edge under them.
+- [x] **Home, the paging arrows** sat on top of the last visible cover. The Shelf now fades into the
+  background under each arrow, so the arrow sits on an edge and the cut-off cover reads as "more
+  this way".
 - [ ] **Details** puts everything in the top half and leaves the bottom ~40% empty. Give the cover
   and the actions more of the height. (Its file path line is fine: it's shortened with `~`, so a
   real Games Root reads `~/Games/snes/…`; it only looks long in the smoke shots, whose Games Root
