@@ -285,6 +285,12 @@ impl Library {
         Library::init(Connection::open(path)?)
     }
 
+    /// Opens the library in `data_dir` (`library.db`), as a start with a Config and First-run
+    /// Setup's Finish do.
+    pub fn open_in(data_dir: &Path) -> Result<Library, DbError> {
+        Library::open(&data_dir.join("library.db"))
+    }
+
     pub fn open_in_memory() -> Result<Library, DbError> {
         Library::init(Connection::open_in_memory()?)
     }

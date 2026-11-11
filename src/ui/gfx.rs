@@ -256,6 +256,38 @@ pub struct Gfx<'tc> {
     pictures: PictureCache<Option<Texture<'tc>>>,
     /// The renderer's logical height, as last set: `app::canvas` starts it at 1080.
     logical_h: u32,
+    /// A fullscreen change asked of the window that it hasn't shown yet.
+    fullscreen: FullscreenRequest,
+}
+
+/// A fullscreen change asked of the window, until the window shows it. SDL applies fullscreen a
+/// frame or more after it is asked, so F11 flips what was last asked rather than what the window
+/// shows: otherwise a second F11 before the first took effect asks for the same again and is lost
+/// (#50).
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+struct FullscreenRequest {
+    pending: Option<bool>,
+}
+
+impl FullscreenRequest {
+    /// The window shows `actual`: a request it now matches is done.
+    fn observe(&mut self, actual: bool) {
+        if self.pending == Some(actual) {
+            self.pending = None;
+        }
+    }
+
+    /// Asks for `on`.
+    fn ask(&mut self, on: bool) {
+        self.pending = Some(on);
+    }
+
+    /// What F11 asks for while the window shows `actual`: the opposite of the pending request, or
+    /// of `actual` when there is none.
+    fn toggled(&mut self, actual: bool) -> bool {
+        self.observe(actual);
+        !self.pending.unwrap_or(actual)
+    }
 }
 
 /// The logical height to draw at in a window `pixel_w`×`pixel_h` pixels: a running Game (and what
@@ -405,6 +437,7 @@ impl<'tc> Gfx<'tc> {
             images: HashMap::new(),
             pictures: PictureCache::new(),
             logical_h: super::H as u32,
+            fullscreen: FullscreenRequest::default(),
         }
     }
 
@@ -955,22 +988,57 @@ impl<'tc> Gfx<'tc> {
         }
     }
 
-    pub fn is_fullscreen(&self) -> bool {
-        self.canvas.window().fullscreen_state() != sdl3::video::FullscreenType::Off
+    /// Whether the window is fullscreen now, which may lag a request by a frame or more. The loop
+    /// reads it every frame, which also ends a request the window now shows.
+    pub fn is_fullscreen(&mut self) -> bool {
+        let actual = self.canvas.window().fullscreen_state() != sdl3::video::FullscreenType::Off;
+        self.fullscreen.observe(actual);
+        actual
     }
 
     pub fn set_fullscreen(&mut self, on: bool) {
+        self.fullscreen.ask(on);
         let _ = self.canvas.window_mut().set_fullscreen(on);
     }
 
+    /// F11: flips what was last asked, so a press before the last one took effect still counts.
     pub fn toggle_fullscreen(&mut self) {
-        self.set_fullscreen(!self.is_fullscreen());
+        let actual = self.canvas.window().fullscreen_state() != sdl3::video::FullscreenType::Off;
+        let on = self.fullscreen.toggled(actual);
+        self.set_fullscreen(on);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #50: two F11 presses before the window follows the first end where they started, and a
+    /// change the window manager made after a request was shown is flipped from what it shows.
+    #[test]
+    fn f11_flips_the_last_request_until_the_window_shows_it() {
+        let mut request = FullscreenRequest::default();
+        // Windowed; F11 asks for fullscreen, and again before the window follows: back to windowed.
+        let first = request.toggled(false);
+        request.ask(first);
+        assert!(first);
+        let second = request.toggled(false);
+        request.ask(second);
+        assert!(!second, "the second press undoes the first");
+        // The window never left windowed, so the request is done.
+        request.observe(false);
+        assert_eq!(request.pending, None);
+
+        // F11 to fullscreen, which the window shows; then the window manager leaves fullscreen.
+        let on = request.toggled(false);
+        request.ask(on);
+        request.observe(true);
+        assert_eq!(request.pending, None);
+        assert!(
+            request.toggled(false),
+            "F11 follows the window, not the old request"
+        );
+    }
 
     #[test]
     fn a_running_game_keeps_1080_and_the_menus_fill_the_window() {
