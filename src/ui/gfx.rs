@@ -290,7 +290,15 @@ pub struct Gfx<'tc> {
     fullscreen: FullscreenRequest,
     /// The layer everything is drawn on, see [`Gfx::with_layer`].
     layer: Layer,
+    /// Whether things fade in as they arrive (`Ctx::animate`, set each frame by the app). Off by
+    /// default, so screenshot mode and tests draw everything in full.
+    animate: bool,
+    /// When each Artwork picture was first drawn, so it fades in over [`ARTWORK_FADE_SECS`].
+    arrived: HashMap<u64, std::time::Instant>,
 }
+
+/// How long Artwork takes to fade in over its placeholder when it arrives.
+const ARTWORK_FADE_SECS: f32 = 0.18;
 
 /// A fullscreen change asked of the window, until the window shows it. SDL applies fullscreen a
 /// frame or more after it is asked, so F11 flips what was last asked rather than what the window
@@ -471,6 +479,8 @@ impl<'tc> Gfx<'tc> {
             logical_h: super::H as u32,
             fullscreen: FullscreenRequest::default(),
             layer: Layer::NONE,
+            animate: false,
+            arrived: HashMap::new(),
         }
     }
 
@@ -609,6 +619,7 @@ impl<'tc> Gfx<'tc> {
     /// Draws Artwork filling `r` with corners of `radius`: scaled to cover `r` and cropped to it,
     /// centred, never stretched. Its texture is made on first draw and kept while it is drawn.
     pub fn draw_picture(&mut self, picture: &Picture, r: Rect, radius: f32) {
+        let fade = self.picture_opacity(picture.id);
         let creator = self.creator;
         let texture = self
             .pictures
@@ -664,12 +675,13 @@ impl<'tc> Gfx<'tc> {
         }
         band_indices(n, n, 0, &mut indices);
         let layer = self.layer;
+        let opacity = layer.opacity.clamp(0.0, 1.0) * fade;
         let vertices: Vec<Vertex> = vertices
             .into_iter()
             .map(|v| Vertex {
                 position: layer.point(v.position),
                 color: FColor {
-                    a: v.color.a * layer.opacity.clamp(0.0, 1.0),
+                    a: v.color.a * opacity,
                     ..v.color
                 },
                 tex_coord: v.tex_coord,
@@ -694,6 +706,22 @@ impl<'tc> Gfx<'tc> {
             mode.refresh_rate as f64
         };
         (rate > 0.0).then_some(rate)
+    }
+
+    /// Whether things fade in as they arrive: the app sets it from `Ctx::animate` every frame.
+    pub fn set_animate(&mut self, on: bool) {
+        self.animate = on;
+    }
+
+    /// How far the Artwork picture `id` has faded in, 0 to 1: 1 once it has been shown for
+    /// [`ARTWORK_FADE_SECS`], and always 1 without animation.
+    pub fn picture_opacity(&mut self, id: u64) -> f32 {
+        if !self.animate {
+            return 1.0;
+        }
+        let now = std::time::Instant::now();
+        let first = *self.arrived.entry(id).or_insert(now);
+        ((now - first).as_secs_f32() / ARTWORK_FADE_SECS).min(1.0)
     }
 
     /// Draws what `f` draws on `layer`, on top of the layer already in use (offsets add up,

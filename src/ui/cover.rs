@@ -44,11 +44,16 @@ pub fn draw_focused(gfx: &mut Gfx<'_>, r: Rect, game: &GameRow, art: &Art, badge
     if focus > 0.0 {
         focus_ring_faded(gfx, r, COVER_RADIUS, focus);
     }
+    let colour = Colour::hex(system.map_or(0x5B6477, |s| s.colour));
     match art {
-        Art::Ready(picture) => gfx.draw_picture(picture, r, COVER_RADIUS),
-        Art::Loading | Art::Placeholder => {
-            placeholder(gfx, r, game, Colour::hex(system.map_or(0x5B6477, |s| s.colour)))
+        Art::Ready(picture) => {
+            // Artwork that has just arrived fades in over the placeholder it replaces.
+            if gfx.picture_opacity(picture.id) < 1.0 {
+                placeholder(gfx, r, game, colour);
+            }
+            gfx.draw_picture(picture, r, COVER_RADIUS)
         }
+        Art::Loading | Art::Placeholder => placeholder(gfx, r, game, colour),
     }
     if badge {
         let style = TextStyle::new(11, Weight::Bold, TEXT);

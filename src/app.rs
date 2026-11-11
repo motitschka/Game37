@@ -356,6 +356,7 @@ fn interactive(
         let pads = input.pad_states();
         // A Game's first frame maps its touch screen with the Game's own presentation.
         gfx.fit(!nav.base().chrome());
+        gfx.set_animate(ctx.animate);
         let state = events.mouse_state();
         let mouse = Mouse {
             at: Some(gfx.to_logical(state.x(), state.y())),
