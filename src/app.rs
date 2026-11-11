@@ -239,8 +239,12 @@ fn interactive(
     let gamepads = sdl.gamepad().map_err(|e| e.to_string())?;
     let audio = sdl.audio().map_err(|e| eprintln!("game37: no sound: {e}")).ok();
     let fonts = Fonts::new()?;
-    // OpenGL, because later milestones host libretro OpenGL cores in this renderer.
-    let canvas = canvas(&video, 1600, 900, c"opengl")?;
+    // OpenGL, because Cores that need it are hosted beside this renderer. Without it the menus
+    // and the Cores that draw in software still work; the others say OpenGL is missing (#43).
+    let canvas = canvas(&video, 1600, 900, c"opengl").or_else(|e| {
+        eprintln!("game37: {e}; using the software renderer, so Games that need OpenGL won't start");
+        canvas(&video, 1600, 900, c"software")
+    })?;
     // SAFETY: the renderer is alive.
     let vsync = unsafe { sdl3::sys::render::SDL_SetRenderVSync(canvas.raw(), 1) };
     if !vsync {

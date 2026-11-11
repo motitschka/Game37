@@ -669,6 +669,17 @@ impl CoreInfo {
         }
     }
 
+    /// Whether this Core can't run a Game without an OpenGL host beside the SDL renderer, which
+    /// only the `opengl` renderer gives: once `SET_HW_RENDER` is refused, Mupen64Plus-Next and
+    /// Azahar refuse to load the Game, and Dolphin does too but then crashes Game37 (issue #43).
+    /// LRPS2 is set to its OpenGL renderer. Beetle PSX HW and melonDS DS fall back to their own
+    /// software renderers, and PPSSPP's host is GLX's, made apart from the renderer.
+    pub fn needs_gl(&self) -> bool {
+        [&MUPEN64PLUS_NEXT, &AZAHAR, &DOLPHIN, &LRPS2]
+            .iter()
+            .any(|core| std::ptr::eq(self, *core))
+    }
+
     /// Whether the left stick also presses the d-pad: for Systems without an analog stick. N64,
     /// GameCube, Wii (the Nunchuk's), PSP, PS2 and 3DS have one, so their Cores read it as analog
     /// only.
