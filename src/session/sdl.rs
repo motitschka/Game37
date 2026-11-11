@@ -274,7 +274,7 @@ impl Session {
                 message: launch::missing_bios_message(&ctx.games_root, rule),
             });
         }
-        let gl = open_gl(core_info, frontend, None, system.name).map_err(StartError::generic)?;
+        let gl = open_gl(core_info, frontend, None, system.name)?;
         let fail = |e: &dyn Display| format!("{} couldn't start {}: {e}.", core_info.name, game.title);
         let root = &ctx.games_root;
         let dirs = CoreDirs {
@@ -609,24 +609,37 @@ impl Screen for Session {
 
 /// Opens the OpenGL host `core_info`'s [`GlKind`] needs: beside the SDL renderer's own window and
 /// context `frontend` (`None` on another renderer), or GLX's, on the X display `display` (`None`:
-/// `$DISPLAY`). `Err` is the message to show for the System `system_name`, with the real error
-/// logged to stderr.
+/// `$DISPLAY`). `Err` is the failure to show for the System `system_name`, with the real error
+/// logged to stderr: also when the Core [needs OpenGL](CoreInfo::needs_gl) and `frontend` is
+/// `None`, so the Core is never loaded without the host it needs (issue #43).
 fn open_gl(
     core_info: &CoreInfo,
     frontend: Option<(Window, SDL_GLContext)>,
     display: Option<&CStr>,
     system_name: &str,
-) -> Result<Option<Box<dyn GlHost>>, String> {
-    match core_info.gl() {
-        GlKind::Sdl => Ok(frontend.map(|(window, context)| Box::new(SdlGl::new(window, context)) as _)),
-        GlKind::Glx => GlxGl::open(display, frontend)
+) -> Result<Option<Box<dyn GlHost>>, StartError> {
+    match (core_info.gl(), frontend) {
+        (GlKind::Sdl, Some((window, context))) => Ok(Some(Box::new(SdlGl::new(window, context)))),
+        (GlKind::Sdl, None) if core_info.needs_gl() => Err(StartError {
+            title: NO_GL_TITLE,
+            message: format!(
+                "{system_name} games need OpenGL, which this computer's graphics driver doesn't provide."
+            ),
+        }),
+        (GlKind::Sdl, None) => Ok(None),
+        (GlKind::Glx, frontend) => GlxGl::open(display, frontend)
             .map(|host| Some(Box::new(host) as Box<dyn GlHost>))
             .map_err(|e| {
                 eprintln!("game37: can't open the GLX host: {e}");
-                format!("{system_name} games need X11 (XWayland), which isn't available.")
+                StartError::generic(format!(
+                    "{system_name} games need X11 (XWayland), which isn't available."
+                ))
             }),
     }
 }
+
+/// The title of the message shown when a Game's Core needs OpenGL and the renderer has none.
+const NO_GL_TITLE: &str = "OpenGL isn't available";
 
 /// The state a session starts from: the Save State in `slot` when the player chose one
 /// (FR-DET-4), else the Resume State (FR-EMB-6).
@@ -2846,10 +2859,77 @@ mod tests {
         assert!(open_gl(&cores::MESEN, None, None, "NES").unwrap().is_none());
     }
 
+    /// On the software renderer (no frontend context), the Systems whose Cores draw in software
+    /// still play, and those whose Cores need OpenGL are refused with a message saying so
+    /// (issue #43). PSP is left out: its GLX host doesn't come from the renderer.
+    #[test]
+    fn without_a_frontend_context_only_cores_that_need_opengl_are_refused() {
+        for id in ["nes", "snes", "gb", "gbc", "gba", "nds", "ps1"] {
+            let system = systems::by_id(id).unwrap();
+            let core = cores::for_system(system).unwrap();
+            match open_gl(core, None, None, system.name) {
+                Ok(host) => assert!(host.is_none(), "{id}"),
+                Err(e) => panic!("{id} refused: {e}"),
+            }
+        }
+        for id in ["n64", "3ds", "gc", "wii", "ps2"] {
+            let system = systems::by_id(id).unwrap();
+            let core = cores::for_system(system).unwrap();
+            match open_gl(core, None, None, system.name) {
+                Err(e) => {
+                    assert_eq!(e.title, "OpenGL isn't available", "{id}");
+                    assert_eq!(
+                        e.message,
+                        format!(
+                            "{} games need OpenGL, which this computer's graphics driver doesn't provide.",
+                            system.name
+                        )
+                    );
+                }
+                Ok(_) => panic!("{id} was given a Core without OpenGL"),
+            }
+        }
+    }
+
+    /// A Game whose Core needs OpenGL, started without a frontend context, gets the OpenGL message
+    /// before its Core is loaded: there is no Core installed here, so loading it would fail with
+    /// the generic title instead (issue #43).
+    #[test]
+    fn a_game_whose_core_needs_opengl_does_not_start_without_a_frontend_context() {
+        let _serial = serial();
+        let dir = TempDir::new().unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = dir.path().join("Games");
+        ctx.data_dir = dir.path().join("data");
+        let play = Play {
+            game: GameRow {
+                id: 1,
+                system: "n64".into(),
+                rel_path: "n64/Game.n64".into(),
+                title: "Game".into(),
+                date_added: 0,
+                last_played: None,
+                playtime_secs: 0,
+                favorite: false,
+            },
+            start: Start::PowerOn,
+        };
+        match Session::start(&play, &ctx, None, None, None) {
+            Err(e) => {
+                assert_eq!(e.title, "OpenGL isn't available");
+                assert_eq!(
+                    e.message,
+                    "Nintendo 64 games need OpenGL, which this computer's graphics driver doesn't provide."
+                );
+            }
+            Ok(_) => panic!("expected an error"),
+        }
+    }
+
     #[test]
     fn a_glx_core_with_no_x_display_fails_with_the_system_name_in_the_message() {
         match open_gl(&cores::PPSSPP, None, Some(c"/nonexistent/game37-test:0"), "PSP") {
-            Err(message) => assert_eq!(message, "PSP games need X11 (XWayland), which isn't available."),
+            Err(e) => assert_eq!(e.message, "PSP games need X11 (XWayland), which isn't available."),
             Ok(_) => panic!("expected an error"),
         }
     }
