@@ -437,6 +437,53 @@ pub(crate) fn close(nav: &mut Nav, ctx: &mut Ctx, launcher: &mut Launcher) {
     nav.leave_all(ctx);
 }
 
+/// What a screenshot step's inputs did.
+struct StepDone {
+    /// An input quit Game37.
+    quit: bool,
+    /// `back` was given while a Game ran, standing for Esc.
+    esc: bool,
+}
+
+/// Hands a screenshot step's `inputs` to `nav` one at a time, as the window would, with `after`
+/// carrying out what each asked for (a Game to start, say). `after` returns true when the input
+/// finished First-run Setup, writing the Config and switching to Home: the step's later inputs
+/// then go nowhere, as in `feed`, so they neither reach Setup after it is gone nor act on Home
+/// (#52). A running Game takes no menu input; `back` stands for Esc.
+fn shot_inputs(
+    inputs: Vec<Input>,
+    nav: &mut Nav,
+    ctx: &mut Ctx,
+    hits: &Hits,
+    view: &mut View,
+    mut after: impl FnMut(&mut Nav, &mut Ctx) -> Result<bool, String>,
+) -> Result<StepDone, String> {
+    let mut esc = false;
+    for i in inputs {
+        if sdl::playing(nav) {
+            esc |= i == Input::Action(Action::Back);
+            continue;
+        }
+        match i {
+            Input::Action(_) => view.kind = InputKind::Controller,
+            Input::Text(_) => view.kind = InputKind::Keyboard,
+            Input::Pointer(p) => {
+                view.kind = InputKind::Keyboard;
+                if let Pointer::Move { x, y } = p {
+                    view.pointer = Some((x, y));
+                }
+            }
+        }
+        if nav.handle(i, hits, ctx) == Flow::Quit {
+            return Ok(StepDone { quit: true, esc });
+        }
+        if after(nav, ctx)? {
+            break;
+        }
+    }
+    Ok(StepDone { quit: false, esc })
+}
+
 fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screenshot) -> Result<(), String> {
     sdl3::hint::set("SDL_VIDEO_DRIVER", "offscreen");
     sdl3::hint::set("SDL_AUDIO_DRIVER", "dummy");
@@ -460,51 +507,33 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
     let mut hits = draw_settled(&mut gfx, &mut nav, &ctx, &view, &clock);
     gfx.present();
     'steps: for step in shot.steps {
-        let mut esc = false;
-        for i in step.inputs() {
-            // A running Game takes no menu input; `back` stands for Esc.
-            if sdl::playing(&mut nav) {
-                esc |= i == Input::Action(Action::Back);
-                continue;
-            }
-            match i {
-                Input::Action(_) => view.kind = InputKind::Controller,
-                Input::Text(_) => view.kind = InputKind::Keyboard,
-                Input::Pointer(p) => {
-                    view.kind = InputKind::Keyboard;
-                    if let Pointer::Move { x, y } = p {
-                        view.pointer = Some((x, y));
-                    }
-                }
-            }
-            if nav.handle(i, &hits, &mut ctx) == Flow::Quit {
-                break 'steps;
-            }
-            copy_clipboard_request(&mut ctx, &video);
+        let done = shot_inputs(step.inputs(), &mut nav, &mut ctx, &hits, &mut view, |nav, ctx| {
+            copy_clipboard_request(ctx, &video);
             // Screenshot mode never opens the file manager.
             ctx.show_file_request = None;
             if let Some(config) = ctx.setup_finished.take() {
-                finish_setup(&mut nav, &mut ctx, config, |ctx| {
-                    start_shot_library(ctx, shot.artwork)
-                })?;
-                // Finish already wrote the Config; later input in this step must not reach
-                // Setup, which would save again or step it back after it is gone.
-                break;
+                finish_setup(nav, ctx, config, |ctx| start_shot_library(ctx, shot.artwork))?;
+                return Ok(true);
             }
             if let Some(game) = ctx.launch.take() {
-                launcher.start(&game, &mut nav, &ctx);
+                launcher.start(&game, nav, ctx);
             }
             if let Some(play) = ctx.play.take() {
                 sdl::start(
                     &play,
-                    &mut nav,
-                    &ctx,
+                    nav,
+                    ctx,
                     gfx.gl_context(),
                     audio.as_ref(),
                     Some(SHOT_REFRESH),
                 );
             }
+            Ok(false)
+        })?;
+        if done.quit {
+            break 'steps;
         }
+        let esc = done.esc;
         for _ in 0..step.frames() {
             sdl::tick(
                 &mut nav,
@@ -1350,5 +1379,74 @@ mod tests {
                 games_root: std::path::PathBuf::from("/games")
             })
         );
+    }
+
+    /// #52: once an input of a screenshot step finishes Setup, the step's later inputs reach
+    /// neither Setup nor the Home that replaced it.
+    #[test]
+    fn a_screenshot_step_hands_on_no_input_after_setup_finished() {
+        let setup_log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let home_log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut nav = Nav::single(Box::new(FinishesSetupOnFirstInput(setup_log.clone())));
+        let mut ctx = Ctx::empty();
+        let mut view = View {
+            kind: InputKind::Controller,
+            pointer: None,
+        };
+        let inputs = crate::cli::Step::Text("abc".to_owned()).inputs();
+        let done = shot_inputs(
+            inputs,
+            &mut nav,
+            &mut ctx,
+            &Hits::default(),
+            &mut view,
+            |nav, ctx| {
+                if ctx.setup_finished.take().is_some() {
+                    *nav = Nav::single(Box::new(FinishesSetupOnFirstInput(home_log.clone())));
+                    return Ok(true);
+                }
+                Ok(false)
+            },
+        )
+        .unwrap();
+        assert!(!done.quit && !done.esc);
+        assert_eq!(*setup_log.borrow(), [Input::Text(TextInput::Char('a'))]);
+        assert!(home_log.borrow().is_empty(), "Home got {:?}", home_log.borrow());
+    }
+
+    /// #52, through the real screenshot mode: Finish on a step's first input switches to Home, the
+    /// rest of the step doesn't reach Setup, and the shot is still written.
+    #[test]
+    fn screenshot_mode_stops_a_step_once_setup_has_finished() {
+        let _serial = crate::libretro::tests::serial();
+        let dir = tempfile::tempdir().unwrap();
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let nav = Nav::single(Box::new(FinishesSetupOnFirstInput(log.clone())));
+        let mut ctx = Ctx::empty();
+        ctx.data_dir = dir.path().join("data");
+        ctx.config_path = dir.path().join("config.toml");
+        let launcher = Launcher::new(Box::new(NeverExits::default()), dir.path().join("logs"));
+        let out = dir.path().join("shot.bmp");
+        let shot = Screenshot {
+            out: out.clone(),
+            // One step, two inputs: typing "ab".
+            steps: vec![crate::cli::Step::Text("ab".to_owned())],
+            missing_emulators: Emulators::all_installed(),
+            frames: 1,
+            artwork: false,
+            screen: None,
+            size: (1920, 1080),
+        };
+        screenshot(nav, ctx, launcher, shot).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            *log.borrow(),
+            [Input::Text(TextInput::Char('a'))],
+            "the step's second input must not reach Setup once Finish has run"
+        );
+        assert!(
+            dir.path().join("data/library.db").exists(),
+            "Finish opened the library"
+        );
+        assert!(out.exists(), "the shot is written after Finish");
     }
 }
