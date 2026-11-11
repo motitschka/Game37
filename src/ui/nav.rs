@@ -1,6 +1,7 @@
 //! Screens and the navigation between them: top-level tabs (Home, Consoles), each with a stack of
 //! pushed sub-screens.
 
+use super::anim::{Eased, FADE_TAU};
 use super::gfx::Gfx;
 use super::input::{Action, Input, Pointer};
 use super::{Rect, hit};
@@ -163,6 +164,10 @@ pub struct Nav {
     active: usize,
     /// Search and Settings, for a Nav with a library; First-run Setup has none.
     entries: Option<Entries>,
+    /// How far the base screen has faded in, 0 to 1, and which screen that was (by address):
+    /// a screen opened, closed back to or switched to fades in.
+    appear: Eased,
+    shown: Option<usize>,
 }
 
 impl Nav {
@@ -180,6 +185,8 @@ impl Nav {
             tabs,
             active: 0,
             entries: None,
+            appear: Eased::new(1.0),
+            shown: None,
         }
     }
 
@@ -234,6 +241,19 @@ impl Nav {
     pub fn base(&mut self) -> &mut dyn Screen {
         let i = self.base_index();
         self.tabs[self.active].stack[i].as_mut()
+    }
+
+    /// How far the base screen has faded in, 0 to 1, stepping its fade: a different base screen
+    /// than last time starts from 0. The first screen shown starts faded in.
+    pub fn base_appearance(&mut self, animate: bool) -> f32 {
+        let i = self.base_index();
+        let id = self.tabs[self.active].stack[i].as_ref() as *const dyn Screen as *const () as usize;
+        if self.shown != Some(id) {
+            self.appear.jump(if self.shown.is_some() { 0.0 } else { 1.0 });
+            self.appear.set(1.0);
+            self.shown = Some(id);
+        }
+        self.appear.step(animate, FADE_TAU)
     }
 
     /// The modal on top, if any.

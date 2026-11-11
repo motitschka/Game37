@@ -677,6 +677,16 @@ impl Library {
         self.set_setting(&format!("screen_layout_{system}"), layout.id())
     }
 
+    /// Whether the player asked for reduced motion (Settings → Display): no fades, slides or
+    /// gliding. Full motion until changed.
+    pub fn reduced_motion(&self) -> Result<bool, DbError> {
+        Ok(self.setting("reduced_motion")?.as_deref() == Some("1"))
+    }
+
+    pub fn set_reduced_motion(&self, reduced: bool) -> Result<(), DbError> {
+        self.set_setting("reduced_motion", if reduced { "1" } else { "0" })
+    }
+
     /// Whether the window was fullscreen when Game37 last quit or F11 last toggled it, for Remember
     /// last; windowed if never stored.
     pub fn last_fullscreen(&self) -> Result<bool, DbError> {

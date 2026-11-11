@@ -1404,6 +1404,9 @@ def screen_settings_display():
     y, h = TOP, 92
     r = settings_row(sv, y, h, "Startup window mode", sub="Applies the next time Game37 starts")
     choice_value(sv, r, y, h, "Remember last")
+    y += h + 12
+    r = settings_row(sv, y, h, "Motion", sub="Reduced turns off fades, slides and gliding")
+    choice_value(sv, r, y, h, "Full")
     y = settings_group(sv, y + h + 12, "Screens")
     for label, layout, focused in [("DS layout", "Side by side", True), ("3DS layout", "Large and small", False)]:
         r = settings_row(sv, y, h, label, sub=SCREEN_LAYOUTS[layout], focused=focused)
