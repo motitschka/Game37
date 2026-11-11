@@ -26,8 +26,9 @@ focus again.
 - [x] **The Options panel slides in** from the right and the **Pause Menu** from the left, each
   fading in together with its dimmed backdrop. `Gfx` got a drawing `Layer` (offset and opacity)
   for this.
-- [ ] **List highlights glide.** The Options and Pause Menu rows, Settings sections and Setup rows
-  still move their highlight bar in one frame. An eased bar between rows would match the covers.
+- [x] **List highlights glide** in the Options menu and the Pause Menu: the highlight bar eases
+  between rows instead of jumping.
+- [ ] The same for Settings sections and rows, and Setup's rows.
 - [ ] **Artwork fades in** when it arrives, instead of swapping from placeholder to picture in one
   frame (most visible on a first scroll through a big library).
 - [ ] **Reduced motion.** A Settings → Display switch that turns all of this off, for players who

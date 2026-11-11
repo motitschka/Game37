@@ -4,7 +4,7 @@
 
 use crate::ctx::Ctx;
 use crate::session::states::{Rgb, SLOTS};
-use crate::ui::anim::{Eased, FADE_TAU};
+use crate::ui::anim::{Eased, FADE_TAU, FOCUS_TAU};
 use crate::ui::cover::{fit_lines, focus_ring};
 use crate::ui::gfx::{Align, Gfx, Layer, TextStyle};
 use crate::ui::input::{Action, Input, Pointer};
@@ -76,6 +76,8 @@ struct Slot {
 pub struct PauseMenu {
     /// How far the menu has come in, 0 to 1: it slides and fades in over the dimmed Game.
     appear: Eased,
+    /// Where the list's highlight bar is drawn, eased between rows.
+    bar: Eased,
     title: String,
     /// "<System> · <Playtime> played".
     meta: String,
@@ -98,6 +100,7 @@ impl PauseMenu {
     pub fn new(title: &str, meta: String, slots: Vec<Option<SlotInfo>>) -> PauseMenu {
         let mut menu = PauseMenu {
             appear: Eased::new(0.0),
+            bar: Eased::new(LIST_Y),
             title: title.to_owned(),
             meta,
             view: View::List,
@@ -345,6 +348,8 @@ impl Screen for PauseMenu {
             dy: 0.0,
             opacity: t,
         };
+        self.bar.set(LIST_Y + self.item as f32 * LIST_PITCH);
+        self.bar.step(ctx.animate, FOCUS_TAU);
         gfx.with_layer(layer, |gfx| self.draw_panel(gfx));
     }
     fn hints(&self) -> Vec<Hint> {
@@ -367,6 +372,9 @@ impl Screen for PauseMenu {
 
 /// How far the panel slides in from, in logical pixels.
 const SLIDE_IN: f32 = 72.0;
+/// Where the list's first row is, and the distance between rows.
+const LIST_Y: f32 = 320.0;
+const LIST_PITCH: f32 = 84.0;
 
 impl PauseMenu {
     /// Everything but the dimmed Game behind: the panel and what the current view shows.
@@ -384,14 +392,14 @@ impl PauseMenu {
         let meta = TextStyle::new(19, Weight::Medium, MUTED);
         gfx.text(M, 266.0, &self.meta, meta, Align::Left);
         self.item_hits.clear();
+        // The highlight glides between rows rather than jumping.
+        let bar_y = self.bar.value();
+        gfx.fill_round_rect(Rect::new(M - 24.0, bar_y, 456.0, 70.0), 14.0, SURFACE2);
+        gfx.fill_round_rect(Rect::new(M - 24.0, bar_y + 15.0, 5.0, 40.0), 2.0, ACCENT);
         for (i, label) in ITEMS.iter().enumerate() {
-            let y = 320.0 + i as f32 * 84.0;
+            let y = LIST_Y + i as f32 * LIST_PITCH;
             let r = Rect::new(M - 24.0, y, 456.0, 70.0);
             let on = i == self.item;
-            if on {
-                gfx.fill_round_rect(r, 14.0, SURFACE2);
-                gfx.fill_round_rect(Rect::new(M - 24.0, y + 15.0, 5.0, 40.0), 2.0, ACCENT);
-            }
             let weight = if on { Weight::Bold } else { Weight::Medium };
             gfx.text(M, y + 44.0, label, TextStyle::new(24, weight, TEXT), Align::Left);
             if i == 1 || i == 2 || i == 3 {

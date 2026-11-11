@@ -26,7 +26,7 @@ use crate::screens::message::Message;
 use crate::session::states::{self, Rgb, SLOTS, SaveData, StatePaths};
 use crate::session::{saves, sdl};
 use crate::systems::{self, Kind};
-use crate::ui::anim::{Eased, FADE_TAU};
+use crate::ui::anim::{Eased, FADE_TAU, FOCUS_TAU};
 use crate::ui::cover::{self, ellipsize, playtime_label};
 use crate::ui::gfx::{Align, Gfx, Layer, TextStyle};
 use crate::ui::input::{Action, Input, InputKind, Pointer};
@@ -158,6 +158,8 @@ type ReadSlot = Option<(Slot, Option<Rgb>)>;
 pub struct OptionsMenu {
     /// How far the menu has come in, 0 to 1: the panel slides and fades in over the dimmed screen.
     appear: Eased,
+    /// Where the list's highlight bar is drawn, eased between rows; `None` before the first draw.
+    bar: Option<Eased>,
     game: GameRow,
     /// "<System> · <Playtime> played".
     meta: String,
@@ -282,6 +284,7 @@ impl OptionsMenu {
         };
         OptionsMenu {
             appear: Eased::new(0.0),
+            bar: None,
             game,
             meta,
             items,
@@ -722,21 +725,25 @@ impl OptionsMenu {
         entry.draw_keyboard(gfx, x, top);
     }
 
-    fn draw_list(&mut self, gfx: &mut Gfx<'_>) {
+    fn draw_list(&mut self, gfx: &mut Gfx<'_>, animate: bool) {
         self.item_hits.clear();
         let pitch = if self.items.len() <= 8 {
             ITEM_PITCH
         } else {
             ITEM_PITCH_NINE
         };
+        // The highlight glides between rows rather than jumping.
+        let target = ITEM_Y + self.item as f32 * pitch;
+        let bar = self.bar.get_or_insert_with(|| Eased::new(target));
+        bar.set(target);
+        let bar_y = bar.step(animate, FOCUS_TAU);
+        let row = Rect::new(PANEL_X + 24.0, bar_y, PANEL_W - 48.0, 72.0);
+        gfx.fill_round_rect(row, 14.0, SURFACE2);
+        gfx.fill_round_rect(Rect::new(row.x, bar_y + 16.0, 5.0, 40.0), 2.0, ACCENT);
         for (i, &item) in self.items.iter().enumerate() {
             let y = ITEM_Y + i as f32 * pitch;
             let r = Rect::new(PANEL_X + 24.0, y, PANEL_W - 48.0, 72.0);
             let on = i == self.item;
-            if on {
-                gfx.fill_round_rect(r, 14.0, SURFACE2);
-                gfx.fill_round_rect(Rect::new(r.x, y + 16.0, 5.0, 40.0), 2.0, ACCENT);
-            }
             let enabled = self.enabled(item);
             let (ink, icon_ink) = match item {
                 _ if !enabled => (DIM, DIM),
@@ -1136,7 +1143,7 @@ impl OptionsMenu {
         match self.view {
             View::List => {
                 self.pick_hits.clear();
-                self.draw_list(gfx);
+                self.draw_list(gfx, ctx.animate);
             }
             View::Replace => {
                 self.item_hits.clear();
