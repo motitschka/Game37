@@ -34,9 +34,15 @@ const BLACK: Colour = Colour::hex(0x000000);
 /// Draws `game`'s cover in `r`: its Artwork `art` (`ctx.artwork.cover`), or placeholder art while
 /// there is none. `badge` shows the System badge, which a page about a single System leaves out.
 pub fn draw(gfx: &mut Gfx<'_>, r: Rect, game: &GameRow, art: &Art, badge: bool, focused: bool) {
+    draw_focused(gfx, r, game, art, badge, if focused { 1.0 } else { 0.0 });
+}
+
+/// [`draw`] with the focus ring at `focus` of its full strength (0 to 1), as it fades in after a
+/// move.
+pub fn draw_focused(gfx: &mut Gfx<'_>, r: Rect, game: &GameRow, art: &Art, badge: bool, focus: f32) {
     let system = systems::by_id(&game.system);
-    if focused {
-        focus_ring(gfx, r, COVER_RADIUS);
+    if focus > 0.0 {
+        focus_ring_faded(gfx, r, COVER_RADIUS, focus);
     }
     match art {
         Art::Ready(picture) => gfx.draw_picture(picture, r, COVER_RADIUS),
@@ -85,8 +91,13 @@ fn placeholder(gfx: &mut Gfx<'_>, r: Rect, game: &GameRow, colour: Colour) {
 
 /// The focus ring around a rect with corner radius `radius`: a white ring in a faint accent glow.
 pub fn focus_ring(gfx: &mut Gfx<'_>, r: Rect, radius: f32) {
-    gfx.stroke_round_rect(r.inset(-10.0), radius + 8.0, 10.0, ACCENT.alpha(0.4));
-    gfx.stroke_round_rect(r.inset(-5.0), radius + 5.0, 4.0, WHITE);
+    focus_ring_faded(gfx, r, radius, 1.0);
+}
+
+/// [`focus_ring`] at `strength` (0 to 1) of its full opacity.
+pub fn focus_ring_faded(gfx: &mut Gfx<'_>, r: Rect, radius: f32, strength: f32) {
+    gfx.stroke_round_rect(r.inset(-10.0), radius + 8.0, 10.0, ACCENT.alpha(0.4 * strength));
+    gfx.stroke_round_rect(r.inset(-5.0), radius + 5.0, 4.0, WHITE.alpha(strength));
 }
 
 /// The dark end of a placeholder gradient.

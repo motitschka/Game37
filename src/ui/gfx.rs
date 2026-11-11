@@ -239,6 +239,36 @@ pub fn crop_to_fill(src_w: f32, src_h: f32, dst_w: f32, dst_h: f32) -> (f32, f32
     }
 }
 
+/// Where and how strongly what is drawn lands: an offset in logical pixels and an opacity
+/// (0 to 1), so a panel can slide and fade in as one. [`Layer::NONE`] draws as asked.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Layer {
+    pub dx: f32,
+    pub dy: f32,
+    pub opacity: f32,
+}
+
+impl Layer {
+    pub const NONE: Layer = Layer {
+        dx: 0.0,
+        dy: 0.0,
+        opacity: 1.0,
+    };
+
+    fn point(self, p: FPoint) -> FPoint {
+        FPoint::new(p.x + self.dx, p.y + self.dy)
+    }
+
+    fn rect(self, r: Rect) -> FRect {
+        FRect::new(r.x + self.dx, r.y + self.dy, r.w, r.h)
+    }
+
+    /// `alpha` (0 to 255) at this layer's opacity.
+    fn alpha(self, alpha: u8) -> u8 {
+        (alpha as f32 * self.opacity.clamp(0.0, 1.0)).round() as u8
+    }
+}
+
 pub struct Gfx<'tc> {
     canvas: WindowCanvas,
     creator: &'tc TextureCreator<WindowContext>,
@@ -258,6 +288,8 @@ pub struct Gfx<'tc> {
     logical_h: u32,
     /// A fullscreen change asked of the window that it hasn't shown yet.
     fullscreen: FullscreenRequest,
+    /// The layer everything is drawn on, see [`Gfx::with_layer`].
+    layer: Layer,
 }
 
 /// A fullscreen change asked of the window, until the window shows it. SDL applies fullscreen a
@@ -438,6 +470,7 @@ impl<'tc> Gfx<'tc> {
             pictures: PictureCache::new(),
             logical_h: super::H as u32,
             fullscreen: FullscreenRequest::default(),
+            layer: Layer::NONE,
         }
     }
 
@@ -531,10 +564,11 @@ impl<'tc> Gfx<'tc> {
 
     /// Draws the game texture stretched over `r`.
     pub fn draw_game_frame(&mut self, r: Rect) {
-        if let Some(game) = &self.game {
-            let _ = self
-                .canvas
-                .copy(&game.texture, None, FRect::new(r.x, r.y, r.w, r.h));
+        let layer = self.layer;
+        if let Some(game) = &mut self.game {
+            game.texture.set_alpha_mod(layer.alpha(255));
+            let _ = self.canvas.copy(&game.texture, None, layer.rect(r));
+            game.texture.set_alpha_mod(255);
         }
     }
 
@@ -562,10 +596,13 @@ impl<'tc> Gfx<'tc> {
 
     /// Draws the image set for `key` stretched over `r`; returns whether there is one.
     pub fn draw_image(&mut self, key: &str, r: Rect) -> bool {
-        let Some(texture) = self.images.get(key) else {
+        let layer = self.layer;
+        let Some(texture) = self.images.get_mut(key) else {
             return false;
         };
-        let _ = self.canvas.copy(texture, None, FRect::new(r.x, r.y, r.w, r.h));
+        texture.set_alpha_mod(layer.alpha(255));
+        let _ = self.canvas.copy(texture, None, layer.rect(r));
+        texture.set_alpha_mod(255);
         true
     }
 
@@ -626,6 +663,18 @@ impl<'tc> Gfx<'tc> {
             indices.extend_from_slice(&[0, i as i32, i as i32 + 1]);
         }
         band_indices(n, n, 0, &mut indices);
+        let layer = self.layer;
+        let vertices: Vec<Vertex> = vertices
+            .into_iter()
+            .map(|v| Vertex {
+                position: layer.point(v.position),
+                color: FColor {
+                    a: v.color.a * layer.opacity.clamp(0.0, 1.0),
+                    ..v.color
+                },
+                tex_coord: v.tex_coord,
+            })
+            .collect();
         let _ = self
             .canvas
             .render_geometry(&vertices, Some(&*texture), VertexIndices::from(&indices[..]));
@@ -647,6 +696,20 @@ impl<'tc> Gfx<'tc> {
         (rate > 0.0).then_some(rate)
     }
 
+    /// Draws what `f` draws on `layer`, on top of the layer already in use (offsets add up,
+    /// opacities multiply), then goes back to it.
+    pub fn with_layer<T>(&mut self, layer: Layer, f: impl FnOnce(&mut Self) -> T) -> T {
+        let outer = self.layer;
+        self.layer = Layer {
+            dx: outer.dx + layer.dx,
+            dy: outer.dy + layer.dy,
+            opacity: outer.opacity * layer.opacity,
+        };
+        let out = f(self);
+        self.layer = outer;
+        out
+    }
+
     pub fn clear(&mut self, c: Colour) {
         self.canvas
             .set_draw_color(sdl3::pixels::Color::RGBA(c.r, c.g, c.b, c.a));
@@ -654,9 +717,10 @@ impl<'tc> Gfx<'tc> {
     }
 
     pub fn fill_rect(&mut self, r: Rect, c: Colour) {
+        let layer = self.layer;
         self.canvas
-            .set_draw_color(sdl3::pixels::Color::RGBA(c.r, c.g, c.b, c.a));
-        let _ = self.canvas.fill_rect(FRect::new(r.x, r.y, r.w, r.h));
+            .set_draw_color(sdl3::pixels::Color::RGBA(c.r, c.g, c.b, layer.alpha(c.a)));
+        let _ = self.canvas.fill_rect(layer.rect(r));
     }
 
     pub fn fill_round_rect(&mut self, r: Rect, radius: f32, c: Colour) {
@@ -803,14 +867,17 @@ impl<'tc> Gfx<'tc> {
 
     /// Restricts drawing to `r` until called again; `None` draws everywhere.
     pub fn clip(&mut self, r: Option<Rect>) {
-        let rect = r.map(|r| {
-            sdl3::rect::Rect::new(
-                r.x.floor() as i32,
-                r.y.floor() as i32,
-                r.w.ceil().max(1.0) as u32,
-                r.h.ceil().max(1.0) as u32,
-            )
-        });
+        let layer = self.layer;
+        let rect = r
+            .map(|r| Rect::new(r.x + layer.dx, r.y + layer.dy, r.w, r.h))
+            .map(|r| {
+                sdl3::rect::Rect::new(
+                    r.x.floor() as i32,
+                    r.y.floor() as i32,
+                    r.w.ceil().max(1.0) as u32,
+                    r.h.ceil().max(1.0) as u32,
+                )
+            });
         self.canvas.set_clip_rect(rect);
     }
 
@@ -860,9 +927,32 @@ impl<'tc> Gfx<'tc> {
     }
 
     fn geometry(&mut self, vertices: &[Vertex], indices: &[i32]) {
-        let _ = self
-            .canvas
-            .render_geometry(vertices, None, VertexIndices::from(indices));
+        if self.layer == Layer::NONE {
+            let _ = self
+                .canvas
+                .render_geometry(vertices, None, VertexIndices::from(indices));
+        } else {
+            let layered = self.layered(vertices);
+            let _ = self
+                .canvas
+                .render_geometry(&layered, None, VertexIndices::from(indices));
+        }
+    }
+
+    /// `vertices` moved and faded by the current layer.
+    fn layered(&self, vertices: &[Vertex]) -> Vec<Vertex> {
+        let layer = self.layer;
+        vertices
+            .iter()
+            .map(|v| Vertex {
+                position: layer.point(v.position),
+                color: FColor {
+                    a: v.color.a * layer.opacity.clamp(0.0, 1.0),
+                    ..v.color
+                },
+                tex_coord: v.tex_coord,
+            })
+            .collect()
     }
 
     /// Width of `text` as [`Gfx::text`] would draw it. Where SDL_ttf can't measure it, an estimate
@@ -900,14 +990,20 @@ impl<'tc> Gfx<'tc> {
             return 0.0;
         };
         let c = style.colour;
+        let layer = self.layer;
         entry.texture.set_color_mod(c.r, c.g, c.b);
-        entry.texture.set_alpha_mod(c.a);
+        entry.texture.set_alpha_mod(layer.alpha(c.a));
         let left = match align {
             Align::Left => x,
             Align::Centre => x - entry.w / 2.0,
             Align::Right => x - entry.w,
-        };
-        let dst = FRect::new(left.round(), (y - entry.ascent).round(), entry.w, entry.h);
+        } + layer.dx;
+        let dst = FRect::new(
+            left.round(),
+            (y + layer.dy - entry.ascent).round(),
+            entry.w,
+            entry.h,
+        );
         let _ = self.canvas.copy(&entry.texture, None, dst);
         entry.w
     }

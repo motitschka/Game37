@@ -4,6 +4,7 @@
 //! the menus, as tall as the window's shape asks ([`h`], 1080 to 1440), so they fill a 16:10 screen.
 //! A running Game and what is drawn over it stay at 1920×1080.
 
+pub mod anim;
 pub mod chrome;
 pub mod controls;
 pub mod cover;

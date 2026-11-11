@@ -9,6 +9,7 @@ use super::options::OptionsMenu;
 use crate::ctx::Ctx;
 use crate::library::db::{GameRow, SHELF_SIZE, Shelf};
 use crate::systems;
+use crate::ui::anim::{Eased, FOCUS_TAU, SCROLL_TAU};
 use crate::ui::chrome;
 use crate::ui::cover::{self, COVER_GAP, COVER_H, COVER_RADIUS, COVER_W, RING_REACH, ellipsize};
 use crate::ui::gfx::{Align, Gfx, TextStyle};
@@ -149,6 +150,13 @@ pub struct Home {
     vscroll: f32,
     /// The view height `vscroll` was last fitted to; a resize refits it in `draw`.
     vscroll_view: f32,
+    /// What is drawn: `hscroll` and `vscroll` eased, so the Shelves glide to the focus.
+    shown_h: [Eased; SHELVES],
+    shown_v: Eased,
+    /// How far the focused cover has grown, 0 to 1: it grows into place after each move.
+    grow: Eased,
+    /// The item `grow` belongs to.
+    grown: Option<(usize, usize)>,
     hits: Vec<(Rect, Target)>,
 }
 
@@ -175,6 +183,10 @@ impl Home {
             hscroll: [0.0; SHELVES],
             vscroll: 0.0,
             vscroll_view: view_h(),
+            shown_h: std::array::from_fn(|_| Eased::new(0.0)),
+            shown_v: Eased::new(0.0),
+            grow: Eased::new(1.0),
+            grown: None,
             hits: Vec::new(),
         }
     }
@@ -286,9 +298,10 @@ impl Home {
         let y = base + 44.0;
         let row = &self.shelves[i];
         let n = row.games.len();
-        let left = M - self.hscroll[i];
-        let first = (((self.hscroll[i] - M) / PITCH).floor().max(0.0)) as usize;
-        let last = (((self.hscroll[i] + W) / PITCH).ceil() as usize).min(n);
+        let hs = self.shown_h[i].value();
+        let left = M - hs;
+        let first = (((hs - M) / PITCH).floor().max(0.0)) as usize;
+        let last = (((hs + W) / PITCH).ceil() as usize).min(n);
         let mut focused = None;
         for c in first..last {
             let r = Rect::new(left + c as f32 * PITCH, y, COVER_W, COVER_H);
@@ -306,9 +319,15 @@ impl Home {
             self.hits.push((see_all, Target::Item(i, n)));
         }
         if let Some(r) = focused {
-            let big = Rect::new(r.x - GROW, r.y - 12.0, r.w + 2.0 * GROW, r.h + 24.0);
+            let g = self.grow.value();
+            let big = Rect::new(
+                r.x - GROW * g,
+                r.y - 12.0 * g,
+                r.w + 2.0 * GROW * g,
+                r.h + 24.0 * g,
+            );
             let game = &row.games[col];
-            cover::draw(gfx, big, game, &ctx.artwork.cover(&ctx.library, game), true, true);
+            cover::draw_focused(gfx, big, game, &ctx.artwork.cover(&ctx.library, game), true, g);
             let max_w = (W - M / 2.0 - big.x).min(4.0 * PITCH);
             let title = TextStyle::new(22, Weight::Bold, TEXT);
             let label = ellipsize(&game.title, max_w, |s| gfx.measure(s, title));
@@ -479,11 +498,25 @@ impl Screen for Home {
         self.reload_if_changed(ctx);
         self.refit();
         self.hits.clear();
+        for (shown, &target) in self.shown_h.iter_mut().zip(&self.hscroll) {
+            shown.set(target);
+            shown.step(ctx.animate, SCROLL_TAU);
+        }
+        let item = (self.focus.shelf, self.focus.col());
+        if self.grown != Some(item) {
+            // A first draw shows the focus already grown; a move grows the new one.
+            self.grow.jump(if self.grown.is_some() { 0.0 } else { 1.0 });
+            self.grow.set(1.0);
+            self.grown = Some(item);
+        }
+        self.grow.step(ctx.animate, FOCUS_TAU);
+        self.shown_v.set(self.vscroll);
+        let vs = self.shown_v.step(ctx.animate, SCROLL_TAU);
         let (view_bottom, view_h) = (view_bottom(), view_h());
         gfx.clip(Some(Rect::new(0.0, VIEW_TOP, W, view_h)));
         let title = TextStyle::new(28, Weight::Bold, TEXT);
         for i in 0..SHELVES {
-            let top = VIEW_TOP + self.block_top(i) - self.vscroll;
+            let top = VIEW_TOP + self.block_top(i) - vs;
             if top > view_bottom || top + self.block_h(i) < VIEW_TOP {
                 continue;
             }
@@ -495,7 +528,7 @@ impl Screen for Home {
             }
             gfx.text(M, base, name(self.shelves[i].shelf), title, Align::Left);
         }
-        if self.content_h() - self.vscroll > view_h {
+        if self.content_h() - vs > view_h {
             gfx.fill_round_rect_vgradient(
                 Rect::new(0.0, view_bottom - FADE_H, W, FADE_H),
                 0.0,

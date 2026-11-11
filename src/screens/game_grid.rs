@@ -9,6 +9,7 @@ use crate::ctx::Ctx;
 use crate::emulators::Emulator;
 use crate::library::db::{DbError, GameRow, Library, SortOrder};
 use crate::systems::System;
+use crate::ui::anim::{Eased, FOCUS_TAU, SCROLL_TAU};
 use crate::ui::chrome;
 use crate::ui::cover::{self, COVER_GAP, COVER_H, COVER_W, RING_REACH};
 use crate::ui::gfx::{Align, Gfx, TextStyle};
@@ -144,6 +145,11 @@ pub struct GameGrid {
     scroll: f32,
     /// The canvas height (`ui::h`) `scroll` was last fitted at; a resize refits it in `draw`.
     scroll_h: f32,
+    /// What is drawn: `scroll` eased, so the grid glides to the focus.
+    shown: Eased,
+    /// How far the focused cover's ring has faded in, 0 to 1, and the Game it belongs to.
+    ring: Eased,
+    ringed: Option<usize>,
     hits: Vec<(Rect, usize)>,
     extra: Option<Extra>,
     /// Where the sort chip was last drawn, for the mouse.
@@ -172,6 +178,9 @@ impl GameGrid {
             focus: 0,
             scroll: 0.0,
             scroll_h: ui::h(),
+            shown: Eased::new(0.0),
+            ring: Eased::new(1.0),
+            ringed: None,
             hits: Vec::new(),
             extra: None,
             sort_hit: None,
@@ -602,30 +611,32 @@ impl Screen for GameGrid {
             return;
         }
         let (top, bottom) = (self.top_y(), bottom());
+        self.shown.set(self.scroll);
+        let scroll = self.shown.step(ctx.animate, SCROLL_TAU);
+        if self.ringed != Some(self.focus) {
+            self.ring.jump(if self.ringed.is_some() { 0.0 } else { 1.0 });
+            self.ring.set(1.0);
+            self.ringed = Some(self.focus);
+        }
+        let ring = self.ring.step(ctx.animate, FOCUS_TAU);
         let clip_top = top - RING_REACH - 4.0;
         gfx.clip(Some(Rect::new(0.0, clip_top, W, bottom - clip_top)));
-        let first_row = ((self.scroll - RING_REACH) / PITCH_Y).floor().max(0.0) as usize;
-        let last_row = ((self.scroll + bottom - top) / PITCH_Y).ceil() as usize;
+        let first_row = ((scroll - RING_REACH) / PITCH_Y).floor().max(0.0) as usize;
+        let last_row = ((scroll + bottom - top) / PITCH_Y).ceil() as usize;
         let caption = TextStyle::new(17, Weight::Medium, MUTED);
         for i in first_row * COLS..((last_row + 1) * COLS).min(self.games.len()) {
             let (row, col) = (i / COLS, i % COLS);
             let r = Rect::new(
                 M + col as f32 * PITCH_X,
-                top + row as f32 * PITCH_Y - self.scroll,
+                top + row as f32 * PITCH_Y - scroll,
                 COVER_W,
                 COVER_H,
             );
             let game = &self.games[i];
             // While a notice button has focus, no cover is drawn focused.
             let art = ctx.artwork.cover(&ctx.library, game);
-            cover::draw(
-                gfx,
-                r,
-                game,
-                &art,
-                true,
-                i == self.focus && self.notice_focus.is_none(),
-            );
+            let focused = i == self.focus && self.notice_focus.is_none();
+            cover::draw_focused(gfx, r, game, &art, true, if focused { ring } else { 0.0 });
             if game.playtime_secs > 0 {
                 gfx.text(
                     r.x,
@@ -645,7 +656,7 @@ impl Screen for GameGrid {
                 i,
             ));
         }
-        if self.content_h() - self.scroll > bottom - top {
+        if self.content_h() - scroll > bottom - top {
             let fade = Rect::new(0.0, bottom - FADE_H, W, FADE_H);
             gfx.fill_round_rect_vgradient(fade, 0.0, BG.alpha(0.0), BG);
         }
