@@ -184,6 +184,12 @@ pub struct OptionsMenu {
     /// The Display Title of another Game in the library whose Core names its In-game Save file
     /// the same ([`InGameSaves::PerGame`], same file stem), so it can't be deleted on its own.
     shared_with: Option<String>,
+    /// The Display Titles of the other visible Games in the same folder whose file has the same
+    /// stem (`Zelda.sfc` and `Zelda.smc`): they share this Game's Resume State, Save States and
+    /// `.srm`, so deleting those deletes theirs too.
+    same_stem: Vec<String>,
+    /// How many slots have a screenshot but no Save State: never filled, but left to delete.
+    strays: usize,
     /// What a confirmed delete did, left by the confirmation for the next tick to show.
     deleted: Rc<RefCell<Option<Result<(), String>>>>,
     /// The slots' times and screenshots, slot 1 first, `None` when empty: read on a thread when
@@ -265,6 +271,12 @@ impl OptionsMenu {
         } else {
             (Vec::new(), None, None)
         };
+        let strays = if embedded { stray_thumbs(&states) } else { 0 };
+        let same_stem = if embedded {
+            same_stem_games(ctx, &game, rel_path)
+        } else {
+            Vec::new()
+        };
         OptionsMenu {
             game,
             meta,
@@ -280,6 +292,8 @@ impl OptionsMenu {
             srm,
             own_saves,
             shared_with,
+            same_stem,
+            strays,
             deleted: Rc::default(),
             slots: Vec::new(),
             reading: None,
@@ -312,7 +326,7 @@ impl OptionsMenu {
     fn has(&self, what: SaveData) -> bool {
         match what {
             SaveData::ResumeState => self.resume_when.is_some(),
-            SaveData::SaveStates => self.filled() > 0,
+            SaveData::SaveStates => self.leftover() > 0,
             SaveData::InGameSave => {
                 self.own_saves.is_none() && self.shared_with.is_none() && self.srm_when.is_some()
             }
@@ -326,7 +340,7 @@ impl OptionsMenu {
         let none = || "None".to_owned();
         match what {
             SaveData::ResumeState => Some(self.resume_when.clone().unwrap_or_else(none)),
-            SaveData::SaveStates => Some(match self.filled() {
+            SaveData::SaveStates => Some(match self.leftover() {
                 0 => none(),
                 n => format!("{n} of {SLOTS}"),
             }),
@@ -343,7 +357,7 @@ impl OptionsMenu {
     fn confirm_delete(&self, what: SaveData) -> Confirm {
         let title = match what {
             SaveData::ResumeState => "Delete the Resume State?".to_owned(),
-            SaveData::SaveStates => match self.filled() {
+            SaveData::SaveStates => match self.leftover() {
                 1 => "Delete the Save State?".to_owned(),
                 n => format!("Delete {n} Save States?"),
             },
@@ -365,6 +379,19 @@ impl OptionsMenu {
 
     /// The line under the confirmation's question before deleting `what`.
     fn delete_body(&self, what: SaveData) -> String {
+        let body = self.delete_what(what);
+        match self.same_stem.as_slice() {
+            [] => body,
+            [title] => format!("{body} {title} shares these save files and loses them too."),
+            titles => format!(
+                "{body} {} share these save files and lose them too.",
+                titles.join(", ")
+            ),
+        }
+    }
+
+    /// What deleting `what` deletes, in a sentence.
+    fn delete_what(&self, what: SaveData) -> String {
         match what {
             SaveData::ResumeState => {
                 "The next launch starts from power-on. Your In-game Save and Save States stay.".to_owned()
@@ -396,6 +423,7 @@ impl OptionsMenu {
             return Transition::None;
         };
         (self.filled, self.resume_when, self.srm_when) = read_save_data(&self.states, self.srm.as_deref());
+        self.strays = stray_thumbs(&self.states);
         // The slot picker reads its slots afresh, and forgets the old screenshots.
         self.reading = None;
         self.slots.clear();
@@ -412,6 +440,12 @@ impl OptionsMenu {
             Ok(()) => Transition::None,
             Err(e) => Transition::Push(Box::new(Message::new("Couldn't delete save data", e))),
         }
+    }
+
+    /// How many Save States there are to delete: the filled slots and the slots with only a
+    /// screenshot left.
+    fn leftover(&self) -> usize {
+        self.filled() + self.strays
     }
 
     /// How many Save State slots are filled.
@@ -881,6 +915,30 @@ fn shared_save_game(ctx: &Ctx, game: &GameRow, rel_path: &Path) -> Option<String
         .into_iter()
         .find(|other| other.id != game.id && saves::per_game_stem(Path::new(&other.rel_path)) == stem)
         .map(|other| other.title)
+}
+
+/// How many slots of `states` have a screenshot but no Save State.
+fn stray_thumbs(states: &StatePaths) -> usize {
+    (1..=SLOTS)
+        .filter(|&n| states.thumb(n).is_file() && !states.slot(n).is_file())
+        .count()
+}
+
+/// The Display Titles of the other visible Games in `game`'s folder whose file has the same stem,
+/// so the same Resume State, Save State and `.srm` file names. A hidden Game or one whose file is
+/// gone isn't listed: the library doesn't offer it.
+fn same_stem_games(ctx: &Ctx, game: &GameRow, rel_path: &Path) -> Vec<String> {
+    let (stem, folder) = (rel_path.file_stem(), rel_path.parent());
+    ctx.library
+        .system_games(&game.system, Default::default())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|other| {
+            let other_path = Path::new(&other.rel_path);
+            other.id != game.id && other_path.file_stem() == stem && other_path.parent() == folder
+        })
+        .map(|other| other.title)
+        .collect()
 }
 
 /// A delete view row's name.
@@ -1778,6 +1836,63 @@ mod tests {
         assert_eq!(menu.picked(), 0, "focus leaves the emptied row");
         assert!(!menu.enabled(Item::LoadSaveState));
         assert_eq!(menu.uploads.len(), SLOTS, "the slot screenshots are forgotten");
+    }
+
+    #[test]
+    fn the_confirmation_warns_when_a_same_stem_game_in_the_folder_shares_the_save_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = dir.path().join("Games");
+        let found = |rel: &str, title: &str| FoundGame {
+            system: "snes",
+            rel_path: rel.into(),
+            title: title.into(),
+        };
+        let found = [
+            found("snes/Zelda.sfc", "Zelda"),
+            found("snes/Zelda.smc", "Zelda (Hack)"),
+            found("snes/hacks/Zelda.sfc", "Zelda (Elsewhere)"),
+            found("snes/Mario.sfc", "Mario"),
+        ];
+        ctx.library.sync_system("snes", &found, 0).unwrap();
+        let games = ctx.library.system_games("snes", SortOrder::AZ).unwrap();
+        let by = |title: &str| games.iter().find(|g| g.title == title).unwrap().clone();
+
+        let menu = OptionsMenu::new(by("Zelda"), &ctx);
+        for what in DELETE_ROWS {
+            let body = menu.delete_body(what);
+            assert!(
+                body.ends_with("Zelda (Hack) shares these save files and loses them too."),
+                "{what:?}: {body}"
+            );
+            assert!(!body.contains("Elsewhere"), "another folder has other save files");
+        }
+        let menu = OptionsMenu::new(by("Mario"), &ctx);
+        for what in DELETE_ROWS {
+            assert!(!menu.delete_body(what).contains("shares"), "{what:?}");
+        }
+    }
+
+    #[test]
+    fn a_slot_screenshot_without_its_save_state_is_deleted_too() {
+        let (_dir, mut ctx, games) = world(1);
+        fill_slots(&ctx, &games[0], &[1, 2]);
+        let states = StatePaths::new(&ctx.games_root, "snes", Path::new(&games[0].rel_path));
+        fs::remove_file(states.slot(2)).unwrap();
+        fs::remove_file(states.slot(1)).unwrap();
+        assert!(states.thumb(1).is_file() && states.thumb(2).is_file());
+
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx);
+        assert!(
+            menu.enabled(Item::DeleteSaveData),
+            "a lone screenshot is left to delete"
+        );
+        open_delete(&mut menu, &mut ctx);
+        assert_eq!(delete_subs(&menu)[1].as_deref(), Some("2 of 3"));
+        let (title, _) = answer(&mut menu, &mut ctx, true);
+        assert_eq!(title, "Delete 2 Save States?");
+        assert_eq!(files(&ctx), Vec::<PathBuf>::new());
+        assert_eq!(menu.view(), View::List, "nothing is left to delete");
     }
 
     #[test]
