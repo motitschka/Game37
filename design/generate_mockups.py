@@ -367,7 +367,8 @@ def console_card(sv, cx, cy, size, sysid, opacity=1.0):
 
 WARN = "#FFB020"
 # The Standalone Emulator of each External System; every other System is Embedded.
-EMULATORS = {"wiiu": "Cemu", "switch": "Ryubing", "ps3": "RPCS3", "ps4": "shadPS4"}
+# Switch plays inside Game37 on the suyu Core (ADR 0019).
+EMULATORS = {"wiiu": "Cemu", "ps3": "RPCS3", "ps4": "shadPS4"}
 
 
 def screen_carousel(focus="3ds", missing={"wiiu": "Cemu"}, games=12):
@@ -1189,6 +1190,8 @@ def screen_settings_library():
 # What Settings → BIOS asks for where a System's Core needs a BIOS and none is there.
 BIOS_MISSING = {"ps1": "Missing: put scph5500.bin, scph5501.bin or scph5502.bin in ~/Games/bios/",
                 "ps2": "Missing: put your own BIOS dump, any file name, in ~/Games/bios/pcsx2/bios/"}
+# Optional files: the System plays without them, and plays more with them.
+BIOS_OPTIONAL = {"switch": "Optional: put your own prod.keys (for .nsp and .xci), in ~/Games/bios/switch/"}
 
 
 def screen_settings_bios():
@@ -1210,6 +1213,8 @@ def screen_settings_bios():
             sv.add(circle(status_x + 11, base - 6, 11, WARN),
                    text(status_x + 11, base - 1, "!", 15, 800, fill=C["bg"], anchor="middle"),
                    text(status_x + 32, base, BIOS_MISSING[sysid], 18, 500, fill=WARN))
+        elif sysid in BIOS_OPTIONAL:
+            sv.add(text(status_x, base, BIOS_OPTIONAL[sysid], 18, 500, fill=C["muted"]))
         elif sysid in EMULATORS:
             sv.add(text(status_x, base, f"Handled by {EMULATORS[sysid]}", 18, 500, fill=C["muted"]))
         elif sysid in UPCOMING:
@@ -1550,7 +1555,7 @@ def screen_search_empty():
 SETUP_STEPS = 5
 SETUP_W = 1200  # width of the lists and boxes below the title, left-aligned at M
 # The Standalone Emulator each External System needs; every other System is Embedded.
-EXTERNAL = {"wiiu": "Cemu", "switch": "Ryubing", "ps3": "RPCS3", "ps4": "shadPS4"}
+EXTERNAL = {"wiiu": "Cemu", "ps3": "RPCS3", "ps4": "shadPS4"}
 SETUP_TICKED = ["nes", "snes", "gba", "wiiu", "switch", "ps1", "ps2", "psp"]  # in System Order
 
 
@@ -1659,8 +1664,8 @@ def command_box(sv, x, y, cmd, focus="Copy"):
 def screen_setup_emulators():
     sv = Svg("27-setup-emulators", "First-run Setup: emulators")
     setup_frame(sv, 2, "Install the emulators", "These Systems run in their own emulator, installed with Flatpak.")
-    rows = [("wiiu", "info.cemu.Cemu", True), ("switch", "io.github.ryubing.Ryujinx", False),
-            ("ps3", "net.rpcs3.RPCS3", False)]
+    rows = [("wiiu", "info.cemu.Cemu", True), ("ps3", "net.rpcs3.RPCS3", False),
+            ("ps4", "net.shadps4.shadPS4", False)]
     for i, (sysid, app_id, installed) in enumerate(rows):
         x, y = M, 296 + i * 112
         sv.add(rect(x, y, SETUP_W, 96, C["surface"], rx=14, stroke=C["line"], sw=1))

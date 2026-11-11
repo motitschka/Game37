@@ -18,7 +18,7 @@ mkdir -p "$out/root"
 root=$out/root
 cp -r "$testdata/games" "$root/games"
 for f in "wiiu/Xenoblade Chronicles X (Europe).wua" \
-    "ps2/Persona 4 (USA).iso" "switch/Hello World.nro" \
+    "ps2/Persona 4 (USA).iso" \
     "switch2/Mario Kart World.xci"; do
     mkdir -p "$root/games/$(dirname "$f")"
     : > "$root/games/$f"
@@ -99,6 +99,9 @@ shot m8-ps2-no-bios "$root/cfg.toml" "nexttab,left,left,left,left,left,confirm,c
 shot m8-3ds "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..9}),confirm,confirm,confirm" --frames 600
 shot m8-gc "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..6}),confirm,confirm,confirm" --frames 600
 shot m8-wii "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..8}),confirm,confirm,confirm" --frames 600
+# Switch on the suyu Core (ADR 0019): Space NX, then the Pause Menu with Save state, Load state and
+# Restart game greyed, as suyu has no states and can't restart.
+shot m10-switch-pause "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..11}),confirm,confirm,confirm,wait:300,back" --frames 30
 # A Wii Game's Options Menu with its Controller row switched to the Classic Controller (m8-wii left
 # a Resume State, so Delete save data is enabled and three downs reach the row)
 shot m8-options-wii "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..8}),confirm,confirm,options,down,down,down,right"

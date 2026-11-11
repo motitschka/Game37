@@ -2220,6 +2220,78 @@ mod tests {
         to_small < to_large
     }
 
+    /// suyu (ADR 0019) boots the Space NX homebrew from `.testdata/games/switch/` on the renderer
+    /// (the Core built by `scripts/build-suyu-core.sh`, in `.testdata/data/cores/`). It keeps its
+    /// own files in the data dir's system folder and its NAND in the Switch save folder, writes
+    /// nothing to the BIOS folder, offers no Save States, and quits promptly. suyu runs on its own
+    /// clock, so the frames are ticked at 60 a second.
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn hw_suyu_boots_homebrew_keeps_its_files_in_game37s_folders_and_quits() {
+        use crate::ui::text::Fonts;
+
+        let _serial = serial();
+        let file = "Space NX (Homebrew).nro";
+        let root = TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join("switch")).unwrap();
+        fs::copy(
+            Path::new(TESTDATA).join("games/switch").join(file),
+            root.path().join("switch").join(file),
+        )
+        .unwrap();
+        let data = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(Path::new(TESTDATA).join("data/cores"), data.path().join("cores"))
+            .unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = root.path().to_path_buf();
+        ctx.data_dir = data.path().to_path_buf();
+        let game = GameRow {
+            id: 1,
+            system: "switch".into(),
+            rel_path: format!("switch/{file}"),
+            title: "Space NX".into(),
+            date_added: 0,
+            last_played: None,
+            playtime_secs: 0,
+            favorite: false,
+        };
+        let (_sdl, canvas) = offscreen_renderer();
+        let creator = canvas.texture_creator();
+        let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
+        let shot = data.path().join("shot.bmp");
+        let mut session = Session::start(&Play::resume(game), &ctx, gfx.gl_context(), None, Some(60.0))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(!session.has_states && !session.resets);
+        for _ in 0..360 {
+            assert!(!session.tick(&mut gfx, 1.0 / 60.0, &[], Mouse::default(), |_| false));
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+        assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "booted");
+        let frame = session.core.frame();
+        assert_eq!((frame.width, frame.height), (1280, 720), "docked");
+
+        let quitting = Instant::now();
+        drop(session);
+        assert!(
+            quitting.elapsed().as_secs() < 5,
+            "quit took {:?}",
+            quitting.elapsed()
+        );
+        assert!(
+            data.path().join("system/suyu/config").is_dir(),
+            "its config under the data dir"
+        );
+        assert!(
+            root.path().join("saves/switch/suyu/nand").is_dir(),
+            "its NAND with the saves"
+        );
+        assert!(
+            !root.path().join("bios/suyu").exists(),
+            "nothing in the player's BIOS folder"
+        );
+        assert!(!root.path().join("states").exists(), "no Resume State");
+    }
+
     /// 3DS with Azahar (FR-NEW-2): ftpd boots through a 3DS session on the SDL OpenGL host and its
     /// picture shows on the renderer; one large and one small screen in a 2:1 frame. The mouse on
     /// the small screen reaches Azahar as `RETRO_DEVICE_POINTER`; a pad's L3 reaches it as R3, the

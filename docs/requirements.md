@@ -19,7 +19,7 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 | Wii | `wii` | 2006 | Embedded | Dolphin core |
 | 3DS | `3ds` | 2011 | Embedded | Azahar core |
 | Wii U | `wiiu` | 2012 | External | Cemu |
-| Switch | `switch` | 2017 | External | Ryubing |
+| Switch | `switch` | 2017 | Embedded | suyu Core (built from source, ADR 0019) |
 | Switch 2 | `switch2` | 2025 | Upcoming | not playable yet |
 | PlayStation | `ps1` | 1995 | Embedded | Beetle PSX HW core |
 | PlayStation 2 | `ps2` | 2000 | Embedded | LRPS2 core |
@@ -117,6 +117,7 @@ Built in milestone 8 (ADR 0016, research in [research/m8-newer-cores.md](researc
 - **FR-NEW-2** 3DS Games run with the Azahar Core, rendering with OpenGL: homebrew and decrypted Games. How the two screens are shown is a choice in Settings → Display, with the same three layouts as DS (FR-DS-1): Large and small (the default, the large screen three times the small one), Side by side, or One screen. R3 (Tab on the keyboard) swaps the screens, as on DS, and the touch screen takes the mouse and a right-stick cursor, which L3 taps with, as on DS (FR-DS-3). An encrypted dump gets a message saying it must be decrypted.
 - **FR-NEW-3** GameCube and Wii Games run with the Dolphin Core, rendering with OpenGL. Game37 downloads Dolphin's system files with the Core. On Wii, the controller stands in for a Wii Remote with a Nunchuk or, for a Game set to it in its Options Menu (FR-DET-4), a Classic Controller; the choice is kept per Game and applies from the Game's next start.
 - **FR-NEW-4** These Systems also take homebrew in the form their Cores load directly: `.elf` for PS2, `.3dsx` for 3DS, `.dol` and `.elf` for GameCube and Wii.
+- **FR-NEW-5** Switch Games run with the suyu Core (ADR 0019), which Game37 builds from suyu's pinned source with its own patches (`scripts/build-suyu-core.sh`) rather than downloading it; Play before it is built says how to build it. Encrypted Games (`.nsp`, `.xci`) need the player's own `prod.keys` in `<Games Root>/bios/switch/`, copied to the Core before each start; without them, Game37 says so and names that folder. Homebrew (`.nro`) needs none. The Core has no Save States, Resume State or Restart: the Pause Menu shows those items greyed with a note, and the Options Menu and Details Page leave them out. In-game Saves go in `<Games Root>/saves/switch/`.
 
 ### Nintendo DS
 
