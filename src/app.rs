@@ -87,7 +87,7 @@ pub fn run(options: Options) -> Result<(), String> {
 /// (FR-CFG-1): the library in the data dir, for the Config's Games Root, and the menu settings saved
 /// in it.
 fn open_library(ctx: &mut Ctx, config: &Config) -> Result<(), String> {
-    ctx.library = Library::open(&ctx.data_dir.join("library.db")).map_err(|e| e.to_string())?;
+    ctx.library = Library::open_in(&ctx.data_dir).map_err(|e| e.to_string())?;
     ctx.games_root = config.games_root.clone();
     ctx.button_style = ctx.library.button_style().unwrap_or_else(|e| {
         eprintln!("game37: can't read the button style: {e}");
