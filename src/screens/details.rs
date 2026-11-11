@@ -141,9 +141,11 @@ fn local(secs: i64) -> Option<Local> {
 }
 
 /// How many of the Game's Save State slots are filled; `None` for an External System's Game,
-/// whose Standalone Emulator keeps its own, and an Upcoming System's, which nothing plays yet.
+/// whose Standalone Emulator keeps its own, an Upcoming System's, which nothing plays yet, and
+/// one whose Core has no states (Switch's).
 fn save_state_count(games_root: &Path, game: &GameRow, system: Option<&System>) -> Option<usize> {
-    if system?.kind != Kind::Embedded {
+    let system = system?;
+    if system.kind != Kind::Embedded || cores::for_system(system).is_some_and(|c| !c.has_states()) {
         return None;
     }
     let paths = StatePaths::new(games_root, &game.system, Path::new(&game.rel_path));

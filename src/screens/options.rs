@@ -246,13 +246,14 @@ impl OptionsMenu {
             Item::ShowFile,
         ]
         .into_iter()
-        .filter(|&i| {
-            (embedded
-                || !matches!(
-                    i,
-                    Item::LoadSaveState | Item::StartFromPowerOn | Item::DeleteSaveData
-                ))
-                && (i != Item::Controller || wii.is_some())
+        .filter(|&i| match i {
+            // A Core without states has no Save States and no Resume State to skip.
+            Item::LoadSaveState | Item::StartFromPowerOn => {
+                embedded && core.is_none_or(|core| core.has_states())
+            }
+            Item::DeleteSaveData => embedded,
+            Item::Controller => wii.is_some(),
+            _ => true,
         })
         .collect();
         let rel_path = Path::new(&game.rel_path);
@@ -1462,6 +1463,21 @@ mod tests {
         assert_eq!(
             OptionsMenu::new(game, &ctx).items(),
             [Favorite, ChooseArtwork, Rename, Hide, ShowFile]
+        );
+    }
+
+    #[test]
+    fn a_switch_game_has_no_save_state_items_but_can_delete_save_data() {
+        let mut game = world(1).2.remove(0);
+        game.system = "switch".into();
+        game.rel_path = "switch/Game.nro".into();
+        use Item::*;
+        let mut ctx = Ctx::empty();
+        ctx.games_root = PathBuf::from("/nonexistent");
+        assert_eq!(
+            OptionsMenu::new(game, &ctx).items(),
+            [Favorite, DeleteSaveData, ChooseArtwork, Rename, Hide, ShowFile],
+            "suyu has no states: no Load save state, and no Resume State to skip"
         );
     }
 

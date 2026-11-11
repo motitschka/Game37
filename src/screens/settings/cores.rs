@@ -41,11 +41,11 @@ pub struct Cores {
 impl Default for Cores {
     fn default() -> Self {
         let mut entries: Vec<Entry> = Vec::new();
-        for core in SYSTEMS.iter().filter_map(cores::for_system) {
+        for core in SYSTEMS.iter().filter_map(cores::downloadable_for) {
             if entries.iter().all(|e| e.core != core) {
                 let names: Vec<_> = SYSTEMS
                     .iter()
-                    .filter(|s| cores::for_system(s) == Some(core))
+                    .filter(|s| cores::downloadable_for(s) == Some(core))
                     .map(|s| s.name)
                     .collect();
                 entries.push(Entry {

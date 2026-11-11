@@ -68,6 +68,10 @@ pub struct Session {
     touch: Option<TouchControls>,
     /// Whether the left stick also presses the d-pad ([`cores::CoreInfo::stick_is_dpad`]).
     stick_dpad: bool,
+    /// Whether the Core has Save States and a Resume State ([`cores::CoreInfo::has_states`]).
+    has_states: bool,
+    /// Whether the Core can restart the Game ([`cores::CoreInfo::resets`]).
+    resets: bool,
     /// Whether a Nintendo-lettered pad's face buttons map by letter ([`input::faces_by_letter`]).
     by_letter: bool,
     /// How fast the Game really ran, logged when the session ends.
@@ -291,6 +295,9 @@ impl Session {
             fs::create_dir_all(dir)
                 .map_err(|e| StartError::generic(fail(&format!("Can't create {}: {e}", dir.display()))))?;
         }
+        // The player's Switch keys go where suyu looks for them, before it loads.
+        cores::stage_keys(core_info, root, &dirs.system)
+            .map_err(|e| StartError::generic(fail(&format!("Can't copy the Switch keys: {e}"))))?;
         // Before the Core loads, or it makes its own (an unformatted PS2 memory card).
         let rel_path = Path::new(&game.rel_path);
         saves::give_first_save(core_info.saves, root, system.id, rel_path)
@@ -323,10 +330,14 @@ impl Session {
         });
         let states = StatePaths::new(root, system.id, Path::new(&game.rel_path));
         // Continue where the player quit (FR-EMB-6), or from the Save State or power-on they chose
-        // (FR-DET-4).
-        let start_message = load_start_state(&states, play.start, |state| {
-            core.unserialize(state).map_err(|e| e.to_string())
-        });
+        // (FR-DET-4). A Core without states always starts from power-on.
+        let start_message = if core_info.has_states() {
+            load_start_state(&states, play.start, |state| {
+                core.unserialize(state).map_err(|e| e.to_string())
+            })
+        } else {
+            None
+        };
         let av = core.av_info();
         let audio = audio.and_then(|a| {
             Audio::open(a, av.sample_rate)
@@ -353,6 +364,8 @@ impl Session {
             paused: false,
             touch: core_info.touch.map(TouchControls::new),
             stick_dpad: core_info.stick_is_dpad(),
+            has_states: core_info.has_states(),
+            resets: core_info.resets(),
             by_letter: input::faces_by_letter(system),
             pace: Pace::default(),
             start_message,
@@ -529,6 +542,9 @@ impl Session {
 
     /// Writes the Resume State the next launch continues from (FR-EMB-6).
     fn write_resume(&mut self) {
+        if !self.has_states {
+            return;
+        }
         store_resume(&self.states.resume(), self.core.serialize());
     }
 
@@ -779,7 +795,13 @@ pub fn tick(
 /// What the pause trigger does: opens the Pause Menu over the session (FR-EMB-3).
 pub fn on_pause(nav: &mut Nav) {
     let Some(session) = running(nav) else { return };
-    let menu = PauseMenu::new(&session.title, session.meta(), slot_infos(&session.states));
+    let slots = if session.has_states {
+        slot_infos(&session.states)
+    } else {
+        vec![None; crate::session::states::SLOTS]
+    };
+    let menu = PauseMenu::new(&session.title, session.meta(), slots)
+        .with_capabilities(session.has_states, session.resets);
     nav.push(Box::new(menu));
 }
 

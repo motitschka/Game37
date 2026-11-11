@@ -15,7 +15,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
-use crate::cores::{self, BiosRule};
+use crate::cores::{self, BiosRule, CoreInfo};
 use crate::ctx::{Ctx, Play};
 use crate::emulators::{self, Emulator, PATH};
 use crate::library::db::GameRow;
@@ -57,6 +57,20 @@ pub fn confirm_play(play: Play, ctx: &mut Ctx) -> Transition {
                 missing_bios_message(&ctx.games_root, rule),
             )));
         }
+        if let Some(rule) = core.keys_for(Path::new(&play.game.rel_path))
+            && rule.found(&ctx.games_root).is_none()
+        {
+            return Transition::Push(Box::new(Message::new(
+                rule.wording.title,
+                missing_bios_message(&ctx.games_root, rule),
+            )));
+        }
+        if !core.downloads() && !cores::is_installed(&ctx.data_dir, core) {
+            return Transition::Push(Box::new(Message::new(
+                CORE_NOT_BUILT_TITLE,
+                core_not_built_message(core, system),
+            )));
+        }
         if !cores::is_installed(&ctx.data_dir, core) {
             let screen = if let Some(assets) = core.assets
                 && !cores::has_assets(&ctx.data_dir, core)
@@ -74,6 +88,17 @@ pub fn confirm_play(play: Play, ctx: &mut Ctx) -> Transition {
         Some(message) => Transition::Push(Box::new(Message::new(NOT_PLAYABLE_TITLE, message))),
         None => Transition::None,
     }
+}
+
+const CORE_NOT_BUILT_TITLE: &str = "Core not built yet";
+
+/// Why a Game whose Core isn't on the build server doesn't start before the Core is built.
+pub(crate) fn core_not_built_message(core: &CoreInfo, system: &System) -> String {
+    format!(
+        "{} games play with the {} Core, which Game37 builds from source once. Run \
+         scripts/build-suyu-core.sh from the Game37 folder, then press Play again.",
+        system.name, core.name
+    )
 }
 
 /// FR-EMB-12's message for a missing BIOS, in its System's words, naming the folder it goes in.
@@ -414,7 +439,7 @@ pub fn record(ctx: &mut Ctx, game_id: i64, ended_at: i64, elapsed: Duration) {
 mod tests {
     use super::*;
     use crate::ctx::Start;
-    use crate::emulators::{CEMU, RPCS3, RYUBING, SHADPS4};
+    use crate::emulators::{CEMU, RPCS3, SHADPS4};
     use crate::library::FoundGame;
     use crate::library::db::SortOrder;
     use crate::screens::{Home, Stub};
@@ -439,9 +464,8 @@ mod tests {
     #[test]
     fn each_emulator_gets_its_fullscreen_command() {
         let g = "/home/ann/Games/x/My Game.iso";
-        let cases: [(&Emulator, &[&str]); 4] = [
+        let cases: [(&Emulator, &[&str]); 3] = [
             (&CEMU, &["-f", "-g", g]),
-            (&RYUBING, &[g, "--fullscreen"]),
             (&RPCS3, &["--no-gui", "--fullscreen", g]),
             (&SHADPS4, &["-g", g, "--fullscreen", "true"]),
         ];
@@ -518,10 +542,10 @@ mod tests {
             game_file(&RPCS3, &dir.path().join("Game"), None),
             Err("Its folder has no PS3_GAME/USRDIR/EBOOT.BIN or USRDIR/EBOOT.BIN.".to_owned())
         );
-        let gone = dir.path().join("gone.nsp");
+        let gone = dir.path().join("gone.wua");
         assert_eq!(
-            game_file(&RYUBING, &gone, Some(dir.path())),
-            Err("~/gone.nsp isn't there any more.".to_owned())
+            game_file(&CEMU, &gone, Some(dir.path())),
+            Err("~/gone.wua isn't there any more.".to_owned())
         );
     }
 
@@ -790,6 +814,51 @@ mod tests {
         let gba = game_of(&w, "gba");
         assert!(matches!(confirm_game(&gba, &mut w.ctx), Transition::Push(_)));
         assert!(w.ctx.play.is_none() && w.ctx.launch.is_none());
+    }
+
+    fn switch_game(w: &World, file: &str) -> GameRow {
+        GameRow {
+            system: "switch".into(),
+            rel_path: format!("switch/{file}"),
+            ..w.game.clone()
+        }
+    }
+
+    #[test]
+    fn a_switch_game_before_the_core_is_built_says_how_to_build_it() {
+        let mut w = world("exit 0");
+        w.ctx.data_dir = w._dir.path().join("data");
+        let game = switch_game(&w, "Homebrew.nro");
+        let Transition::Push(screen) = confirm_game(&game, &mut w.ctx) else {
+            panic!("expected the Core-not-built message, not a download");
+        };
+        assert_eq!(screen.title(), "Core not built yet");
+        assert!(w.ctx.play.is_none());
+    }
+
+    #[test]
+    fn an_encrypted_switch_game_without_keys_asks_for_them_and_homebrew_plays_without() {
+        let mut w = world("exit 0");
+        w.ctx.data_dir = w._dir.path().join("data");
+        touch(&w.ctx.data_dir.join("cores/suyu_libretro.so"));
+        for file in ["Game.nsp", "Game.xci"] {
+            let Transition::Push(screen) = confirm_game(&switch_game(&w, file), &mut w.ctx) else {
+                panic!("expected the missing-keys message for {file}");
+            };
+            assert_eq!(screen.title(), "Switch keys missing", "{file}");
+            assert!(w.ctx.play.is_none());
+        }
+        let homebrew = switch_game(&w, "Homebrew.nro");
+        assert!(matches!(confirm_game(&homebrew, &mut w.ctx), Transition::None));
+        assert_eq!(w.ctx.play.take().map(|p| p.game), Some(homebrew));
+
+        // A dummy, non-empty file: the check takes any, as it does a BIOS.
+        let keys = cores::SWITCH_KEYS.dir(&w.ctx.games_root);
+        std::fs::create_dir_all(&keys).unwrap();
+        std::fs::write(keys.join("prod.keys"), "dummy").unwrap();
+        let game = switch_game(&w, "Game.nsp");
+        assert!(matches!(confirm_game(&game, &mut w.ctx), Transition::None));
+        assert_eq!(w.ctx.play.take().map(|p| p.game), Some(game));
     }
 
     #[test]
