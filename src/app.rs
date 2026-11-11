@@ -289,34 +289,18 @@ fn interactive(
         ctx.last_controller = input.last_controller();
         ctx.ticks = sdl3::timer::ticks();
         ctx.confirm_held = confirm_held(&ctx, &events.keyboard_state());
-        if let Some(watcher) = &mut watcher {
-            match watcher.poll(&mut ctx.library, ctx::now()) {
-                Ok(changed) => {
-                    sync_failing = false;
-                    if changed {
-                        ctx.revision += 1;
-                    }
-                }
-                // The watcher retries the failed sync every frame: log it and reload the views
-                // (some Systems may have synced before the failure) once, not every frame.
-                Err(e) if !sync_failing => {
-                    sync_failing = true;
-                    ctx.revision += 1;
-                    eprintln!("game37: {e}");
-                }
-                Err(_) => {}
-            }
-        }
-        // The emulator exited: come back in front (FR-EXT-2).
-        if launcher.poll(&mut nav, &mut ctx, ctx::now()).is_some() {
-            gfx.restore();
-        }
-        // Lets a Core download (FR-EMB-2) progress every frame, not only on input.
-        if nav.tick(&mut ctx) == Flow::Quit {
+        let flow = background(
+            &feeds,
+            &mut nav,
+            &mut ctx,
+            watcher.as_mut(),
+            &mut sync_failing,
+            &mut launcher,
+            || gfx.restore(),
+        );
+        if flow == Flow::Quit {
             break 'frames;
         }
-        // Artwork that finished loading in the background (NFR-3).
-        ctx.artwork.poll(&ctx.library);
         if let Some(play) = ctx.play.take() {
             let refresh = if vsync { gfx.refresh_rate() } else { None };
             sdl::start(&play, &mut nav, &ctx, gfx.gl_context(), audio.as_ref(), refresh);
@@ -395,6 +379,53 @@ fn interactive(
     ctx.remember_fullscreen(gfx.is_fullscreen());
     close(&mut nav, &mut ctx, &mut launcher);
     Ok(())
+}
+
+/// A frame's work besides its input and drawing: syncs the library from the watcher, takes back
+/// an exited emulator, lets a Core download progress and picks up artwork loaded in the
+/// background. None of it runs once the frame's `feeds` ask to close the window: a download
+/// finishing then would start a Game that closing ends at once.
+fn background(
+    feeds: &[Feed],
+    nav: &mut Nav,
+    ctx: &mut Ctx,
+    watcher: Option<&mut LibraryWatcher>,
+    sync_failing: &mut bool,
+    launcher: &mut Launcher,
+    restore: impl FnOnce(),
+) -> Flow {
+    if feeds.contains(&Feed::Quit) {
+        return Flow::Quit;
+    }
+    if let Some(watcher) = watcher {
+        match watcher.poll(&mut ctx.library, ctx::now()) {
+            Ok(changed) => {
+                *sync_failing = false;
+                if changed {
+                    ctx.revision += 1;
+                }
+            }
+            // The watcher retries the failed sync every frame: log it and reload the views
+            // (some Systems may have synced before the failure) once, not every frame.
+            Err(e) if !*sync_failing => {
+                *sync_failing = true;
+                ctx.revision += 1;
+                eprintln!("game37: {e}");
+            }
+            Err(_) => {}
+        }
+    }
+    // The emulator exited: come back in front (FR-EXT-2).
+    if launcher.poll(nav, ctx, ctx::now()).is_some() {
+        restore();
+    }
+    // Lets a Core download (FR-EMB-2) progress every frame, not only on input.
+    if nav.tick(ctx) == Flow::Quit {
+        return Flow::Quit;
+    }
+    // Artwork that finished loading in the background (NFR-3).
+    ctx.artwork.poll(&ctx.library);
+    Flow::Continue
 }
 
 /// What closing the window does once the loop has stopped.
@@ -677,7 +708,14 @@ fn feed(
             Feed::Quit => return Flow::Quit,
             Feed::Control(at, event) => controls.handle(at, event, &mut inputs),
             Feed::Typed(text) => controls.typed(&text, &mut inputs),
-            Feed::Input(input) => inputs.push(input),
+            Feed::Input(input) => {
+                // The mouse shows keyboard glyphs; set here, in event order with the keys and
+                // pads, so the frame's last input decides them.
+                if let Input::Pointer(_) = input {
+                    controls.kind = InputKind::Keyboard;
+                }
+                inputs.push(input);
+            }
             Feed::Repeat(at) => inputs.extend(controls.poll(at)),
         }
         for input in inputs.drain(..) {
@@ -874,13 +912,11 @@ impl InputState {
 
             Event::MouseMotion { x, y, .. } => {
                 let (x, y) = gfx.to_logical(x, y);
-                self.controls.kind = InputKind::Keyboard;
                 self.pointer = Some((x, y));
                 return Some(Feed::Input(Input::Pointer(Pointer::Move { x, y })));
             }
             Event::MouseButtonUp { mouse_btn, x, y, .. } => {
                 let (x, y) = gfx.to_logical(x, y);
-                self.controls.kind = InputKind::Keyboard;
                 let pointer = match mouse_btn {
                     MouseButton::Left => Pointer::Click { x, y },
                     MouseButton::Right => Pointer::RightClick { x, y },
@@ -890,7 +926,6 @@ impl InputState {
                 return Some(Feed::Input(Input::Pointer(pointer)));
             }
             Event::MouseWheel { y, .. } => {
-                self.controls.kind = InputKind::Keyboard;
                 return Some(Feed::Input(Input::Pointer(Pointer::Wheel { dy: y })));
             }
             _ => return None,
@@ -1005,6 +1040,82 @@ mod tests {
             "G0",
             "F erased nothing"
         );
+    }
+
+    /// The glyphs follow the frame's last input in event order, the mouse counting as the
+    /// keyboard: a pad press then a mouse move ends on Keyboard, a mouse move then a pad press on
+    /// Controller.
+    #[test]
+    fn the_input_kind_follows_the_frames_last_input() {
+        let pad = JoystickId::new(1);
+        let press = Feed::Control(
+            0,
+            ControlEvent::PadButtonDown {
+                pad,
+                button: Button::DPadDown,
+            },
+        );
+        let mouse = Feed::Input(Input::Pointer(Pointer::Move { x: 5.0, y: 5.0 }));
+        let cases = [
+            ([press.clone(), mouse.clone()], InputKind::Keyboard),
+            ([mouse, press], InputKind::Controller),
+        ];
+        for (feeds, after) in cases {
+            let log = std::rc::Rc::default();
+            let mut nav = Nav::single(Box::new(StyleRow(log)));
+            let mut ctx = Ctx::empty();
+            let mut controls = Controls::new(InputKind::Keyboard);
+            let flow = feed(
+                &mut controls,
+                feeds.clone(),
+                &mut nav,
+                &Hits::default(),
+                &mut ctx,
+                String::new,
+                |_, _| {},
+            );
+            assert_eq!(flow, Flow::Continue);
+            assert_eq!(controls.kind, after, "after {feeds:?}");
+        }
+    }
+
+    /// Stands in for a Core download: counts the frames it is ticked.
+    struct Download(std::rc::Rc<std::cell::Cell<u32>>);
+
+    impl crate::ui::nav::Screen for Download {
+        fn title(&self) -> &str {
+            "Download"
+        }
+        fn handle(&mut self, _: Input, _: &mut Ctx) -> crate::ui::nav::Transition {
+            crate::ui::nav::Transition::None
+        }
+        fn draw(&mut self, _: &mut Gfx<'_>, _: &Ctx) {}
+        fn hints(&self) -> Vec<crate::ui::nav::Hint> {
+            Vec::new()
+        }
+        fn tick(&mut self, _: &mut Ctx) -> crate::ui::nav::Transition {
+            self.0.set(self.0.get() + 1);
+            crate::ui::nav::Transition::None
+        }
+    }
+
+    /// A frame whose events close the window goes straight to closing: a Core download finishing
+    /// in its tick would otherwise start a Game that closing ends at once.
+    #[test]
+    fn a_frame_that_closes_the_window_does_no_background_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let ticks = std::rc::Rc::default();
+        let mut nav = Nav::single(Box::new(Download(std::rc::Rc::clone(&ticks))));
+        let mut ctx = Ctx::empty();
+        let mut launcher = Launcher::new(Box::new(NeverExits::default()), dir.path().join("logs"));
+        let mut frame =
+            |feeds: &[Feed]| background(feeds, &mut nav, &mut ctx, None, &mut false, &mut launcher, || {});
+
+        assert_eq!(frame(&[Feed::Repeat(0)]), Flow::Continue);
+        assert_eq!(ticks.get(), 1, "an ordinary frame ticks the download");
+        let closing = [Feed::Repeat(0), Feed::Quit, Feed::Repeat(0)];
+        assert_eq!(frame(&closing), Flow::Quit);
+        assert_eq!(ticks.get(), 1, "the closing frame doesn't");
     }
 
     #[test]
