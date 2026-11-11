@@ -537,8 +537,12 @@ impl Library {
     }
 
     pub fn set_hidden(&self, id: i64, hidden: bool) -> Result<(), DbError> {
-        self.conn
-            .execute("UPDATE games SET hidden = ?2 WHERE id = ?1", params![id, hidden])?;
+        // Hiding unfavorites (`hide_game`), so a hidden Favorite is a leftover from before that;
+        // unhiding clears it, which keeps the Favorites at five at most.
+        self.conn.execute(
+            "UPDATE games SET hidden = ?2, favorited_at = CASE WHEN ?2 THEN favorited_at END WHERE id = ?1",
+            params![id, hidden],
+        )?;
         Ok(())
     }
 
@@ -957,6 +961,19 @@ mod tests {
         let hidden = lib.hidden_games().unwrap();
         assert_eq!(titles(&hidden), ["A"]);
         assert!(!hidden[0].favorite, "no longer a Favorite");
+    }
+
+    #[test]
+    fn unhiding_a_hidden_favorite_left_from_before_clears_the_favorite() {
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_system("snes", &games("snes", &["A"]), 0).unwrap();
+        let a = id_of(&lib, "snes", "A");
+        // How the old Hide could leave it: hidden, still a Favorite.
+        lib.set_favorite(a, true, 1).unwrap();
+        lib.set_hidden(a, true).unwrap();
+        lib.set_hidden(a, false).unwrap();
+        assert!(!lib.game(a).unwrap().unwrap().favorite);
+        assert!(lib.shelf(Shelf::Favorites, None).unwrap().is_empty());
     }
 
     #[test]
