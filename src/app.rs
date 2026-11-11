@@ -65,7 +65,11 @@ pub fn run(options: Options) -> Result<(), String> {
             screenshot(nav, ctx, launcher, shot)
         }
         None => {
-            ctx.animate = true;
+            // Full motion, unless the player asked for less (Settings → Display).
+            ctx.animate = !ctx.library.reduced_motion().unwrap_or_else(|e| {
+                eprintln!("game37: can't read the motion setting: {e}");
+                false
+            });
             let watcher = has_library.then(|| start_live_library(&mut ctx));
             let setup_root = dirs::home_dir().expect("no home directory").join("Games");
             let nav = screens::start(loaded, &setup_root, &ctx);

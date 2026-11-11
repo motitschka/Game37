@@ -185,6 +185,15 @@ impl Ctx {
     }
 
     /// Switches the startup window mode (US-33) and saves it; it applies from the next start.
+    /// Turns motion (fades, slides, gliding) on or off for good: `Ctx::animate`, saved as the
+    /// player's Reduced motion choice.
+    pub fn set_reduced_motion(&mut self, reduced: bool) {
+        self.animate = !reduced;
+        if let Err(e) = self.library.set_reduced_motion(reduced) {
+            eprintln!("game37: can't save the motion setting: {e}");
+        }
+    }
+
     pub fn set_window_mode(&mut self, mode: WindowMode) {
         self.window_mode = mode;
         if let Err(e) = self.library.set_window_mode(mode) {

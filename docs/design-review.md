@@ -31,8 +31,9 @@ focus again.
 - [ ] The same for Settings sections and rows, and Setup's rows.
 - [x] **Artwork fades in** over its placeholder (180 ms) when it arrives, instead of swapping from
   placeholder to picture in one frame (most visible on a first scroll through a big library).
-- [ ] **Reduced motion.** A Settings → Display switch that turns all of this off, for players who
-  find motion uncomfortable; it only has to set what `Ctx::animate` already controls.
+- [x] **Reduced motion.** Settings → Display → Motion: Full or Reduced. Reduced turns all of this
+  off (and the Carousel's slide) for players who find motion uncomfortable; it is saved and applies at
+  once, through what `Ctx::animate` already controls.
 
 ## Screens
 
