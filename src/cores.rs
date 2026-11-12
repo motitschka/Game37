@@ -323,6 +323,27 @@ pub static BEETLE_PSX_HW: CoreInfo = CoreInfo {
     saves: InGameSaves::SaveMemory,
     touch: None,
 };
+
+/// The DS's own BIOS and firmware, dumped from a DS. They're optional: without all three in
+/// `<Games Root>/bios/`, melonDS DS plays on its built-in FreeBIOS and firmware, which run most
+/// Games but are less compatible (issue #42). It uses none of them unless its firmware option names
+/// the firmware, and never mixes its own with these.
+pub const DS_SYSFILES: [&str; 3] = ["bios7.bin", "bios9.bin", "firmware.bin"];
+
+/// melonDS DS's option naming the DS firmware it loads from its system directory, `/notfound`
+/// (none) by default.
+pub const DS_FIRMWARE_OPTION: &str = "melonds_firmware_nds_path";
+
+/// The [`DS_SYSFILES`] missing from `<games_root>/bios/`, in order. melonDS DS opens them by these
+/// exact names, so case counts here, unlike for the PS1 and PS2 BIOS. Empty files don't count.
+pub fn missing_ds_sysfiles(games_root: &Path) -> Vec<&'static str> {
+    let bios = games_root.join("bios");
+    DS_SYSFILES
+        .into_iter()
+        .filter(|name| !fs::metadata(bios.join(name)).is_ok_and(|m| m.is_file() && m.len() > 0))
+        .collect()
+}
+
 /// Options chosen for FR-DS-1–3: two hybrid layouts (one large screen, one small), the touch
 /// pointer and joystick cursor both live, and a visible cursor for aiming it.
 pub static MELONDS_DS: CoreInfo = CoreInfo {
@@ -433,6 +454,46 @@ pub static DOLPHIN: CoreInfo = CoreInfo {
     saves: InGameSaves::Shared,
     touch: None,
 };
+
+/// suyu (ADR 0019), for Switch: a yuzu-derived emulator whose libretro Core renders with its own
+/// Vulkan device and hands Game37 finished frames, so it needs no OpenGL host. It isn't on the
+/// build server: Game37 uses it built from suyu's pinned source with Game37's patches
+/// (`scripts/build-suyu-core.sh`, [`CoreInfo::downloads`]). Its sound goes through Game37, its
+/// on-screen frame counter is off, and the Switch plays docked. It keeps its NAND (which holds
+/// In-game Saves) under the System's save folder and its config and caches in its own system
+/// folder ([`CoreInfo::own_system_dir`]). It has no Save States and can't restart a Game
+/// ([`CoreInfo::has_states`], [`CoreInfo::resets`]). Encrypted Games need the player's keys
+/// ([`SWITCH_KEYS`]).
+pub static SUYU: CoreInfo = CoreInfo {
+    name: "suyu",
+    file: "suyu_libretro.so",
+    options: &[
+        ("suyu_show_perf", "Off"),
+        ("suyu_audio_output", "Frontend (libretro)"),
+        ("suyu_use_docked", "Yes"),
+    ],
+    bios: None,
+    assets: None,
+    saves: InGameSaves::Shared,
+    touch: None,
+};
+
+/// The player's own Switch keys (FR-NEW-5): `prod.keys`, and `title.keys` if they have one, in
+/// `<Games Root>/bios/switch/`. Only encrypted Games (`.nsp`, `.xci`) need them; homebrew
+/// (`.nro`) runs without.
+pub static SWITCH_KEYS: BiosRule = BiosRule {
+    folder: "switch",
+    files: BiosFiles::Named(&["prod.keys"]),
+    wording: BiosWording {
+        title: "Switch keys missing",
+        message: "Switch games need keys dumped from your own Switch. Put your prod.keys (and \
+                  title.keys, if you have it) in {dir}.",
+        ask_for: "your own prod.keys (for .nsp and .xci),",
+    },
+};
+
+/// The Switch keys files Game37 copies into suyu's own folder before it loads a Game.
+pub const SWITCH_KEY_FILES: [&str; 2] = ["prod.keys", "title.keys"];
 
 /// Dolphin's Wii Remote with a Nunchuk (`RETRO_DEVICE_WIIMOTE_NC` in its `Input.cpp`): what most
 /// Wii Games play with. The left stick is the Nunchuk's stick and the right stick points the
@@ -669,11 +730,22 @@ impl CoreInfo {
         }
     }
 
+    /// Whether this Core can't run a Game without an OpenGL host beside the SDL renderer, which
+    /// only the `opengl` renderer gives: once `SET_HW_RENDER` is refused, Mupen64Plus-Next and
+    /// Azahar refuse to load the Game, and Dolphin does too but then crashes Game37 (issue #43).
+    /// LRPS2 is set to its OpenGL renderer. Beetle PSX HW and melonDS DS fall back to their own
+    /// software renderers, and PPSSPP's host is GLX's, made apart from the renderer.
+    pub fn needs_gl(&self) -> bool {
+        [&MUPEN64PLUS_NEXT, &AZAHAR, &DOLPHIN, &LRPS2]
+            .iter()
+            .any(|core| std::ptr::eq(self, *core))
+    }
+
     /// Whether the left stick also presses the d-pad: for Systems without an analog stick. N64,
     /// GameCube, Wii (the Nunchuk's), PSP, PS2 and 3DS have one, so their Cores read it as analog
     /// only.
     pub fn stick_is_dpad(&self) -> bool {
-        ![&MUPEN64PLUS_NEXT, &PPSSPP, &LRPS2, &AZAHAR, &DOLPHIN]
+        ![&MUPEN64PLUS_NEXT, &PPSSPP, &LRPS2, &AZAHAR, &DOLPHIN, &SUYU]
             .iter()
             .any(|core| std::ptr::eq(self, *core))
     }
@@ -684,6 +756,41 @@ impl CoreInfo {
     /// (a Wii Game after a 50 Hz GameCube one would run at 50 frames a second).
     pub fn rereads_timing(&self) -> bool {
         std::ptr::eq(self, &DOLPHIN)
+    }
+
+    /// Whether Game37 downloads this Core from the libretro build server. suyu isn't there: it is
+    /// built from source with Game37's patches (`scripts/build-suyu-core.sh`, ADR 0019).
+    pub fn downloads(&self) -> bool {
+        !std::ptr::eq(self, &SUYU)
+    }
+
+    /// Whether this Core can save and load states, and so have Save States and a Resume State
+    /// (FR-EMB-5, FR-EMB-6). suyu can't.
+    pub fn has_states(&self) -> bool {
+        !std::ptr::eq(self, &SUYU)
+    }
+
+    /// Whether this Core can restart a Game (`retro_reset`), for the Pause Menu's Restart game.
+    /// suyu can't.
+    pub fn resets(&self) -> bool {
+        !std::ptr::eq(self, &SUYU)
+    }
+
+    /// Whether this Core keeps its system directory under the data dir though it has no assets:
+    /// suyu writes its config, caches and logs there, which don't belong with the player's BIOS
+    /// files.
+    pub fn own_system_dir(&self) -> bool {
+        std::ptr::eq(self, &SUYU)
+    }
+
+    /// The keys a Game at `game` needs before this Core can start it: suyu's encrypted Games
+    /// (`.nsp`, `.xci`) need [`SWITCH_KEYS`]; homebrew needs none.
+    pub fn keys_for(&self, game: &Path) -> Option<&'static BiosRule> {
+        let encrypted = game
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("nsp") || e.eq_ignore_ascii_case("xci"));
+        (std::ptr::eq(self, &SUYU) && encrypted).then_some(&SWITCH_KEYS)
     }
 
     /// Whether this Core is loaded into an address window
@@ -722,8 +829,16 @@ pub fn for_system(system: &System) -> Option<&'static CoreInfo> {
         "3ds" => Some(&AZAHAR),
         "ps2" => Some(&LRPS2),
         "psp" => Some(&PPSSPP),
+        "switch" => Some(&SUYU),
         _ => None,
     }
+}
+
+/// The Core Game37 downloads for a System: [`for_system`]'s, unless it isn't on the build server
+/// ([`CoreInfo::downloads`]), as suyu isn't. The download screens (Setup's Cores step, Settings →
+/// Cores) list only these.
+pub fn downloadable_for(system: &System) -> Option<&'static CoreInfo> {
+    for_system(system).filter(|core| core.downloads())
 }
 
 /// Where a Core is, or would be, stored: `<data_dir>/cores/<file>`.
@@ -734,7 +849,7 @@ pub fn installed_path(data_dir: &Path, core: &CoreInfo) -> PathBuf {
 /// A Core's own system directory (ADR 0005): `<data dir>/system` for a Core with assets, which are
 /// replaceable data, `<Games Root>/bios` for every other Core's BIOS files (FR-LIB-9).
 pub fn system_dir(core: &CoreInfo, data_dir: &Path, games_root: &Path) -> PathBuf {
-    if core.assets.is_some() {
+    if core.assets.is_some() || core.own_system_dir() {
         data_dir.join("system")
     } else {
         games_root.join("bios")
@@ -770,6 +885,27 @@ pub fn is_installed(data_dir: &Path, core: &CoreInfo) -> bool {
 /// Whether `core`'s BIOS is in place (see [`BiosRule::found`]). True when the Core needs none.
 pub fn has_required_bios(games_root: &Path, core: &CoreInfo) -> bool {
     core.bios.is_none_or(|rule| rule.found(games_root).is_some())
+}
+
+/// Copies the player's Switch keys ([`SWITCH_KEY_FILES`] in [`SWITCH_KEYS`]' folder) to where
+/// suyu reads them, `<system dir>/suyu/keys/`, before it loads a Game, replacing older copies so a
+/// new dump takes effect. Does nothing for any other Core, or for a key file that isn't there.
+/// The files are copied, never read or logged.
+pub fn stage_keys(core: &CoreInfo, games_root: &Path, system_dir: &Path) -> io::Result<()> {
+    if !std::ptr::eq(core, &SUYU) {
+        return Ok(());
+    }
+    let from = SWITCH_KEYS.dir(games_root);
+    let to = system_dir.join("suyu").join("keys");
+    for name in SWITCH_KEY_FILES {
+        let source = from.join(name);
+        if !source.is_file() {
+            continue;
+        }
+        fs::create_dir_all(&to)?;
+        fs::copy(&source, to.join(name))?;
+    }
+    Ok(())
 }
 
 /// The file that satisfies `core`'s BIOS rule, named as it is on disk (see [`BiosRule::found`]).
@@ -2695,5 +2831,85 @@ mod tests {
         let bytes = fs::read(&path).unwrap();
         assert!(bytes.starts_with(ELF_MAGIC));
         assert_eq!(leftovers(&data_dir), Vec::<PathBuf>::new());
+    }
+    #[test]
+    fn switch_plays_on_suyu_which_game37_builds_rather_than_downloads() {
+        let switch = crate::systems::by_id("switch").unwrap();
+        assert_eq!(for_system(switch), Some(&SUYU));
+        assert!(!SUYU.downloads());
+        assert_eq!(
+            downloadable_for(switch),
+            None,
+            "the download screens leave it out"
+        );
+        assert_eq!(
+            downloadable_for(crate::systems::by_id("snes").unwrap()),
+            Some(&BSNES)
+        );
+    }
+
+    #[test]
+    fn suyu_has_no_save_states_and_no_restart() {
+        assert!(!SUYU.has_states());
+        assert!(!SUYU.resets());
+        for core in [&MESEN, &BSNES, &DOLPHIN, &LRPS2, &AZAHAR, &PPSSPP] {
+            assert!(core.has_states() && core.resets(), "{}", core.name);
+            assert!(core.downloads(), "{}", core.name);
+        }
+    }
+
+    #[test]
+    fn suyu_keeps_its_system_folder_under_the_data_dir() {
+        let (data, root) = (Path::new("/data"), Path::new("/Games"));
+        assert_eq!(system_dir(&SUYU, data, root), Path::new("/data/system"));
+        assert_eq!(system_dir(&BSNES, data, root), Path::new("/Games/bios"));
+    }
+
+    #[test]
+    fn only_encrypted_switch_games_need_the_keys() {
+        for game in ["switch/A.nsp", "switch/B.XCI"] {
+            assert_eq!(SUYU.keys_for(Path::new(game)), Some(&SWITCH_KEYS), "{game}");
+        }
+        assert_eq!(SUYU.keys_for(Path::new("switch/Homebrew.nro")), None);
+        assert_eq!(BSNES.keys_for(Path::new("snes/A.xci")), None);
+        assert_eq!(
+            SWITCH_KEYS.dir(Path::new("/Games")),
+            Path::new("/Games/bios/switch")
+        );
+    }
+
+    #[test]
+    fn stage_keys_copies_the_players_keys_where_suyu_reads_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, system) = (dir.path().join("Games"), dir.path().join("system"));
+        let keys = SWITCH_KEYS.dir(&root);
+        fs::create_dir_all(&keys).unwrap();
+        fs::write(keys.join("prod.keys"), "old").unwrap();
+        fs::write(keys.join("notes.txt"), "not a key").unwrap();
+        stage_keys(&SUYU, &root, &system).unwrap();
+        let staged = system.join("suyu/keys");
+        assert_eq!(fs::read_to_string(staged.join("prod.keys")).unwrap(), "old");
+        assert!(!staged.join("title.keys").exists(), "only keys that are there");
+        assert!(!staged.join("notes.txt").exists(), "only key files");
+
+        // A new dump replaces the copy.
+        fs::write(keys.join("prod.keys"), "new").unwrap();
+        fs::write(keys.join("title.keys"), "titles").unwrap();
+        stage_keys(&SUYU, &root, &system).unwrap();
+        assert_eq!(fs::read_to_string(staged.join("prod.keys")).unwrap(), "new");
+        assert_eq!(fs::read_to_string(staged.join("title.keys")).unwrap(), "titles");
+    }
+
+    #[test]
+    fn stage_keys_does_nothing_for_other_cores_or_without_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, system) = (dir.path().join("Games"), dir.path().join("system"));
+        stage_keys(&SUYU, &root, &system).unwrap();
+        assert!(!system.exists(), "no keys, nothing made");
+        let keys = SWITCH_KEYS.dir(&root);
+        fs::create_dir_all(&keys).unwrap();
+        fs::write(keys.join("prod.keys"), "k").unwrap();
+        stage_keys(&BSNES, &root, &system).unwrap();
+        assert!(!system.exists());
     }
 }

@@ -23,8 +23,8 @@ The story in brackets stays open on GitHub until its checks pass.
 
 ## 3. External emulators
 
-- [ ] Each of the 4 External Systems (Wii U, Switch, PS3, PS4) starts its emulator with a real Game (RPCS3 needs firmware,
-      Ryubing `prod.keys`, shadPS4 its modules). (US-30)
+- [ ] Each of the 3 External Systems (Wii U, PS3, PS4) starts its emulator with a real Game (RPCS3 needs firmware,
+      shadPS4 its modules). (US-30)
 - [ ] When the emulator exits, GNOME brings Game37 back to the front and Playtime goes up. (US-30)
 - [ ] Removing an emulator's Flatpak shows the badge and notice; reinstalling it and pressing Check
       again clears them. (US-39)
@@ -91,3 +91,15 @@ The Switch controller in PlayStation Games is checked in section 5.
       there keeps its aspect ratio with bars as before, and its Pause Menu looks as it did.
 - [ ] Switching F11 between windowed and fullscreen, and resizing the window, on a scrolled Console
       Page and in Settings → Hidden games: the focused item stays in view and nothing is cut off.
+
+## 10. Switch inside Game37 (ADR 0019)
+
+- [ ] `scripts/build-suyu-core.sh` builds and installs the Core on a fresh checkout; Settings → BIOS
+      then shows the Switch row as built (and the keys as optional until they're there).
+- [ ] With your own `prod.keys` dumped from your own Switch in `~/Games/bios/switch/`, one of your own
+      Games (`.nsp` or `.xci`) starts, plays with the controller, and makes sound; note the frame rate.
+- [ ] Without the keys, Play on an `.nsp` shows "Switch keys missing" naming that folder.
+- [ ] The Pause Menu over a Switch Game shows Save state, Load state and Restart game greyed with the
+      note, and the Game (and its sound) stops while the menu is open, then carries on with Resume.
+- [ ] An In-game Save made in a Switch Game is there after quitting and starting it again, and lives
+      under `~/Games/saves/switch/suyu/nand/`. Nothing appears in `~/.local/share/suyu`.

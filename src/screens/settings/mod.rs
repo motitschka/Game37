@@ -15,6 +15,7 @@ mod hidden;
 mod library;
 
 use crate::ctx::Ctx;
+use crate::ui::anim::{Eased, FOCUS_TAU};
 use crate::ui::chrome;
 use crate::ui::cover::ellipsize;
 use crate::ui::gfx::{Align, Gfx, TextStyle};
@@ -156,6 +157,10 @@ pub trait Section {
     fn shown(&mut self, _ctx: &Ctx) {}
     /// Called once a frame for every section, focused or not, so a download goes on meanwhile.
     fn tick(&mut self, _ctx: &mut Ctx) {}
+    /// Whether it has work going that closing Settings would cancel: a Core download.
+    fn working(&self) -> bool {
+        false
+    }
     /// Where each of `rows` is drawn, with its index, for the mouse: the cards of [`row_rects`]
     /// unless the section lays out its rows itself.
     fn layout(&self, rows: &[Row]) -> Vec<(Rect, usize)> {
@@ -182,6 +187,11 @@ pub struct Settings {
     focus: Focus,
     /// The focused section's rows as last read, for the hints and the mouse.
     rows: Vec<Row>,
+    /// Where the sections' highlight is drawn, eased between sections.
+    section_bar: Eased,
+    /// Where the rows' highlight is drawn (top and height), eased between rows; `None` until the
+    /// focus enters a section's rows, and again after it leaves.
+    row_bar: Option<(Eased, Eased)>,
 }
 
 impl Default for Settings {
@@ -210,6 +220,8 @@ impl Settings {
             row: 0,
             focus: Focus::Sections,
             rows: Vec::new(),
+            section_bar: Eased::new(section_rect(0).y),
+            row_bar: None,
         }
     }
 
@@ -278,15 +290,20 @@ impl Settings {
     }
 
     fn draw_sections(&self, gfx: &mut Gfx<'_>) {
+        if self.focus == Focus::Sections {
+            // The highlight glides between sections rather than jumping.
+            let r = Rect {
+                y: self.section_bar.value(),
+                ..section_rect(0)
+            };
+            gfx.fill_round_rect(r, 14.0, SURFACE2);
+            gfx.fill_round_rect(Rect::new(r.x, r.y + 12.0, 5.0, 40.0), 2.0, ACCENT);
+        }
         for (i, section) in self.sections.iter().enumerate() {
             let r = section_rect(i);
             let on = i == self.section;
             let ink = match (on, self.focus) {
-                (true, Focus::Sections) => {
-                    gfx.fill_round_rect(r, 14.0, SURFACE2);
-                    gfx.fill_round_rect(Rect::new(r.x, r.y + 12.0, 5.0, 40.0), 2.0, ACCENT);
-                    TextStyle::new(24, Weight::Bold, TEXT)
-                }
+                (true, Focus::Sections) => TextStyle::new(24, Weight::Bold, TEXT),
                 (true, Focus::Rows) => {
                     gfx.fill_round_rect(r, 14.0, SURFACE);
                     TextStyle::new(24, Weight::Bold, ACCENT)
@@ -298,18 +315,24 @@ impl Settings {
     }
 
     fn draw_rows(&self, gfx: &mut Gfx<'_>) {
-        for (row, (r, i)) in self.rows.iter().zip(row_rects(&self.rows)) {
+        let rects = row_rects(&self.rows);
+        for &(r, _) in &rects {
+            gfx.fill_round_rect(r, 14.0, SURFACE.alpha(0.6));
+        }
+        // The highlight glides between rows, over their backgrounds and under their text.
+        if self.focus == Focus::Rows
+            && let Some((y, h)) = &self.row_bar
+        {
+            let r = Rect::new(RX, y.value(), RW, h.value());
+            gfx.fill_round_rect(r, 14.0, SURFACE2);
+            gfx.fill_round_rect(Rect::new(r.x, r.y + r.h / 2.0 - 20.0, 5.0, 40.0), 2.0, ACCENT);
+        }
+        for (row, (r, i)) in self.rows.iter().zip(rects) {
             if let Some(name) = row.group {
                 let style = TextStyle::new(14, Weight::Bold, MUTED);
                 gfx.text(RX + 8.0, r.y - 18.0, &name.to_uppercase(), style, Align::Left);
             }
             let focused = self.focus == Focus::Rows && i == self.row;
-            if focused {
-                gfx.fill_round_rect(r, 14.0, SURFACE2);
-                gfx.fill_round_rect(Rect::new(r.x, r.y + r.h / 2.0 - 20.0, 5.0, 40.0), 2.0, ACCENT);
-            } else {
-                gfx.fill_round_rect(r, 14.0, SURFACE.alpha(0.6));
-            }
             let base = r.y + r.h / 2.0 + if row.sub.is_some() { -6.0 } else { 8.0 };
             let weight = if focused { Weight::Bold } else { Weight::SemiBold };
             let ink = if row.danger { DANGER } else { TEXT };
@@ -412,6 +435,23 @@ impl Screen for Settings {
 
     fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
         self.refresh(ctx);
+        self.section_bar.set(section_rect(self.section).y);
+        self.section_bar.step(ctx.animate, FOCUS_TAU);
+        let target = row_rects(&self.rows)
+            .get(self.row)
+            .filter(|_| self.focus == Focus::Rows)
+            .map(|&(r, _)| r);
+        match (target, &mut self.row_bar) {
+            (Some(r), Some((y, h))) => {
+                y.set(r.y);
+                h.set(r.h);
+                y.step(ctx.animate, FOCUS_TAU);
+                h.step(ctx.animate, FOCUS_TAU);
+            }
+            // Entering the rows, the highlight starts on the focused row.
+            (Some(r), None) => self.row_bar = Some((Eased::new(r.y), Eased::new(r.h))),
+            (None, _) => self.row_bar = None,
+        }
         gfx.text(
             M,
             196.0,
@@ -440,6 +480,10 @@ impl Screen for Settings {
         for section in &mut self.sections {
             section.tick(ctx);
         }
+    }
+
+    fn working(&self) -> bool {
+        self.sections.iter().any(|s| s.working())
     }
 
     fn hints(&self) -> Vec<Hint> {

@@ -18,7 +18,7 @@ mkdir -p "$out/root"
 root=$out/root
 cp -r "$testdata/games" "$root/games"
 for f in "wiiu/Xenoblade Chronicles X (Europe).wua" \
-    "ps2/Persona 4 (USA).iso" "switch/Hello World.nro" \
+    "ps2/Persona 4 (USA).iso" \
     "switch2/Mario Kart World.xci"; do
     mkdir -p "$root/games/$(dirname "$f")"
     : > "$root/games/$f"
@@ -99,6 +99,9 @@ shot m8-ps2-no-bios "$root/cfg.toml" "nexttab,left,left,left,left,left,confirm,c
 shot m8-3ds "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..9}),confirm,confirm,confirm" --frames 600
 shot m8-gc "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..6}),confirm,confirm,confirm" --frames 600
 shot m8-wii "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..8}),confirm,confirm,confirm" --frames 600
+# Switch on the suyu Core (ADR 0019): Space NX, then the Pause Menu with Save state, Load state and
+# Restart game greyed, as suyu has no states and can't restart.
+shot m10-switch-pause "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..11}),confirm,confirm,confirm,wait:300,back" --frames 30
 # A Wii Game's Options Menu with its Controller row switched to the Classic Controller (m8-wii left
 # a Resume State, so Delete save data is enabled and three downs reach the row)
 shot m8-options-wii "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..8}),confirm,confirm,options,down,down,down,right"
@@ -119,15 +122,16 @@ shot m5-rename "$root/cfg.toml" \
 # M6: top bar entries
 shot m6-search-open "$root/cfg.toml" "down,down,search"
 shot m6-settings-open "$root/cfg.toml" "settings"
-# First-run Setup step 2: Wii U, Switch and PlayStation 3 ticked, then every System
+# First-run Setup step 2: Wii U, Switch and PlayStation 3 ticked (Switch plays in Game37, so its
+# row is not here), then every System
 shot m6-setup-emulators "$root/missing.toml" \
-    "down,right,right,right,confirm,right,confirm,down,left,left,confirm,settings" --missing-emulators switch,ps3
-shot m6-setup-emulators-all "$root/missing.toml" "sort,settings" --missing-emulators wiiu,switch,ps3,ps4
+    "down,right,right,right,confirm,right,confirm,down,left,left,confirm,settings" --missing-emulators ps3
+shot m6-setup-emulators-all "$root/missing.toml" "sort,settings" --missing-emulators wiiu,ps3,ps4
 # First-run Setup step 3: NES, Wii U, Switch and PlayStation 3 ticked, on through step 2, then
 # Create folders, under the Games Root that screenshot mode puts in the data dir
 shot m6-setup-folders "$root/missing.toml" \
     "confirm,down,right,right,right,confirm,right,confirm,down,left,left,confirm,settings,settings,confirm" \
-    --missing-emulators switch,ps3
+    --missing-emulators ps3
 # First-run Setup step 4: NES and PSP ticked, step 2 passed over, Create folders on step 3, then the
 # Cores, which the smoke data dirs already have, so nothing downloads
 shot m6-setup-cores "$root/missing.toml" "confirm,down,down,right,confirm,settings,confirm,settings"
@@ -208,7 +212,7 @@ shot tall-settings-games-root "$root/cfg.toml" "settings,right,confirm" "${tall[
 shot tall-setup "$root/missing.toml" "" "${tall[@]}"                                    # m1-no-config
 shot tall-setup-folders "$root/missing.toml" \
     "confirm,down,right,right,right,confirm,right,confirm,down,left,left,confirm,settings,settings,confirm" \
-    --missing-emulators switch,ps3 "${tall[@]}"                                          # m6-setup-folders
+    --missing-emulators ps3 "${tall[@]}"                                          # m6-setup-folders
 shot tall-notice "$root/cfg.toml" "nexttab,left,left,left,left,left,left,left,left,left,confirm" \
     --missing-emulators wiiu "${tall[@]}"                                                # m2-notice
 shot tall-rename "$root/cfg.toml" \

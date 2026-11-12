@@ -1,0 +1,235 @@
+--- a/src/libretro_core/retro_core.cpp
++++ b/src/libretro_core/retro_core.cpp
+@@ -34,6 +34,10 @@
+ //     unavailable rather than offering them and failing later.
+ 
+ #include <algorithm>
++#include <atomic>
++#include <condition_variable>
++#include <mutex>
++#include <thread>
+ #include <array>
+ #include <cstring>
+ #include <cstdlib>
+@@ -298,6 +302,61 @@
+     g_input_state_cb = cb;
+ }
+ 
++#ifndef SUYU_ANDROID_LIBRETRO
++// Keep everything the core writes in the frontend's folders instead of the
++// user's own suyu folders: config, cache, logs and keys under
++// <system>/suyu, and the emulated NAND and SD card (which hold the game
++// saves) under <save>/suyu. A frontend that gives no system directory keeps
++// suyu's usual folders.
++static void UseFrontendDirectories() {
++    const char* system_directory = nullptr;
++    if (!g_environ_cb ||
++        !g_environ_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &system_directory) ||
++        !system_directory || !*system_directory) {
++        return;
++    }
++    const auto user_directory = std::filesystem::path{system_directory} / "suyu";
++    std::error_code error;
++    std::filesystem::create_directories(user_directory, error);
++    if (error) {
++        return;
++    }
++    // On desktop Linux SetAppDirectory keeps the XDG folders, so every path is set here.
++    using Common::FS::SuyuPath;
++    const std::pair<SuyuPath, const char*> own[] = {
++        {SuyuPath::AmiiboDir, "amiibo"},      {SuyuPath::CacheDir, "cache"},
++        {SuyuPath::ConfigDir, "config"},      {SuyuPath::CrashDumpsDir, "crash_dumps"},
++        {SuyuPath::DumpDir, "dump"},          {SuyuPath::KeysDir, "keys"},
++        {SuyuPath::LoadDir, "load"},          {SuyuPath::LogDir, "log"},
++        {SuyuPath::PlayTimeDir, "play_time"}, {SuyuPath::ScreenshotsDir, "screenshots"},
++        {SuyuPath::TASDir, "tas"},            {SuyuPath::IconsDir, "icons"},
++        {SuyuPath::ThemesDir, "themes"},      {SuyuPath::NANDDir, "nand"},
++        {SuyuPath::SaveDir, "nand"},          {SuyuPath::SDMCDir, "sdmc"},
++    };
++    // SetSuyuPath ignores a folder that doesn't exist yet, so each is made first.
++    const auto set = [](SuyuPath path, const std::filesystem::path& dir) {
++        std::error_code ignored;
++        std::filesystem::create_directories(dir, ignored);
++        Common::FS::SetSuyuPath(path, dir);
++    };
++    set(SuyuPath::EdenDir, user_directory);
++    for (const auto& [path, name] : own) {
++        set(path, user_directory / name);
++    }
++    set(SuyuPath::ShaderDir, user_directory / "cache" / "shader");
++    // The emulated NAND and SD card hold the game saves: they go in the frontend's save folder.
++    const char* save_directory = nullptr;
++    if (g_environ_cb(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &save_directory) && save_directory &&
++        *save_directory) {
++        const auto saves = std::filesystem::path{save_directory} / "suyu";
++        set(SuyuPath::NANDDir, saves / "nand");
++        set(SuyuPath::SaveDir, saves / "nand");
++        set(SuyuPath::SDMCDir, saves / "sdmc");
++    }
++    Common::FS::CreateSuyuPaths();
++}
++#endif
++
+ RETRO_API void retro_init() {
+ #ifdef SUYU_ANDROID_LIBRETRO
+     // RetroArch owns Android storage; establish a writable core directory before
+@@ -316,6 +375,8 @@
+     }
+     Common::FS::SetAppDirectory(user_directory.string());
+     Common::FS::CreateSuyuPaths();
++#else
++    UseFrontendDirectories();
+ #endif
+     Common::Log::Initialize();
+     Common::Log::Start();
+@@ -455,6 +516,81 @@
+ bool g_prev_buttons[20] = {};
+ } // namespace
+ 
++// A frontend pauses a libretro core by not calling retro_run (RetroArch's pause,
++// a frontend's own menu). The emulated Switch runs on its own threads, so
++// without this it would keep playing, sound and all. A watchdog pauses it once
++// retro_run has not been called for kPauseAfter, and the next retro_run resumes it.
++static constexpr auto kPauseAfter = std::chrono::milliseconds(200);
++static std::mutex g_pause_mutex;
++static std::condition_variable g_pause_cv;
++static std::thread g_pause_watchdog;
++static bool g_pause_watchdog_stop = false;
++static bool g_paused_by_watchdog = false;
++static std::chrono::steady_clock::time_point g_last_run;
++
++static void StartPauseWatchdog() {
++    std::lock_guard lock{g_pause_mutex};
++    g_pause_watchdog_stop = false;
++    g_paused_by_watchdog = false;
++    g_last_run = std::chrono::steady_clock::now();
++    g_pause_watchdog = std::thread([] {
++        std::unique_lock lock{g_pause_mutex};
++        while (!g_pause_watchdog_stop) {
++            g_pause_cv.wait_for(lock, std::chrono::milliseconds(50));
++            if (!g_pause_watchdog_stop && !g_paused_by_watchdog &&
++                std::chrono::steady_clock::now() - g_last_run > kPauseAfter) {
++                g_system->Pause();
++                g_paused_by_watchdog = true;
++                LOG_INFO(Frontend, "libretro: paused, retro_run not called");
++            }
++        }
++    });
++}
++
++// Stops the watchdog and leaves the system running, as unloading expects.
++static void StopPauseWatchdog() {
++    {
++        std::lock_guard lock{g_pause_mutex};
++        g_pause_watchdog_stop = true;
++    }
++    g_pause_cv.notify_all();
++    if (g_pause_watchdog.joinable()) {
++        g_pause_watchdog.join();
++    }
++    if (g_paused_by_watchdog) {
++        g_system->Run();
++        g_paused_by_watchdog = false;
++    }
++}
++
++static void NoteRetroRun() {
++    std::lock_guard lock{g_pause_mutex};
++    g_last_run = std::chrono::steady_clock::now();
++    if (g_paused_by_watchdog) {
++        g_system->Run();
++        g_paused_by_watchdog = false;
++        LOG_INFO(Frontend, "libretro: resumed");
++    }
++}
++
++// The emulated controller the RetroPad drives: player 1's Pro Controller when
++// docked, the handheld console's own controls (npad slot 8) when not.
++static std::size_t FrontendPort() {
++    return Settings::IsDockedMode() ? 0 : 8;
++}
++
++static void ConnectFrontendController() {
++    auto& players = Settings::values.players.GetValue();
++    const bool docked = Settings::IsDockedMode();
++    players[0].connected = docked;
++    players[0].controller_type = Settings::ControllerType::ProController;
++    players[8].connected = !docked;
++    players[8].controller_type = Settings::ControllerType::Handheld;
++    g_system->HIDCore().ReloadInputDevices();
++    LOG_INFO(Frontend, "libretro: frontend controller connected as {}",
++             docked ? "player 1 Pro Controller" : "handheld");
++}
++
+ RETRO_API void retro_run() {
+     // This frontend is the sole periodic consumer of the destructive stats read.
+     // Sample guest rendering/timing, independently of retro_run's frontend FPS.
+@@ -528,6 +664,9 @@
+             g_perf_unique_frames = 0;
+         }
+     }
++    if (g_game_loaded) {
++        NoteRetroRun();
++    }
+     if (g_input_poll_cb) {
+         g_input_poll_cb();
+     }
+@@ -541,17 +680,17 @@
+                 const int idx = static_cast<int>(m.virtual_button);
+                 if (pressed != g_prev_buttons[idx]) {
+                     g_prev_buttons[idx] = pressed;
+-                    vgp->SetButtonState(0, m.virtual_button, pressed);
++                    vgp->SetButtonState(FrontendPort(), m.virtual_button, pressed);
+                 }
+             }
+             // Left analog stick
+             const float lx = g_input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X) / 32768.0f;
+             const float ly = g_input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y) / -32768.0f;
+-            vgp->SetStickPosition(0, InputCommon::VirtualGamepad::VirtualStick::Left, lx, ly);
++            vgp->SetStickPosition(FrontendPort(), InputCommon::VirtualGamepad::VirtualStick::Left, lx, ly);
+             // Right analog stick
+             const float rx = g_input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_X) / 32768.0f;
+             const float ry = g_input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y) / -32768.0f;
+-            vgp->SetStickPosition(0, InputCommon::VirtualGamepad::VirtualStick::Right, rx, ry);
++            vgp->SetStickPosition(FrontendPort(), InputCommon::VirtualGamepad::VirtualStick::Right, rx, ry);
+         }
+     }
+ 
+@@ -923,6 +1062,11 @@
+     Service::AM::FrontendAppletParameters load_parameters{};
+     load_parameters.applet_id = Service::AM::AppletId::Application;
+ 
++    // Connect the controller the frontend's RetroPad drives. Without a connected
++    // controller the guest sees no input at all: the Qt and SDL frontends connect
++    // player 1 from their configs, and this core has none.
++    ConnectFrontendController();
++
+     const Core::SystemResultStatus result =
+         g_system->Load(*g_emu_window, g_game_path, load_parameters);
+     if (result != Core::SystemResultStatus::Success) {
+@@ -969,6 +1113,7 @@
+     g_perf_start = g_perf_last_sample = std::chrono::steady_clock::now();
+     g_system->Run();
+     g_game_loaded = true;
++    StartPauseWatchdog();
+     LOG_INFO(Frontend, "libretro core: game loaded and running");
+     return true;
+ }
+@@ -979,6 +1124,9 @@
+ }
+ 
+ RETRO_API void retro_unload_game() {
++    if (g_game_loaded) {
++        StopPauseWatchdog();
++    }
+     g_sample_perf = false;
+     g_have_presented = false;
+     if (g_system && g_game_loaded) {
+--- a/src/core/memory/cheat_engine.cpp
++++ b/src/core/memory/cheat_engine.cpp
+@@ -1,3 +1,5 @@
++// Game37 build: GCC 16 reports a false positive in std::unique_ptr here.
++#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+ // SPDX-FileCopyrightText: Copyright 2026 suyu Emulator Project
+ // SPDX-License-Identifier: GPL-3.0-or-later
+ 

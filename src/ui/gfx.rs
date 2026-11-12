@@ -239,6 +239,36 @@ pub fn crop_to_fill(src_w: f32, src_h: f32, dst_w: f32, dst_h: f32) -> (f32, f32
     }
 }
 
+/// Where and how strongly what is drawn lands: an offset in logical pixels and an opacity
+/// (0 to 1), so a panel can slide and fade in as one. [`Layer::NONE`] draws as asked.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Layer {
+    pub dx: f32,
+    pub dy: f32,
+    pub opacity: f32,
+}
+
+impl Layer {
+    pub const NONE: Layer = Layer {
+        dx: 0.0,
+        dy: 0.0,
+        opacity: 1.0,
+    };
+
+    fn point(self, p: FPoint) -> FPoint {
+        FPoint::new(p.x + self.dx, p.y + self.dy)
+    }
+
+    fn rect(self, r: Rect) -> FRect {
+        FRect::new(r.x + self.dx, r.y + self.dy, r.w, r.h)
+    }
+
+    /// `alpha` (0 to 255) at this layer's opacity.
+    fn alpha(self, alpha: u8) -> u8 {
+        (alpha as f32 * self.opacity.clamp(0.0, 1.0)).round() as u8
+    }
+}
+
 pub struct Gfx<'tc> {
     canvas: WindowCanvas,
     creator: &'tc TextureCreator<WindowContext>,
@@ -256,6 +286,48 @@ pub struct Gfx<'tc> {
     pictures: PictureCache<Option<Texture<'tc>>>,
     /// The renderer's logical height, as last set: `app::canvas` starts it at 1080.
     logical_h: u32,
+    /// A fullscreen change asked of the window that it hasn't shown yet.
+    fullscreen: FullscreenRequest,
+    /// The layer everything is drawn on, see [`Gfx::with_layer`].
+    layer: Layer,
+    /// Whether things fade in as they arrive (`Ctx::animate`, set each frame by the app). Off by
+    /// default, so screenshot mode and tests draw everything in full.
+    animate: bool,
+    /// When each Artwork picture was first drawn, so it fades in over [`ARTWORK_FADE_SECS`].
+    arrived: HashMap<u64, std::time::Instant>,
+}
+
+/// How long Artwork takes to fade in over its placeholder when it arrives.
+const ARTWORK_FADE_SECS: f32 = 0.18;
+
+/// A fullscreen change asked of the window, until the window shows it. SDL applies fullscreen a
+/// frame or more after it is asked, so F11 flips what was last asked rather than what the window
+/// shows: otherwise a second F11 before the first took effect asks for the same again and is lost
+/// (#50).
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+struct FullscreenRequest {
+    pending: Option<bool>,
+}
+
+impl FullscreenRequest {
+    /// The window shows `actual`: a request it now matches is done.
+    fn observe(&mut self, actual: bool) {
+        if self.pending == Some(actual) {
+            self.pending = None;
+        }
+    }
+
+    /// Asks for `on`.
+    fn ask(&mut self, on: bool) {
+        self.pending = Some(on);
+    }
+
+    /// What F11 asks for while the window shows `actual`: the opposite of the pending request, or
+    /// of `actual` when there is none.
+    fn toggled(&mut self, actual: bool) -> bool {
+        self.observe(actual);
+        !self.pending.unwrap_or(actual)
+    }
 }
 
 /// The logical height to draw at in a window `pixel_w`×`pixel_h` pixels: a running Game (and what
@@ -405,6 +477,10 @@ impl<'tc> Gfx<'tc> {
             images: HashMap::new(),
             pictures: PictureCache::new(),
             logical_h: super::H as u32,
+            fullscreen: FullscreenRequest::default(),
+            layer: Layer::NONE,
+            animate: false,
+            arrived: HashMap::new(),
         }
     }
 
@@ -498,10 +574,11 @@ impl<'tc> Gfx<'tc> {
 
     /// Draws the game texture stretched over `r`.
     pub fn draw_game_frame(&mut self, r: Rect) {
-        if let Some(game) = &self.game {
-            let _ = self
-                .canvas
-                .copy(&game.texture, None, FRect::new(r.x, r.y, r.w, r.h));
+        let layer = self.layer;
+        if let Some(game) = &mut self.game {
+            game.texture.set_alpha_mod(layer.alpha(255));
+            let _ = self.canvas.copy(&game.texture, None, layer.rect(r));
+            game.texture.set_alpha_mod(255);
         }
     }
 
@@ -529,16 +606,20 @@ impl<'tc> Gfx<'tc> {
 
     /// Draws the image set for `key` stretched over `r`; returns whether there is one.
     pub fn draw_image(&mut self, key: &str, r: Rect) -> bool {
-        let Some(texture) = self.images.get(key) else {
+        let layer = self.layer;
+        let Some(texture) = self.images.get_mut(key) else {
             return false;
         };
-        let _ = self.canvas.copy(texture, None, FRect::new(r.x, r.y, r.w, r.h));
+        texture.set_alpha_mod(layer.alpha(255));
+        let _ = self.canvas.copy(texture, None, layer.rect(r));
+        texture.set_alpha_mod(255);
         true
     }
 
     /// Draws Artwork filling `r` with corners of `radius`: scaled to cover `r` and cropped to it,
     /// centred, never stretched. Its texture is made on first draw and kept while it is drawn.
     pub fn draw_picture(&mut self, picture: &Picture, r: Rect, radius: f32) {
+        let fade = self.picture_opacity(picture.id);
         let creator = self.creator;
         let texture = self
             .pictures
@@ -593,6 +674,19 @@ impl<'tc> Gfx<'tc> {
             indices.extend_from_slice(&[0, i as i32, i as i32 + 1]);
         }
         band_indices(n, n, 0, &mut indices);
+        let layer = self.layer;
+        let opacity = layer.opacity.clamp(0.0, 1.0) * fade;
+        let vertices: Vec<Vertex> = vertices
+            .into_iter()
+            .map(|v| Vertex {
+                position: layer.point(v.position),
+                color: FColor {
+                    a: v.color.a * opacity,
+                    ..v.color
+                },
+                tex_coord: v.tex_coord,
+            })
+            .collect();
         let _ = self
             .canvas
             .render_geometry(&vertices, Some(&*texture), VertexIndices::from(&indices[..]));
@@ -614,6 +708,36 @@ impl<'tc> Gfx<'tc> {
         (rate > 0.0).then_some(rate)
     }
 
+    /// Whether things fade in as they arrive: the app sets it from `Ctx::animate` every frame.
+    pub fn set_animate(&mut self, on: bool) {
+        self.animate = on;
+    }
+
+    /// How far the Artwork picture `id` has faded in, 0 to 1: 1 once it has been shown for
+    /// [`ARTWORK_FADE_SECS`], and always 1 without animation.
+    pub fn picture_opacity(&mut self, id: u64) -> f32 {
+        if !self.animate {
+            return 1.0;
+        }
+        let now = std::time::Instant::now();
+        let first = *self.arrived.entry(id).or_insert(now);
+        ((now - first).as_secs_f32() / ARTWORK_FADE_SECS).min(1.0)
+    }
+
+    /// Draws what `f` draws on `layer`, on top of the layer already in use (offsets add up,
+    /// opacities multiply), then goes back to it.
+    pub fn with_layer<T>(&mut self, layer: Layer, f: impl FnOnce(&mut Self) -> T) -> T {
+        let outer = self.layer;
+        self.layer = Layer {
+            dx: outer.dx + layer.dx,
+            dy: outer.dy + layer.dy,
+            opacity: outer.opacity * layer.opacity,
+        };
+        let out = f(self);
+        self.layer = outer;
+        out
+    }
+
     pub fn clear(&mut self, c: Colour) {
         self.canvas
             .set_draw_color(sdl3::pixels::Color::RGBA(c.r, c.g, c.b, c.a));
@@ -621,9 +745,10 @@ impl<'tc> Gfx<'tc> {
     }
 
     pub fn fill_rect(&mut self, r: Rect, c: Colour) {
+        let layer = self.layer;
         self.canvas
-            .set_draw_color(sdl3::pixels::Color::RGBA(c.r, c.g, c.b, c.a));
-        let _ = self.canvas.fill_rect(FRect::new(r.x, r.y, r.w, r.h));
+            .set_draw_color(sdl3::pixels::Color::RGBA(c.r, c.g, c.b, layer.alpha(c.a)));
+        let _ = self.canvas.fill_rect(layer.rect(r));
     }
 
     pub fn fill_round_rect(&mut self, r: Rect, radius: f32, c: Colour) {
@@ -770,14 +895,17 @@ impl<'tc> Gfx<'tc> {
 
     /// Restricts drawing to `r` until called again; `None` draws everywhere.
     pub fn clip(&mut self, r: Option<Rect>) {
-        let rect = r.map(|r| {
-            sdl3::rect::Rect::new(
-                r.x.floor() as i32,
-                r.y.floor() as i32,
-                r.w.ceil().max(1.0) as u32,
-                r.h.ceil().max(1.0) as u32,
-            )
-        });
+        let layer = self.layer;
+        let rect = r
+            .map(|r| Rect::new(r.x + layer.dx, r.y + layer.dy, r.w, r.h))
+            .map(|r| {
+                sdl3::rect::Rect::new(
+                    r.x.floor() as i32,
+                    r.y.floor() as i32,
+                    r.w.ceil().max(1.0) as u32,
+                    r.h.ceil().max(1.0) as u32,
+                )
+            });
         self.canvas.set_clip_rect(rect);
     }
 
@@ -827,9 +955,32 @@ impl<'tc> Gfx<'tc> {
     }
 
     fn geometry(&mut self, vertices: &[Vertex], indices: &[i32]) {
-        let _ = self
-            .canvas
-            .render_geometry(vertices, None, VertexIndices::from(indices));
+        if self.layer == Layer::NONE {
+            let _ = self
+                .canvas
+                .render_geometry(vertices, None, VertexIndices::from(indices));
+        } else {
+            let layered = self.layered(vertices);
+            let _ = self
+                .canvas
+                .render_geometry(&layered, None, VertexIndices::from(indices));
+        }
+    }
+
+    /// `vertices` moved and faded by the current layer.
+    fn layered(&self, vertices: &[Vertex]) -> Vec<Vertex> {
+        let layer = self.layer;
+        vertices
+            .iter()
+            .map(|v| Vertex {
+                position: layer.point(v.position),
+                color: FColor {
+                    a: v.color.a * layer.opacity.clamp(0.0, 1.0),
+                    ..v.color
+                },
+                tex_coord: v.tex_coord,
+            })
+            .collect()
     }
 
     /// Width of `text` as [`Gfx::text`] would draw it. Where SDL_ttf can't measure it, an estimate
@@ -867,14 +1018,20 @@ impl<'tc> Gfx<'tc> {
             return 0.0;
         };
         let c = style.colour;
+        let layer = self.layer;
         entry.texture.set_color_mod(c.r, c.g, c.b);
-        entry.texture.set_alpha_mod(c.a);
+        entry.texture.set_alpha_mod(layer.alpha(c.a));
         let left = match align {
             Align::Left => x,
             Align::Centre => x - entry.w / 2.0,
             Align::Right => x - entry.w,
-        };
-        let dst = FRect::new(left.round(), (y - entry.ascent).round(), entry.w, entry.h);
+        } + layer.dx;
+        let dst = FRect::new(
+            left.round(),
+            (y + layer.dy - entry.ascent).round(),
+            entry.w,
+            entry.h,
+        );
         let _ = self.canvas.copy(&entry.texture, None, dst);
         entry.w
     }
@@ -955,22 +1112,57 @@ impl<'tc> Gfx<'tc> {
         }
     }
 
-    pub fn is_fullscreen(&self) -> bool {
-        self.canvas.window().fullscreen_state() != sdl3::video::FullscreenType::Off
+    /// Whether the window is fullscreen now, which may lag a request by a frame or more. The loop
+    /// reads it every frame, which also ends a request the window now shows.
+    pub fn is_fullscreen(&mut self) -> bool {
+        let actual = self.canvas.window().fullscreen_state() != sdl3::video::FullscreenType::Off;
+        self.fullscreen.observe(actual);
+        actual
     }
 
     pub fn set_fullscreen(&mut self, on: bool) {
+        self.fullscreen.ask(on);
         let _ = self.canvas.window_mut().set_fullscreen(on);
     }
 
+    /// F11: flips what was last asked, so a press before the last one took effect still counts.
     pub fn toggle_fullscreen(&mut self) {
-        self.set_fullscreen(!self.is_fullscreen());
+        let actual = self.canvas.window().fullscreen_state() != sdl3::video::FullscreenType::Off;
+        let on = self.fullscreen.toggled(actual);
+        self.set_fullscreen(on);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #50: two F11 presses before the window follows the first end where they started, and a
+    /// change the window manager made after a request was shown is flipped from what it shows.
+    #[test]
+    fn f11_flips_the_last_request_until_the_window_shows_it() {
+        let mut request = FullscreenRequest::default();
+        // Windowed; F11 asks for fullscreen, and again before the window follows: back to windowed.
+        let first = request.toggled(false);
+        request.ask(first);
+        assert!(first);
+        let second = request.toggled(false);
+        request.ask(second);
+        assert!(!second, "the second press undoes the first");
+        // The window never left windowed, so the request is done.
+        request.observe(false);
+        assert_eq!(request.pending, None);
+
+        // F11 to fullscreen, which the window shows; then the window manager leaves fullscreen.
+        let on = request.toggled(false);
+        request.ask(on);
+        request.observe(true);
+        assert_eq!(request.pending, None);
+        assert!(
+            request.toggled(false),
+            "F11 follows the window, not the old request"
+        );
+    }
 
     #[test]
     fn a_running_game_keeps_1080_and_the_menus_fill_the_window() {

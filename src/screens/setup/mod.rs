@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::{self, Config, ConfigError};
 use crate::ctx::Ctx;
+use crate::library::db::{DbError, Library};
 use crate::systems::{SYSTEMS, System};
 use crate::ui::chrome;
 use crate::ui::cover::ellipsize;
@@ -208,11 +209,29 @@ impl Setup {
 
     /// Writes the Config with the chosen Games Root and asks `app.rs` to switch to Home, or shows
     /// why it couldn't and stays. First gives the current step a chance to object (the key step
-    /// saving a bad or unwritable SteamGridDB key, say), writing no Config either.
+    /// saving a bad or unwritable SteamGridDB key, say), then opens the library in the data dir,
+    /// writing no Config if either fails: a Config left behind would skip Setup at the next start,
+    /// which would then fail the same way.
     fn finish(&mut self, ctx: &mut Ctx) {
         if let Err(e) = self.steps[self.at].before_finish(&self.model, ctx) {
             self.error = Some(e);
             return;
+        }
+        match Library::open_in(&ctx.data_dir) {
+            // `app.rs` opens it again, as a start with this Config does.
+            Ok(library) => ctx.library = library,
+            Err(DbError::CreateDir(dir, e)) => {
+                let reason = folders::reason(&e);
+                self.error = Some(format!(
+                    "Can't create the library's folder {}: {reason}",
+                    dir.display()
+                ));
+                return;
+            }
+            Err(e) => {
+                self.error = Some(format!("Can't open the library: {e}"));
+                return;
+            }
         }
         let config = Config {
             games_root: self.model.games_root.clone(),
@@ -540,6 +559,35 @@ mod tests {
             (4, None),
             "leaving the step clears it"
         );
+    }
+
+    /// #48: Finish with a data dir that can't be made (its parent is a file) writes no Config, so
+    /// the next start shows Setup again, and Setup stays with why, for Finish to be pressed again.
+    #[test]
+    fn a_library_that_cannot_be_opened_writes_no_config_and_stays() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file");
+        std::fs::write(&file, b"").unwrap();
+        let path = dir.path().join("config.toml");
+        let (mut setup, mut ctx) = on_last_step(&dir.path().join("Games"), &path);
+        ctx.data_dir = file.join("data");
+        act(&mut setup, &mut ctx, Action::Settings);
+        assert!(!path.exists(), "no Config is left behind");
+        assert_eq!((setup.step(), &ctx.setup_finished), (5, &None));
+        let expected = format!(
+            "Can't create the library's folder {}: Not a directory",
+            ctx.data_dir.display()
+        );
+        assert_eq!(setup.error, Some(expected));
+
+        ctx.data_dir = dir.path().join("data");
+        act(&mut setup, &mut ctx, Action::Settings);
+        assert!(
+            ctx.setup_finished.is_some(),
+            "Finish works once the data dir can be made"
+        );
+        assert!(path.exists());
+        assert_eq!(setup.error, None);
     }
 
     #[test]

@@ -285,6 +285,12 @@ impl Library {
         Library::init(Connection::open(path)?)
     }
 
+    /// Opens the library in `data_dir` (`library.db`), as a start with a Config and First-run
+    /// Setup's Finish do.
+    pub fn open_in(data_dir: &Path) -> Result<Library, DbError> {
+        Library::open(&data_dir.join("library.db"))
+    }
+
     pub fn open_in_memory() -> Result<Library, DbError> {
         Library::init(Connection::open_in_memory()?)
     }
@@ -477,12 +483,13 @@ impl Library {
 
     /// Every Favorite, newest first, each with whether its file is there: the limit of 5
     /// (FR-HOME-6) counts them all, so a Favorite whose file is away for now (a drive unplugged)
-    /// keeps its place, and the replace picker offers it too.
+    /// keeps its place, and the replace picker offers it too. Hidden Games are left out: they show
+    /// nowhere, so they take no place.
     pub fn all_favorites(&self) -> Result<Vec<(GameRow, bool)>, DbError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, system, rel_path, COALESCE(renamed_title, title), date_added, last_played,
                     playtime_secs, favorited_at, present
-             FROM games WHERE favorited_at IS NOT NULL",
+             FROM games WHERE favorited_at IS NOT NULL AND hidden = 0",
         )?;
         let mut games = stmt
             .query_map([], |r| Ok((Fetched::from_row(r)?, r.get::<_, bool>(8)?)))?
@@ -526,9 +533,22 @@ impl Library {
         Ok(())
     }
 
+    /// Hides a Game and clears its Favorite in one UPDATE, so no Game is left hidden and favorited.
+    pub fn hide_game(&self, id: i64) -> Result<(), DbError> {
+        self.conn.execute(
+            "UPDATE games SET hidden = 1, favorited_at = NULL WHERE id = ?1",
+            [id],
+        )?;
+        Ok(())
+    }
+
     pub fn set_hidden(&self, id: i64, hidden: bool) -> Result<(), DbError> {
-        self.conn
-            .execute("UPDATE games SET hidden = ?2 WHERE id = ?1", params![id, hidden])?;
+        // Hiding unfavorites (`hide_game`), so a hidden Favorite is a leftover from before that;
+        // unhiding clears it, which keeps the Favorites at five at most.
+        self.conn.execute(
+            "UPDATE games SET hidden = ?2, favorited_at = CASE WHEN ?2 THEN favorited_at END WHERE id = ?1",
+            params![id, hidden],
+        )?;
         Ok(())
     }
 
@@ -655,6 +675,16 @@ impl Library {
 
     pub fn set_screen_layout(&self, system: &str, layout: ScreenLayout) -> Result<(), DbError> {
         self.set_setting(&format!("screen_layout_{system}"), layout.id())
+    }
+
+    /// Whether the player asked for reduced motion (Settings → Display): no fades, slides or
+    /// gliding. Full motion until changed.
+    pub fn reduced_motion(&self) -> Result<bool, DbError> {
+        Ok(self.setting("reduced_motion")?.as_deref() == Some("1"))
+    }
+
+    pub fn set_reduced_motion(&self, reduced: bool) -> Result<(), DbError> {
+        self.set_setting("reduced_motion", if reduced { "1" } else { "0" })
     }
 
     /// Whether the window was fullscreen when Game37 last quit or F11 last toggled it, for Remember
@@ -917,6 +947,49 @@ mod tests {
             1,
             "the Shelf shows B only"
         );
+    }
+
+    #[test]
+    fn a_hidden_favorite_is_not_among_all_favorites() {
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_system("snes", &games("snes", &["A", "B"]), 0).unwrap();
+        let (a, b) = (id_of(&lib, "snes", "A"), id_of(&lib, "snes", "B"));
+        lib.set_favorite(a, true, 1).unwrap();
+        lib.set_favorite(b, true, 2).unwrap();
+        lib.set_hidden(a, true).unwrap();
+        let titles: Vec<_> = lib
+            .all_favorites()
+            .unwrap()
+            .into_iter()
+            .map(|(g, _)| g.title)
+            .collect();
+        assert_eq!(titles, ["B"]);
+    }
+
+    #[test]
+    fn hiding_a_game_clears_its_favorite_in_one_call() {
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_system("snes", &games("snes", &["A"]), 0).unwrap();
+        let a = id_of(&lib, "snes", "A");
+        lib.set_favorite(a, true, 1).unwrap();
+        lib.hide_game(a).unwrap();
+        assert!(lib.game(a).unwrap().is_none(), "hidden");
+        let hidden = lib.hidden_games().unwrap();
+        assert_eq!(titles(&hidden), ["A"]);
+        assert!(!hidden[0].favorite, "no longer a Favorite");
+    }
+
+    #[test]
+    fn unhiding_a_hidden_favorite_left_from_before_clears_the_favorite() {
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_system("snes", &games("snes", &["A"]), 0).unwrap();
+        let a = id_of(&lib, "snes", "A");
+        // How the old Hide could leave it: hidden, still a Favorite.
+        lib.set_favorite(a, true, 1).unwrap();
+        lib.set_hidden(a, true).unwrap();
+        lib.set_hidden(a, false).unwrap();
+        assert!(!lib.game(a).unwrap().unwrap().favorite);
+        assert!(lib.shelf(Shelf::Favorites, None).unwrap().is_empty());
     }
 
     #[test]

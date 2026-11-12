@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use super::{RW, RX, Row, Section, TOP};
-use crate::cores::{self, BiosRule};
+use crate::cores::{self, BiosRule, CoreInfo};
 use crate::ctx::Ctx;
 use crate::emulators;
 use crate::screens::home::tilde;
@@ -36,6 +36,9 @@ enum Status {
     Found(String),
     /// Its Core needs a BIOS and none is there: what to put where.
     Missing(String),
+    /// Its Core plays without one, and plays more Games with one that isn't all there: what to
+    /// put where (the DS's, issue #42).
+    Optional(String),
     NotNeeded,
     /// An External System: its Standalone Emulator's name.
     Handled(&'static str),
@@ -53,6 +56,12 @@ impl Status {
         {
             return Status::Handled(emulator.name);
         }
+        if cores::for_system(system).is_some_and(|core| std::ptr::eq(core, &cores::MELONDS_DS)) {
+            return Status::of_ds(&ctx.games_root);
+        }
+        if let Some(core) = cores::for_system(system).filter(|core| !core.downloads()) {
+            return Status::of_built(core, ctx);
+        }
         match cores::for_system(system).and_then(|core| core.bios) {
             Some(rule) => match rule.found(&ctx.games_root) {
                 Some(file) => Status::Found(file),
@@ -62,10 +71,44 @@ impl Status {
         }
     }
 
+    /// A System whose Core Game37 builds rather than downloads (Switch's suyu, ADR 0019): whether
+    /// it is built, then its player's keys, which only encrypted Games need.
+    fn of_built(core: &CoreInfo, ctx: &Ctx) -> Status {
+        if !cores::is_installed(&ctx.data_dir, core) {
+            return Status::Missing(format!(
+                "{} Core not built: run scripts/build-suyu-core.sh",
+                core.name
+            ));
+        }
+        let rule = &cores::SWITCH_KEYS;
+        match rule.found(&ctx.games_root) {
+            Some(file) => Status::Found(file),
+            None => {
+                let dir = tilde(&rule.dir(&ctx.games_root), dirs::home_dir().as_deref());
+                Status::Optional(format!("Optional: put {} in {dir}/", rule.wording.ask_for))
+            }
+        }
+    }
+
+    /// The DS's: its own BIOS and firmware found, or which of them to put where.
+    fn of_ds(games_root: &Path) -> Status {
+        let missing = cores::missing_ds_sysfiles(games_root);
+        if missing.is_empty() {
+            return Status::Found(cores::DS_SYSFILES.join(", "));
+        }
+        let names = match missing.as_slice() {
+            [one] => one.to_string(),
+            [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+            [] => unreachable!(),
+        };
+        let dir = tilde(&games_root.join("bios"), dirs::home_dir().as_deref());
+        Status::Optional(format!("Optional: put {names} in {dir}/"))
+    }
+
     fn text(&self) -> String {
         match self {
             Status::Found(file) => format!("Found {file}"),
-            Status::Missing(text) => text.clone(),
+            Status::Missing(text) | Status::Optional(text) => text.clone(),
             Status::NotNeeded => "No BIOS needed".to_owned(),
             Status::Handled(emulator) => format!("Handled by {emulator}"),
             Status::Upcoming => "Not playable yet".to_owned(),
@@ -201,10 +244,14 @@ mod tests {
         let missing = format!("Missing: put scph5500.bin, scph5501.bin or scph5502.bin in {dir}/");
         assert_eq!(value(&rows, "ps1"), missing);
         for id in [
-            "nes", "gb", "snes", "n64", "gbc", "gba", "nds", "gc", "wii", "3ds", "psp",
+            "nes", "gb", "snes", "n64", "gbc", "gba", "gc", "wii", "3ds", "psp",
         ] {
             assert_eq!(value(&rows, id), "No BIOS needed", "{id}");
         }
+        assert_eq!(
+            value(&rows, "nds"),
+            format!("Optional: put bios7.bin, bios9.bin and firmware.bin in {dir}/")
+        );
         assert_eq!(value(&rows, "wiiu"), "Handled by Cemu");
         for id in ["switch2", "ps5"] {
             assert_eq!(value(&rows, id), "Not playable yet", "{id}");
@@ -227,6 +274,34 @@ mod tests {
             .set_len(4 << 20)
             .unwrap();
         assert_eq!(value(&Bios::default().rows(&ctx), "ps2"), "Found My PS2.bin");
+    }
+
+    /// #42: the DS's own BIOS and firmware are optional; the row names the ones still missing, by
+    /// their exact names, and says Found once all three are there.
+    #[test]
+    fn the_ds_asks_for_its_missing_files_until_all_three_are_there() {
+        let (_dir, ctx) = world();
+        let bios = ctx.games_root.join("bios");
+        let dir = tilde(&bios, dirs::home_dir().as_deref());
+        fs::write(bios.join("bios7.bin"), b"x").unwrap();
+        fs::write(bios.join("BIOS9.BIN"), b"x").unwrap();
+        assert_eq!(
+            value(&Bios::default().rows(&ctx), "nds"),
+            format!("Optional: put bios9.bin and firmware.bin in {dir}/"),
+            "melonDS DS opens them by exact name"
+        );
+        fs::write(bios.join("bios9.bin"), b"x").unwrap();
+        fs::write(bios.join("firmware.bin"), b"").unwrap();
+        assert_eq!(
+            value(&Bios::default().rows(&ctx), "nds"),
+            format!("Optional: put firmware.bin in {dir}/"),
+            "an empty file doesn't count"
+        );
+        fs::write(bios.join("firmware.bin"), b"x").unwrap();
+        assert_eq!(
+            value(&Bios::default().rows(&ctx), "nds"),
+            "Found bios7.bin, bios9.bin, firmware.bin"
+        );
     }
 
     #[test]

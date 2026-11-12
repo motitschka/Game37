@@ -27,7 +27,7 @@ use crate::session::input::{self, Mouse, Ports};
 use crate::session::sdl;
 use crate::ui::chrome::{self, TopBar};
 use crate::ui::controls::{ControlEvent, Controls, StickAxis};
-use crate::ui::gfx::{Gfx, WindowMode};
+use crate::ui::gfx::{Gfx, Layer, WindowMode};
 use crate::ui::hit;
 use crate::ui::input::{Action, ButtonStyle, Input, InputKind, Pointer, TextInput, button_action};
 use crate::ui::nav::{Flow, Hits, Nav};
@@ -65,7 +65,11 @@ pub fn run(options: Options) -> Result<(), String> {
             screenshot(nav, ctx, launcher, shot)
         }
         None => {
-            ctx.animate = true;
+            // Full motion, unless the player asked for less (Settings → Display).
+            ctx.animate = !ctx.library.reduced_motion().unwrap_or_else(|e| {
+                eprintln!("game37: can't read the motion setting: {e}");
+                false
+            });
             let watcher = has_library.then(|| start_live_library(&mut ctx));
             let setup_root = dirs::home_dir().expect("no home directory").join("Games");
             let nav = screens::start(loaded, &setup_root, &ctx);
@@ -87,7 +91,7 @@ pub fn run(options: Options) -> Result<(), String> {
 /// (FR-CFG-1): the library in the data dir, for the Config's Games Root, and the menu settings saved
 /// in it.
 fn open_library(ctx: &mut Ctx, config: &Config) -> Result<(), String> {
-    ctx.library = Library::open(&ctx.data_dir.join("library.db")).map_err(|e| e.to_string())?;
+    ctx.library = Library::open_in(&ctx.data_dir).map_err(|e| e.to_string())?;
     ctx.games_root = config.games_root.clone();
     ctx.button_style = ctx.library.button_style().unwrap_or_else(|e| {
         eprintln!("game37: can't read the button style: {e}");
@@ -239,8 +243,12 @@ fn interactive(
     let gamepads = sdl.gamepad().map_err(|e| e.to_string())?;
     let audio = sdl.audio().map_err(|e| eprintln!("game37: no sound: {e}")).ok();
     let fonts = Fonts::new()?;
-    // OpenGL, because later milestones host libretro OpenGL cores in this renderer.
-    let canvas = canvas(&video, 1600, 900, c"opengl")?;
+    // OpenGL, because Cores that need it are hosted beside this renderer. Without it the menus
+    // and the Cores that draw in software still work; the others say OpenGL is missing (#43).
+    let canvas = canvas(&video, 1600, 900, c"opengl").or_else(|e| {
+        eprintln!("game37: {e}; using the software renderer, so Games that need OpenGL won't start");
+        canvas(&video, 1600, 900, c"software")
+    })?;
     // SAFETY: the renderer is alive.
     let vsync = unsafe { sdl3::sys::render::SDL_SetRenderVSync(canvas.raw(), 1) };
     if !vsync {
@@ -285,34 +293,18 @@ fn interactive(
         ctx.last_controller = input.last_controller();
         ctx.ticks = sdl3::timer::ticks();
         ctx.confirm_held = confirm_held(&ctx, &events.keyboard_state());
-        if let Some(watcher) = &mut watcher {
-            match watcher.poll(&mut ctx.library, ctx::now()) {
-                Ok(changed) => {
-                    sync_failing = false;
-                    if changed {
-                        ctx.revision += 1;
-                    }
-                }
-                // The watcher retries the failed sync every frame: log it and reload the views
-                // (some Systems may have synced before the failure) once, not every frame.
-                Err(e) if !sync_failing => {
-                    sync_failing = true;
-                    ctx.revision += 1;
-                    eprintln!("game37: {e}");
-                }
-                Err(_) => {}
-            }
-        }
-        // The emulator exited: come back in front (FR-EXT-2).
-        if launcher.poll(&mut nav, &mut ctx, ctx::now()).is_some() {
-            gfx.restore();
-        }
-        // Lets a Core download (FR-EMB-2) progress every frame, not only on input.
-        if nav.tick(&mut ctx) == Flow::Quit {
+        let flow = background(
+            &feeds,
+            &mut nav,
+            &mut ctx,
+            watcher.as_mut(),
+            &mut sync_failing,
+            &mut launcher,
+            || gfx.restore(),
+        );
+        if flow == Flow::Quit {
             break 'frames;
         }
-        // Artwork that finished loading in the background (NFR-3).
-        ctx.artwork.poll(&ctx.library);
         if let Some(play) = ctx.play.take() {
             let refresh = if vsync { gfx.refresh_rate() } else { None };
             sdl::start(&play, &mut nav, &ctx, gfx.gl_context(), audio.as_ref(), refresh);
@@ -368,6 +360,7 @@ fn interactive(
         let pads = input.pad_states();
         // A Game's first frame maps its touch screen with the Game's own presentation.
         gfx.fit(!nav.base().chrome());
+        gfx.set_animate(ctx.animate);
         let state = events.mouse_state();
         let mouse = Mouse {
             at: Some(gfx.to_logical(state.x(), state.y())),
@@ -393,6 +386,53 @@ fn interactive(
     Ok(())
 }
 
+/// A frame's work besides its input and drawing: syncs the library from the watcher, takes back
+/// an exited emulator, lets a Core download progress and picks up artwork loaded in the
+/// background. None of it runs once the frame's `feeds` ask to close the window: a download
+/// finishing then would start a Game that closing ends at once.
+fn background(
+    feeds: &[Feed],
+    nav: &mut Nav,
+    ctx: &mut Ctx,
+    watcher: Option<&mut LibraryWatcher>,
+    sync_failing: &mut bool,
+    launcher: &mut Launcher,
+    restore: impl FnOnce(),
+) -> Flow {
+    if feeds.contains(&Feed::Quit) {
+        return Flow::Quit;
+    }
+    if let Some(watcher) = watcher {
+        match watcher.poll(&mut ctx.library, ctx::now()) {
+            Ok(changed) => {
+                *sync_failing = false;
+                if changed {
+                    ctx.revision += 1;
+                }
+            }
+            // The watcher retries the failed sync every frame: log it and reload the views
+            // (some Systems may have synced before the failure) once, not every frame.
+            Err(e) if !*sync_failing => {
+                *sync_failing = true;
+                ctx.revision += 1;
+                eprintln!("game37: {e}");
+            }
+            Err(_) => {}
+        }
+    }
+    // The emulator exited: come back in front (FR-EXT-2).
+    if launcher.poll(nav, ctx, ctx::now()).is_some() {
+        restore();
+    }
+    // Lets a Core download (FR-EMB-2) progress every frame, not only on input.
+    if nav.tick(ctx) == Flow::Quit {
+        return Flow::Quit;
+    }
+    // Artwork that finished loading in the background (NFR-3).
+    ctx.artwork.poll(&ctx.library);
+    Flow::Continue
+}
+
 /// What closing the window does once the loop has stopped.
 pub(crate) fn close(nav: &mut Nav, ctx: &mut Ctx, launcher: &mut Launcher) {
     // A running Game ends first, saving it, paused or not.
@@ -400,6 +440,53 @@ pub(crate) fn close(nav: &mut Nav, ctx: &mut Ctx, launcher: &mut Launcher) {
     // Quitting while an emulator runs leaves it running, with Playtime counted up to now.
     launcher.quit(nav, ctx, ctx::now());
     nav.leave_all(ctx);
+}
+
+/// What a screenshot step's inputs did.
+struct StepDone {
+    /// An input quit Game37.
+    quit: bool,
+    /// `back` was given while a Game ran, standing for Esc.
+    esc: bool,
+}
+
+/// Hands a screenshot step's `inputs` to `nav` one at a time, as the window would, with `after`
+/// carrying out what each asked for (a Game to start, say). `after` returns true when the input
+/// finished First-run Setup, writing the Config and switching to Home: the step's later inputs
+/// then go nowhere, as in `feed`, so they neither reach Setup after it is gone nor act on Home
+/// (#52). A running Game takes no menu input; `back` stands for Esc.
+fn shot_inputs(
+    inputs: Vec<Input>,
+    nav: &mut Nav,
+    ctx: &mut Ctx,
+    hits: &Hits,
+    view: &mut View,
+    mut after: impl FnMut(&mut Nav, &mut Ctx) -> Result<bool, String>,
+) -> Result<StepDone, String> {
+    let mut esc = false;
+    for i in inputs {
+        if sdl::playing(nav) {
+            esc |= i == Input::Action(Action::Back);
+            continue;
+        }
+        match i {
+            Input::Action(_) => view.kind = InputKind::Controller,
+            Input::Text(_) => view.kind = InputKind::Keyboard,
+            Input::Pointer(p) => {
+                view.kind = InputKind::Keyboard;
+                if let Pointer::Move { x, y } = p {
+                    view.pointer = Some((x, y));
+                }
+            }
+        }
+        if nav.handle(i, hits, ctx) == Flow::Quit {
+            return Ok(StepDone { quit: true, esc });
+        }
+        if after(nav, ctx)? {
+            break;
+        }
+    }
+    Ok(StepDone { quit: false, esc })
 }
 
 fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screenshot) -> Result<(), String> {
@@ -425,51 +512,33 @@ fn screenshot(mut nav: Nav, mut ctx: Ctx, mut launcher: Launcher, shot: Screensh
     let mut hits = draw_settled(&mut gfx, &mut nav, &ctx, &view, &clock);
     gfx.present();
     'steps: for step in shot.steps {
-        let mut esc = false;
-        for i in step.inputs() {
-            // A running Game takes no menu input; `back` stands for Esc.
-            if sdl::playing(&mut nav) {
-                esc |= i == Input::Action(Action::Back);
-                continue;
-            }
-            match i {
-                Input::Action(_) => view.kind = InputKind::Controller,
-                Input::Text(_) => view.kind = InputKind::Keyboard,
-                Input::Pointer(p) => {
-                    view.kind = InputKind::Keyboard;
-                    if let Pointer::Move { x, y } = p {
-                        view.pointer = Some((x, y));
-                    }
-                }
-            }
-            if nav.handle(i, &hits, &mut ctx) == Flow::Quit {
-                break 'steps;
-            }
-            copy_clipboard_request(&mut ctx, &video);
+        let done = shot_inputs(step.inputs(), &mut nav, &mut ctx, &hits, &mut view, |nav, ctx| {
+            copy_clipboard_request(ctx, &video);
             // Screenshot mode never opens the file manager.
             ctx.show_file_request = None;
             if let Some(config) = ctx.setup_finished.take() {
-                finish_setup(&mut nav, &mut ctx, config, |ctx| {
-                    start_shot_library(ctx, shot.artwork)
-                })?;
-                // Finish already wrote the Config; later input in this step must not reach
-                // Setup, which would save again or step it back after it is gone.
-                break;
+                finish_setup(nav, ctx, config, |ctx| start_shot_library(ctx, shot.artwork))?;
+                return Ok(true);
             }
             if let Some(game) = ctx.launch.take() {
-                launcher.start(&game, &mut nav, &ctx);
+                launcher.start(&game, nav, ctx);
             }
             if let Some(play) = ctx.play.take() {
                 sdl::start(
                     &play,
-                    &mut nav,
-                    &ctx,
+                    nav,
+                    ctx,
                     gfx.gl_context(),
                     audio.as_ref(),
                     Some(SHOT_REFRESH),
                 );
             }
+            Ok(false)
+        })?;
+        if done.quit {
+            break 'steps;
         }
+        let esc = done.esc;
         for _ in 0..step.frames() {
             sdl::tick(
                 &mut nav,
@@ -556,6 +625,9 @@ struct View {
     pointer: Option<(f32, f32)>,
 }
 
+/// How far a screen fading in rises from, in logical pixels.
+const RISE: f32 = 16.0;
+
 /// Draws a frame (without presenting it) and returns where its clickable chrome went.
 fn draw(gfx: &mut Gfx<'_>, nav: &mut Nav, ctx: &Ctx, view: &View, clock: &str) -> Hits {
     // A running Game (no chrome) stays at 1080; the menus fill the window.
@@ -575,7 +647,14 @@ fn draw(gfx: &mut Gfx<'_>, nav: &mut Nav, ctx: &Ctx, view: &View, clock: &str) -
         };
     }
     chrome::background(gfx);
-    nav.base().draw(gfx, ctx);
+    // A screen opened, closed back to or switched to fades in and rises into place.
+    let t = nav.base_appearance(ctx.animate);
+    let layer = Layer {
+        dx: 0.0,
+        dy: (1.0 - t) * RISE,
+        opacity: t,
+    };
+    gfx.with_layer(layer, |gfx| nav.base().draw(gfx, ctx));
     let labels = nav.tab_labels();
     let library = nav.has_library();
     let pill = nav.base().search_pill();
@@ -673,7 +752,14 @@ fn feed(
             Feed::Quit => return Flow::Quit,
             Feed::Control(at, event) => controls.handle(at, event, &mut inputs),
             Feed::Typed(text) => controls.typed(&text, &mut inputs),
-            Feed::Input(input) => inputs.push(input),
+            Feed::Input(input) => {
+                // The mouse shows keyboard glyphs; set here, in event order with the keys and
+                // pads, so the frame's last input decides them.
+                if let Input::Pointer(_) = input {
+                    controls.kind = InputKind::Keyboard;
+                }
+                inputs.push(input);
+            }
             Feed::Repeat(at) => inputs.extend(controls.poll(at)),
         }
         for input in inputs.drain(..) {
@@ -870,13 +956,11 @@ impl InputState {
 
             Event::MouseMotion { x, y, .. } => {
                 let (x, y) = gfx.to_logical(x, y);
-                self.controls.kind = InputKind::Keyboard;
                 self.pointer = Some((x, y));
                 return Some(Feed::Input(Input::Pointer(Pointer::Move { x, y })));
             }
             Event::MouseButtonUp { mouse_btn, x, y, .. } => {
                 let (x, y) = gfx.to_logical(x, y);
-                self.controls.kind = InputKind::Keyboard;
                 let pointer = match mouse_btn {
                     MouseButton::Left => Pointer::Click { x, y },
                     MouseButton::Right => Pointer::RightClick { x, y },
@@ -886,7 +970,6 @@ impl InputState {
                 return Some(Feed::Input(Input::Pointer(pointer)));
             }
             Event::MouseWheel { y, .. } => {
-                self.controls.kind = InputKind::Keyboard;
                 return Some(Feed::Input(Input::Pointer(Pointer::Wheel { dy: y })));
             }
             _ => return None,
@@ -1001,6 +1084,82 @@ mod tests {
             "G0",
             "F erased nothing"
         );
+    }
+
+    /// The glyphs follow the frame's last input in event order, the mouse counting as the
+    /// keyboard: a pad press then a mouse move ends on Keyboard, a mouse move then a pad press on
+    /// Controller.
+    #[test]
+    fn the_input_kind_follows_the_frames_last_input() {
+        let pad = JoystickId::new(1);
+        let press = Feed::Control(
+            0,
+            ControlEvent::PadButtonDown {
+                pad,
+                button: Button::DPadDown,
+            },
+        );
+        let mouse = Feed::Input(Input::Pointer(Pointer::Move { x: 5.0, y: 5.0 }));
+        let cases = [
+            ([press.clone(), mouse.clone()], InputKind::Keyboard),
+            ([mouse, press], InputKind::Controller),
+        ];
+        for (feeds, after) in cases {
+            let log = std::rc::Rc::default();
+            let mut nav = Nav::single(Box::new(StyleRow(log)));
+            let mut ctx = Ctx::empty();
+            let mut controls = Controls::new(InputKind::Keyboard);
+            let flow = feed(
+                &mut controls,
+                feeds.clone(),
+                &mut nav,
+                &Hits::default(),
+                &mut ctx,
+                String::new,
+                |_, _| {},
+            );
+            assert_eq!(flow, Flow::Continue);
+            assert_eq!(controls.kind, after, "after {feeds:?}");
+        }
+    }
+
+    /// Stands in for a Core download: counts the frames it is ticked.
+    struct Download(std::rc::Rc<std::cell::Cell<u32>>);
+
+    impl crate::ui::nav::Screen for Download {
+        fn title(&self) -> &str {
+            "Download"
+        }
+        fn handle(&mut self, _: Input, _: &mut Ctx) -> crate::ui::nav::Transition {
+            crate::ui::nav::Transition::None
+        }
+        fn draw(&mut self, _: &mut Gfx<'_>, _: &Ctx) {}
+        fn hints(&self) -> Vec<crate::ui::nav::Hint> {
+            Vec::new()
+        }
+        fn tick(&mut self, _: &mut Ctx) -> crate::ui::nav::Transition {
+            self.0.set(self.0.get() + 1);
+            crate::ui::nav::Transition::None
+        }
+    }
+
+    /// A frame whose events close the window goes straight to closing: a Core download finishing
+    /// in its tick would otherwise start a Game that closing ends at once.
+    #[test]
+    fn a_frame_that_closes_the_window_does_no_background_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let ticks = std::rc::Rc::default();
+        let mut nav = Nav::single(Box::new(Download(std::rc::Rc::clone(&ticks))));
+        let mut ctx = Ctx::empty();
+        let mut launcher = Launcher::new(Box::new(NeverExits::default()), dir.path().join("logs"));
+        let mut frame =
+            |feeds: &[Feed]| background(feeds, &mut nav, &mut ctx, None, &mut false, &mut launcher, || {});
+
+        assert_eq!(frame(&[Feed::Repeat(0)]), Flow::Continue);
+        assert_eq!(ticks.get(), 1, "an ordinary frame ticks the download");
+        let closing = [Feed::Repeat(0), Feed::Quit, Feed::Repeat(0)];
+        assert_eq!(frame(&closing), Flow::Quit);
+        assert_eq!(ticks.get(), 1, "the closing frame doesn't");
     }
 
     #[test]
@@ -1235,5 +1394,74 @@ mod tests {
                 games_root: std::path::PathBuf::from("/games")
             })
         );
+    }
+
+    /// #52: once an input of a screenshot step finishes Setup, the step's later inputs reach
+    /// neither Setup nor the Home that replaced it.
+    #[test]
+    fn a_screenshot_step_hands_on_no_input_after_setup_finished() {
+        let setup_log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let home_log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut nav = Nav::single(Box::new(FinishesSetupOnFirstInput(setup_log.clone())));
+        let mut ctx = Ctx::empty();
+        let mut view = View {
+            kind: InputKind::Controller,
+            pointer: None,
+        };
+        let inputs = crate::cli::Step::Text("abc".to_owned()).inputs();
+        let done = shot_inputs(
+            inputs,
+            &mut nav,
+            &mut ctx,
+            &Hits::default(),
+            &mut view,
+            |nav, ctx| {
+                if ctx.setup_finished.take().is_some() {
+                    *nav = Nav::single(Box::new(FinishesSetupOnFirstInput(home_log.clone())));
+                    return Ok(true);
+                }
+                Ok(false)
+            },
+        )
+        .unwrap();
+        assert!(!done.quit && !done.esc);
+        assert_eq!(*setup_log.borrow(), [Input::Text(TextInput::Char('a'))]);
+        assert!(home_log.borrow().is_empty(), "Home got {:?}", home_log.borrow());
+    }
+
+    /// #52, through the real screenshot mode: Finish on a step's first input switches to Home, the
+    /// rest of the step doesn't reach Setup, and the shot is still written.
+    #[test]
+    fn screenshot_mode_stops_a_step_once_setup_has_finished() {
+        let _serial = crate::libretro::tests::serial();
+        let dir = tempfile::tempdir().unwrap();
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let nav = Nav::single(Box::new(FinishesSetupOnFirstInput(log.clone())));
+        let mut ctx = Ctx::empty();
+        ctx.data_dir = dir.path().join("data");
+        ctx.config_path = dir.path().join("config.toml");
+        let launcher = Launcher::new(Box::new(NeverExits::default()), dir.path().join("logs"));
+        let out = dir.path().join("shot.bmp");
+        let shot = Screenshot {
+            out: out.clone(),
+            // One step, two inputs: typing "ab".
+            steps: vec![crate::cli::Step::Text("ab".to_owned())],
+            missing_emulators: Emulators::all_installed(),
+            frames: 1,
+            artwork: false,
+            screen: None,
+            size: (1920, 1080),
+        };
+        screenshot(nav, ctx, launcher, shot).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            *log.borrow(),
+            [Input::Text(TextInput::Char('a'))],
+            "the step's second input must not reach Setup once Finish has run"
+        );
+        assert!(
+            dir.path().join("data/library.db").exists(),
+            "Finish opened the library"
+        );
+        assert!(out.exists(), "the shot is written after Finish");
     }
 }

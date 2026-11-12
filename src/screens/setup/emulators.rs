@@ -415,8 +415,8 @@ mod tests {
         let installed = Emulators::from_installed(["net.shadps4.shadPS4"]);
         assert_eq!(
             install_command(&setup.model, &installed).as_deref(),
-            Some("flatpak install flathub info.cemu.Cemu io.github.ryubing.Ryujinx net.rpcs3.RPCS3"),
-            "GameCube, Wii, PS2 and 3DS play in Game37"
+            Some("flatpak install flathub info.cemu.Cemu net.rpcs3.RPCS3"),
+            "GameCube, Wii, PS2, 3DS and Switch play in Game37"
         );
     }
 
@@ -448,7 +448,7 @@ mod tests {
         act(&mut setup, &mut ctx, Action::Confirm);
         assert_eq!(
             ctx.clipboard_request.as_deref(),
-            Some("flatpak install flathub io.github.ryubing.Ryujinx net.rpcs3.RPCS3")
+            Some("flatpak install flathub net.rpcs3.RPCS3")
         );
         assert_eq!(setup.step(), 2);
     }

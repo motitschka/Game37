@@ -198,7 +198,7 @@ impl Cores {
     }
 
     fn core_of(&self, i: usize) -> &'static CoreInfo {
-        cores::for_system(self.rows[i].system).expect("a row's System is Embedded")
+        cores::downloadable_for(self.rows[i].system).expect("a row's System has a downloaded Core")
     }
 
     /// The BIOS note under the rows: a line for each ticked System whose Core needs a BIOS.
@@ -286,14 +286,14 @@ impl Step for Cores {
     }
 
     fn applies(&self, model: &Model) -> bool {
-        model.ticked().any(|s| cores::for_system(s).is_some())
+        model.ticked().any(|s| cores::downloadable_for(s).is_some())
     }
 
     fn enter(&mut self, model: &Model, ctx: &mut Ctx) {
         let mut queued: Vec<&'static CoreInfo> = Vec::new();
         self.rows.clear();
         for system in model.ticked() {
-            let Some(core) = cores::for_system(system) else {
+            let Some(core) = cores::downloadable_for(system) else {
                 continue;
             };
             let at = match queued.iter().position(|&c| c == core) {

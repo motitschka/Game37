@@ -26,8 +26,9 @@ use crate::screens::message::Message;
 use crate::session::states::{self, Rgb, SLOTS, SaveData, StatePaths};
 use crate::session::{saves, sdl};
 use crate::systems::{self, Kind};
+use crate::ui::anim::{Eased, FADE_TAU, FOCUS_TAU};
 use crate::ui::cover::{self, ellipsize, playtime_label};
-use crate::ui::gfx::{Align, Gfx, TextStyle};
+use crate::ui::gfx::{Align, Gfx, Layer, TextStyle};
 use crate::ui::input::{Action, Input, InputKind, Pointer};
 use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
@@ -155,6 +156,10 @@ struct Slot {
 type ReadSlot = Option<(Slot, Option<Rgb>)>;
 
 pub struct OptionsMenu {
+    /// How far the menu has come in, 0 to 1: the panel slides and fades in over the dimmed screen.
+    appear: Eased,
+    /// Where the list's highlight bar is drawn, eased between rows; `None` before the first draw.
+    bar: Option<Eased>,
     game: GameRow,
     /// "<System> · <Playtime> played".
     meta: String,
@@ -184,6 +189,12 @@ pub struct OptionsMenu {
     /// The Display Title of another Game in the library whose Core names its In-game Save file
     /// the same ([`InGameSaves::PerGame`], same file stem), so it can't be deleted on its own.
     shared_with: Option<String>,
+    /// The Display Titles of the other visible Games in the same folder whose file has the same
+    /// stem (`Zelda.sfc` and `Zelda.smc`): they share this Game's Resume State, Save States and
+    /// `.srm`, so deleting those deletes theirs too.
+    same_stem: Vec<String>,
+    /// How many slots have a screenshot but no Save State: never filled, but left to delete.
+    strays: usize,
     /// What a confirmed delete did, left by the confirmation for the next tick to show.
     deleted: Rc<RefCell<Option<Result<(), String>>>>,
     /// The slots' times and screenshots, slot 1 first, `None` when empty: read on a thread when
@@ -240,13 +251,14 @@ impl OptionsMenu {
             Item::ShowFile,
         ]
         .into_iter()
-        .filter(|&i| {
-            (embedded
-                || !matches!(
-                    i,
-                    Item::LoadSaveState | Item::StartFromPowerOn | Item::DeleteSaveData
-                ))
-                && (i != Item::Controller || wii.is_some())
+        .filter(|&i| match i {
+            // A Core without states has no Save States and no Resume State to skip.
+            Item::LoadSaveState | Item::StartFromPowerOn => {
+                embedded && core.is_none_or(|core| core.has_states())
+            }
+            Item::DeleteSaveData => embedded,
+            Item::Controller => wii.is_some(),
+            _ => true,
         })
         .collect();
         let rel_path = Path::new(&game.rel_path);
@@ -265,7 +277,15 @@ impl OptionsMenu {
         } else {
             (Vec::new(), None, None)
         };
+        let strays = if embedded { stray_thumbs(&states) } else { 0 };
+        let same_stem = if embedded {
+            same_stem_games(ctx, &game, rel_path)
+        } else {
+            Vec::new()
+        };
         OptionsMenu {
+            appear: Eased::new(0.0),
+            bar: None,
             game,
             meta,
             items,
@@ -280,6 +300,8 @@ impl OptionsMenu {
             srm,
             own_saves,
             shared_with,
+            same_stem,
+            strays,
             deleted: Rc::default(),
             slots: Vec::new(),
             reading: None,
@@ -312,7 +334,7 @@ impl OptionsMenu {
     fn has(&self, what: SaveData) -> bool {
         match what {
             SaveData::ResumeState => self.resume_when.is_some(),
-            SaveData::SaveStates => self.filled() > 0,
+            SaveData::SaveStates => self.leftover() > 0,
             SaveData::InGameSave => {
                 self.own_saves.is_none() && self.shared_with.is_none() && self.srm_when.is_some()
             }
@@ -326,7 +348,7 @@ impl OptionsMenu {
         let none = || "None".to_owned();
         match what {
             SaveData::ResumeState => Some(self.resume_when.clone().unwrap_or_else(none)),
-            SaveData::SaveStates => Some(match self.filled() {
+            SaveData::SaveStates => Some(match self.leftover() {
                 0 => none(),
                 n => format!("{n} of {SLOTS}"),
             }),
@@ -343,7 +365,7 @@ impl OptionsMenu {
     fn confirm_delete(&self, what: SaveData) -> Confirm {
         let title = match what {
             SaveData::ResumeState => "Delete the Resume State?".to_owned(),
-            SaveData::SaveStates => match self.filled() {
+            SaveData::SaveStates => match self.leftover() {
                 1 => "Delete the Save State?".to_owned(),
                 n => format!("Delete {n} Save States?"),
             },
@@ -365,6 +387,19 @@ impl OptionsMenu {
 
     /// The line under the confirmation's question before deleting `what`.
     fn delete_body(&self, what: SaveData) -> String {
+        let body = self.delete_what(what);
+        match self.same_stem.as_slice() {
+            [] => body,
+            [title] => format!("{body} {title} shares these save files and loses them too."),
+            titles => format!(
+                "{body} {} share these save files and lose them too.",
+                titles.join(", ")
+            ),
+        }
+    }
+
+    /// What deleting `what` deletes, in a sentence.
+    fn delete_what(&self, what: SaveData) -> String {
         match what {
             SaveData::ResumeState => {
                 "The next launch starts from power-on. Your In-game Save and Save States stay.".to_owned()
@@ -396,6 +431,7 @@ impl OptionsMenu {
             return Transition::None;
         };
         (self.filled, self.resume_when, self.srm_when) = read_save_data(&self.states, self.srm.as_deref());
+        self.strays = stray_thumbs(&self.states);
         // The slot picker reads its slots afresh, and forgets the old screenshots.
         self.reading = None;
         self.slots.clear();
@@ -412,6 +448,12 @@ impl OptionsMenu {
             Ok(()) => Transition::None,
             Err(e) => Transition::Push(Box::new(Message::new("Couldn't delete save data", e))),
         }
+    }
+
+    /// How many Save States there are to delete: the filled slots and the slots with only a
+    /// screenshot left.
+    fn leftover(&self) -> usize {
+        self.filled() + self.strays
     }
 
     /// How many Save State slots are filled.
@@ -592,10 +634,7 @@ impl OptionsMenu {
                 Err(e) => Err(e),
             },
             // A Hidden Game is no Favorite: it would count towards the five unseen.
-            Item::Hide => ctx
-                .library
-                .set_hidden(id, true)
-                .and_then(|()| ctx.library.set_favorite(id, false, ctx::now())),
+            Item::Hide => ctx.library.hide_game(id),
             Item::ShowFile => {
                 ctx.show_file_request = Some(ctx.games_root.join(&self.game.rel_path));
                 return Transition::Pop;
@@ -687,21 +726,25 @@ impl OptionsMenu {
         entry.draw_keyboard(gfx, x, top);
     }
 
-    fn draw_list(&mut self, gfx: &mut Gfx<'_>) {
+    fn draw_list(&mut self, gfx: &mut Gfx<'_>, animate: bool) {
         self.item_hits.clear();
         let pitch = if self.items.len() <= 8 {
             ITEM_PITCH
         } else {
             ITEM_PITCH_NINE
         };
+        // The highlight glides between rows rather than jumping.
+        let target = ITEM_Y + self.item as f32 * pitch;
+        let bar = self.bar.get_or_insert_with(|| Eased::new(target));
+        bar.set(target);
+        let bar_y = bar.step(animate, FOCUS_TAU);
+        let row = Rect::new(PANEL_X + 24.0, bar_y, PANEL_W - 48.0, 72.0);
+        gfx.fill_round_rect(row, 14.0, SURFACE2);
+        gfx.fill_round_rect(Rect::new(row.x, bar_y + 16.0, 5.0, 40.0), 2.0, ACCENT);
         for (i, &item) in self.items.iter().enumerate() {
             let y = ITEM_Y + i as f32 * pitch;
             let r = Rect::new(PANEL_X + 24.0, y, PANEL_W - 48.0, 72.0);
             let on = i == self.item;
-            if on {
-                gfx.fill_round_rect(r, 14.0, SURFACE2);
-                gfx.fill_round_rect(Rect::new(r.x, y + 16.0, 5.0, 40.0), 2.0, ACCENT);
-            }
             let enabled = self.enabled(item);
             let (ink, icon_ink) = match item {
                 _ if !enabled => (DIM, DIM),
@@ -883,6 +926,35 @@ fn shared_save_game(ctx: &Ctx, game: &GameRow, rel_path: &Path) -> Option<String
         .map(|other| other.title)
 }
 
+/// How many slots of `states` have a screenshot but no Save State.
+fn stray_thumbs(states: &StatePaths) -> usize {
+    (1..=SLOTS)
+        .filter(|&n| states.thumb(n).is_file() && !states.slot(n).is_file())
+        .count()
+}
+
+/// The Display Titles of the other visible Games in `game`'s folder whose file has the same stem,
+/// so the same Resume State, Save State and `.srm` file names. A hidden Game or one whose file is
+/// gone isn't listed: the library doesn't offer it.
+fn same_stem_games(ctx: &Ctx, game: &GameRow, rel_path: &Path) -> Vec<String> {
+    let (stem, folder) = (rel_path.file_stem(), rel_path.parent());
+    // Hidden Games lose the files too, so they are named as well.
+    let visible = ctx
+        .library
+        .system_games(&game.system, Default::default())
+        .unwrap_or_default();
+    let hidden = ctx.library.hidden_games().unwrap_or_default();
+    visible
+        .into_iter()
+        .chain(hidden.into_iter().filter(|g| g.system == game.system))
+        .filter(|other| {
+            let other_path = Path::new(&other.rel_path);
+            other.id != game.id && other_path.file_stem() == stem && other_path.parent() == folder
+        })
+        .map(|other| other.title)
+        .collect()
+}
+
 /// A delete view row's name.
 fn delete_label(what: SaveData) -> &'static str {
     match what {
@@ -1023,7 +1095,32 @@ impl Screen for OptionsMenu {
         for (i, thumb) in self.uploads.drain(..) {
             gfx.set_image(THUMB_KEYS[i], thumb.as_ref());
         }
-        gfx.fill_rect(dim_rect(), Colour::hex(0x000000).alpha(0.62));
+        self.appear.set(1.0);
+        let t = self.appear.step(ctx.animate, FADE_TAU);
+        gfx.fill_rect(dim_rect(), Colour::hex(0x000000).alpha(0.62 * t));
+        let layer = Layer {
+            dx: (1.0 - t) * SLIDE_IN,
+            dy: 0.0,
+            opacity: t,
+        };
+        gfx.with_layer(layer, |gfx| self.draw_panel(gfx, ctx));
+    }
+
+    fn hints(&self) -> Vec<Hint> {
+        self.hints_for_view()
+    }
+
+    fn text_input(&self) -> bool {
+        self.view == View::Rename
+    }
+}
+
+/// How far the panel slides in from, in logical pixels.
+const SLIDE_IN: f32 = 72.0;
+
+impl OptionsMenu {
+    /// Everything but the dimmed screen behind: the panel and what the current view shows in it.
+    fn draw_panel(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
         if self.view == View::Rename {
             self.item_hits.clear();
             return self.draw_rename(gfx);
@@ -1047,7 +1144,7 @@ impl Screen for OptionsMenu {
         match self.view {
             View::List => {
                 self.pick_hits.clear();
-                self.draw_list(gfx);
+                self.draw_list(gfx, ctx.animate);
             }
             View::Replace => {
                 self.item_hits.clear();
@@ -1065,7 +1162,7 @@ impl Screen for OptionsMenu {
         }
     }
 
-    fn hints(&self) -> Vec<Hint> {
+    fn hints_for_view(&self) -> Vec<Hint> {
         match self.view {
             View::List if self.focused() == Item::Controller => vec![
                 Hint::new(&[Action::Left, Action::Right], "Change"),
@@ -1089,10 +1186,6 @@ impl Screen for OptionsMenu {
                 Hint::new(&[Action::Back], "Back"),
             ],
         }
-    }
-
-    fn text_input(&self) -> bool {
-        self.view == View::Rename
     }
 }
 
@@ -1402,6 +1495,21 @@ mod tests {
         assert_eq!(
             OptionsMenu::new(game, &ctx).items(),
             [Favorite, ChooseArtwork, Rename, Hide, ShowFile]
+        );
+    }
+
+    #[test]
+    fn a_switch_game_has_no_save_state_items_but_can_delete_save_data() {
+        let mut game = world(1).2.remove(0);
+        game.system = "switch".into();
+        game.rel_path = "switch/Game.nro".into();
+        use Item::*;
+        let mut ctx = Ctx::empty();
+        ctx.games_root = PathBuf::from("/nonexistent");
+        assert_eq!(
+            OptionsMenu::new(game, &ctx).items(),
+            [Favorite, DeleteSaveData, ChooseArtwork, Rename, Hide, ShowFile],
+            "suyu has no states: no Load save state, and no Resume State to skip"
         );
     }
 
@@ -1778,6 +1886,71 @@ mod tests {
         assert_eq!(menu.picked(), 0, "focus leaves the emptied row");
         assert!(!menu.enabled(Item::LoadSaveState));
         assert_eq!(menu.uploads.len(), SLOTS, "the slot screenshots are forgotten");
+    }
+
+    #[test]
+    fn the_confirmation_warns_when_a_same_stem_game_in_the_folder_shares_the_save_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = dir.path().join("Games");
+        let found = |rel: &str, title: &str| FoundGame {
+            system: "snes",
+            rel_path: rel.into(),
+            title: title.into(),
+        };
+        let found = [
+            found("snes/Zelda.sfc", "Zelda"),
+            found("snes/Zelda.smc", "Zelda (Hack)"),
+            found("snes/hacks/Zelda.sfc", "Zelda (Elsewhere)"),
+            found("snes/Mario.sfc", "Mario"),
+        ];
+        ctx.library.sync_system("snes", &found, 0).unwrap();
+        let games = ctx.library.system_games("snes", SortOrder::AZ).unwrap();
+        let by = |title: &str| games.iter().find(|g| g.title == title).unwrap().clone();
+
+        let menu = OptionsMenu::new(by("Zelda"), &ctx);
+        for what in DELETE_ROWS {
+            let body = menu.delete_body(what);
+            assert!(
+                body.ends_with("Zelda (Hack) shares these save files and loses them too."),
+                "{what:?}: {body}"
+            );
+            assert!(!body.contains("Elsewhere"), "another folder has other save files");
+        }
+        let menu = OptionsMenu::new(by("Mario"), &ctx);
+        for what in DELETE_ROWS {
+            assert!(!menu.delete_body(what).contains("shares"), "{what:?}");
+        }
+        // A hidden sibling loses them too, so it is named as well.
+        ctx.library.hide_game(by("Zelda (Hack)").id).unwrap();
+        let menu = OptionsMenu::new(by("Zelda"), &ctx);
+        let body = menu.delete_body(SaveData::Everything);
+        assert!(
+            body.ends_with("Zelda (Hack) shares these save files and loses them too."),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn a_slot_screenshot_without_its_save_state_is_deleted_too() {
+        let (_dir, mut ctx, games) = world(1);
+        fill_slots(&ctx, &games[0], &[1, 2]);
+        let states = StatePaths::new(&ctx.games_root, "snes", Path::new(&games[0].rel_path));
+        fs::remove_file(states.slot(2)).unwrap();
+        fs::remove_file(states.slot(1)).unwrap();
+        assert!(states.thumb(1).is_file() && states.thumb(2).is_file());
+
+        let mut menu = OptionsMenu::new(games[0].clone(), &ctx);
+        assert!(
+            menu.enabled(Item::DeleteSaveData),
+            "a lone screenshot is left to delete"
+        );
+        open_delete(&mut menu, &mut ctx);
+        assert_eq!(delete_subs(&menu)[1].as_deref(), Some("2 of 3"));
+        let (title, _) = answer(&mut menu, &mut ctx, true);
+        assert_eq!(title, "Delete 2 Save States?");
+        assert_eq!(files(&ctx), Vec::<PathBuf>::new());
+        assert_eq!(menu.view(), View::List, "nothing is left to delete");
     }
 
     #[test]

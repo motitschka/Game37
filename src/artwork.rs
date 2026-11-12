@@ -203,12 +203,24 @@ pub struct Artwork {
     stopped: Arc<AtomicBool>,
     /// Set once SteamGridDB's API refuses the key (401, 403), for Settings to say so.
     rejected: Arc<AtomicBool>,
+    /// Set when this `Artwork` is dropped (Settings replaces it after a key change), so its network
+    /// thread sends no further request with the old key.
+    cancel: Cancel,
     budget: usize,
     /// The least time between the starts of two requests.
     gap: Duration,
     /// Started on first use, so a `Ctx` that never shows Artwork starts no threads.
     workers: OnceCell<Workers>,
     state: RefCell<State>,
+}
+
+/// Sets its flag when dropped. A separate type so `Artwork` itself stays free to move fields out.
+struct Cancel(Arc<AtomicBool>);
+
+impl Drop for Cancel {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
 }
 
 impl fmt::Debug for Artwork {
@@ -605,6 +617,7 @@ impl Artwork {
             fetch,
             stopped: Arc::new(AtomicBool::new(false)),
             rejected: Arc::new(AtomicBool::new(false)),
+            cancel: Cancel(Arc::new(AtomicBool::new(false))),
             budget: MEMORY_BUDGET,
             gap: REQUEST_GAP,
             workers: OnceCell::new(),
@@ -643,6 +656,7 @@ impl Artwork {
                 Arc::clone(&self.fetch),
                 Arc::clone(&self.stopped),
                 Arc::clone(&self.rejected),
+                Arc::clone(&self.cancel.0),
                 self.gap,
             )
         })
@@ -1084,6 +1098,7 @@ impl Workers {
         fetch: Fetch,
         stopped: Arc<AtomicBool>,
         rejected: Arc<AtomicBool>,
+        cancelled: Arc<AtomicBool>,
         gap: Duration,
     ) -> Workers {
         let (disk_tx, disk_done) = mpsc::channel();
@@ -1110,6 +1125,7 @@ impl Workers {
                 fetch,
                 stopped,
                 rejected,
+                cancelled,
                 searched: HashMap::new(),
                 gap,
                 last: Cell::new(None),
@@ -1302,6 +1318,8 @@ struct Net {
     fetch: Fetch,
     stopped: Arc<AtomicBool>,
     rejected: Arc<AtomicBool>,
+    /// Set once the owning `Artwork` is dropped: no further request, so none with an old key.
+    cancelled: Arc<AtomicBool>,
     /// Display Title searches done this run, so a Game's cover and hero search once.
     searched: HashMap<String, Option<u64>>,
     /// The least time between the starts of two requests.
@@ -1467,13 +1485,17 @@ impl Net {
     /// [`MAX_CONNECT_FAILURES`] requests in a row that can't connect; a file host's error fails only
     /// that file.
     fn get(&self, url: &str, api_key: Option<&ApiKey>, max_bytes: u64) -> Result<Vec<u8>, FetchError> {
-        if self.stopped.load(Ordering::Relaxed) {
+        let off = || self.stopped.load(Ordering::Relaxed) || self.cancelled.load(Ordering::Relaxed);
+        if off() {
             return Err(FetchError::Connect);
         }
         if let Some(last) = self.last.get() {
             let wait = self.gap.saturating_sub(last.elapsed());
             if !wait.is_zero() {
                 thread::sleep(wait);
+                if off() {
+                    return Err(FetchError::Connect);
+                }
             }
         }
         self.last.set(Some(Instant::now()));
@@ -2309,6 +2331,42 @@ pub(crate) mod tests {
             (342, 482)
         );
         assert_eq!(fake.calls(), 0);
+    }
+
+    #[test]
+    fn artwork_dropped_mid_lookup_sends_no_further_request_with_the_old_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = any_title();
+        let (library, games) = library(dir.path());
+        // Counts requests as they enter the fetch, before the fake's gate holds them.
+        let entered = Arc::new(AtomicU64::new(0));
+        let inner = fake.fetch();
+        let counted = Arc::clone(&entered);
+        let fetch: Fetch = Arc::new(move |request: &Request| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            inner(request)
+        });
+        let key = Some(ApiKey::new("0123456789abcdef0123456789abcdef"));
+        let artwork = unpaced(Artwork::new(dir.path().join("artwork"), key, Arc::clone(&fetch)));
+        fake.set_gate(false);
+        assert!(matches!(artwork.cover(&library, &games[0]), Art::Loading));
+        artwork.poll(&library);
+        // The search is in flight, held at the gate.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while entered.load(Ordering::SeqCst) == 0 {
+            assert!(Instant::now() < deadline, "the search never started");
+            thread::sleep(Duration::from_millis(2));
+        }
+        // Settings replaces the service after a key change.
+        drop(artwork);
+        fake.set_gate(true);
+        // The network thread holds a clone of `fetch` until it ends.
+        while Arc::strong_count(&fetch) > 1 {
+            assert!(Instant::now() < deadline, "the network thread never ended");
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(entered.load(Ordering::SeqCst), 1);
+        assert_eq!(fake.calls(), 1);
     }
 
     #[test]

@@ -33,13 +33,6 @@ pub static CEMU: Emulator = Emulator {
     folder_file: &[&["code", "*.rpx"]],
     stays_open: false,
 };
-pub static RYUBING: Emulator = Emulator {
-    name: "Ryubing",
-    flatpak_id: "io.github.ryubing.Ryujinx",
-    args: &[PATH, "--fullscreen"],
-    folder_file: &[],
-    stays_open: true,
-};
 pub static RPCS3: Emulator = Emulator {
     name: "RPCS3",
     flatpak_id: "net.rpcs3.RPCS3",
@@ -59,7 +52,6 @@ pub static SHADPS4: Emulator = Emulator {
 pub fn for_system(system: &System) -> Option<&'static Emulator> {
     match system.id {
         "wiiu" => Some(&CEMU),
-        "switch" => Some(&RYUBING),
         "ps3" => Some(&RPCS3),
         "ps4" => Some(&SHADPS4),
         _ => None,
@@ -167,7 +159,7 @@ mod tests {
             .filter(|s| for_system(s).is_some())
             .map(|s| s.id)
             .collect();
-        assert_eq!(external, ["wiiu", "switch", "ps3", "ps4"]);
+        assert_eq!(external, ["wiiu", "ps3", "ps4"]);
     }
 
     #[test]
@@ -182,7 +174,8 @@ mod tests {
         assert_eq!(emulators.missing(by_id("wiiu").unwrap()), None);
         assert_eq!(emulators.missing(by_id("ps4").unwrap()), None);
         assert_eq!(emulators.missing(by_id("ps3").unwrap()), Some(&RPCS3));
-        assert_eq!(emulators.missing(by_id("switch").unwrap()), Some(&RYUBING));
+        // Switch plays inside Game37 (ADR 0019): it never misses an emulator.
+        assert_eq!(emulators.missing(by_id("switch").unwrap()), None);
     }
 
     #[test]

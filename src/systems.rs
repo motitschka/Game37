@@ -194,7 +194,7 @@ pub static SYSTEMS: [System; 19] = [
         short: "SWITCH",
         maker: Maker::Nintendo,
         year: 2017,
-        kind: Kind::External,
+        kind: Kind::Embedded,
         colour: 0xE60012,
         extensions: &["nsp", "xci", "nro"],
         folder_markers: &[],
@@ -345,14 +345,14 @@ mod tests {
     }
 
     #[test]
-    fn thirteen_embedded_and_only_wii_u_switch_ps3_and_ps4_external() {
-        assert_eq!(SYSTEMS.iter().filter(|s| s.kind == Kind::Embedded).count(), 13);
+    fn fourteen_embedded_and_only_wii_u_ps3_and_ps4_external() {
+        assert_eq!(SYSTEMS.iter().filter(|s| s.kind == Kind::Embedded).count(), 14);
         let external: Vec<_> = SYSTEMS
             .iter()
             .filter(|s| s.kind == Kind::External)
             .map(|s| s.id)
             .collect();
-        assert_eq!(external, ["wiiu", "switch", "ps3", "ps4"]);
+        assert_eq!(external, ["wiiu", "ps3", "ps4"]);
     }
 
     #[test]

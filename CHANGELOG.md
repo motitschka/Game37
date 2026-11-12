@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **Switch plays inside Game37,** on the suyu Core, with the Pause Menu, one way to quit and Playtime
+  like the other Embedded Systems. The Core isn't on the libretro build server: run
+  `scripts/build-suyu-core.sh` once to build it (Settings → BIOS shows whether it's there). Encrypted
+  Games (`.nsp`, `.xci`) need your own `prod.keys` in `~/Games/bios/switch/`; homebrew (`.nro`) needs
+  none. Switch has no Save States, Resume State or Restart game. Ryubing is no longer used.
+
 ## 0.2.0-beta.3 (2026-11-03)
 
 The menus fill screens taller than 16:9, such as 16:10 and 3:2 laptop screens.

@@ -9,6 +9,7 @@ use crate::ctx::Ctx;
 use crate::emulators::Emulator;
 use crate::library::db::{DbError, GameRow, Library, SortOrder};
 use crate::systems::System;
+use crate::ui::anim::{Eased, FOCUS_TAU, SCROLL_TAU};
 use crate::ui::chrome;
 use crate::ui::cover::{self, COVER_GAP, COVER_H, COVER_W, RING_REACH};
 use crate::ui::gfx::{Align, Gfx, TextStyle};
@@ -144,6 +145,11 @@ pub struct GameGrid {
     scroll: f32,
     /// The canvas height (`ui::h`) `scroll` was last fitted at; a resize refits it in `draw`.
     scroll_h: f32,
+    /// What is drawn: `scroll` eased, so the grid glides to the focus.
+    shown: Eased,
+    /// How far the focused cover's ring has faded in, 0 to 1, and the Game it belongs to.
+    ring: Eased,
+    ringed: Option<usize>,
     hits: Vec<(Rect, usize)>,
     extra: Option<Extra>,
     /// Where the sort chip was last drawn, for the mouse.
@@ -172,6 +178,9 @@ impl GameGrid {
             focus: 0,
             scroll: 0.0,
             scroll_h: ui::h(),
+            shown: Eased::new(0.0),
+            ring: Eased::new(1.0),
+            ringed: None,
             hits: Vec::new(),
             extra: None,
             sort_hit: None,
@@ -602,30 +611,32 @@ impl Screen for GameGrid {
             return;
         }
         let (top, bottom) = (self.top_y(), bottom());
+        self.shown.set(self.scroll);
+        let scroll = self.shown.step(ctx.animate, SCROLL_TAU);
+        if self.ringed != Some(self.focus) {
+            self.ring.jump(if self.ringed.is_some() { 0.0 } else { 1.0 });
+            self.ring.set(1.0);
+            self.ringed = Some(self.focus);
+        }
+        let ring = self.ring.step(ctx.animate, FOCUS_TAU);
         let clip_top = top - RING_REACH - 4.0;
         gfx.clip(Some(Rect::new(0.0, clip_top, W, bottom - clip_top)));
-        let first_row = ((self.scroll - RING_REACH) / PITCH_Y).floor().max(0.0) as usize;
-        let last_row = ((self.scroll + bottom - top) / PITCH_Y).ceil() as usize;
+        let first_row = ((scroll - RING_REACH) / PITCH_Y).floor().max(0.0) as usize;
+        let last_row = ((scroll + bottom - top) / PITCH_Y).ceil() as usize;
         let caption = TextStyle::new(17, Weight::Medium, MUTED);
         for i in first_row * COLS..((last_row + 1) * COLS).min(self.games.len()) {
             let (row, col) = (i / COLS, i % COLS);
             let r = Rect::new(
                 M + col as f32 * PITCH_X,
-                top + row as f32 * PITCH_Y - self.scroll,
+                top + row as f32 * PITCH_Y - scroll,
                 COVER_W,
                 COVER_H,
             );
             let game = &self.games[i];
             // While a notice button has focus, no cover is drawn focused.
             let art = ctx.artwork.cover(&ctx.library, game);
-            cover::draw(
-                gfx,
-                r,
-                game,
-                &art,
-                true,
-                i == self.focus && self.notice_focus.is_none(),
-            );
+            let focused = i == self.focus && self.notice_focus.is_none();
+            cover::draw_focused(gfx, r, game, &art, true, if focused { ring } else { 0.0 });
             if game.playtime_secs > 0 {
                 gfx.text(
                     r.x,
@@ -645,7 +656,7 @@ impl Screen for GameGrid {
                 i,
             ));
         }
-        if self.content_h() - self.scroll > bottom - top {
+        if self.content_h() - scroll > bottom - top {
             let fade = Rect::new(0.0, bottom - FADE_H, W, FADE_H);
             gfx.fill_round_rect_vgradient(fade, 0.0, BG.alpha(0.0), BG);
         }
@@ -698,9 +709,9 @@ mod tests {
         systems::by_id("snes").unwrap()
     }
 
-    /// Switch: an External System, with Ryubing as its Standalone Emulator.
-    fn switch() -> &'static System {
-        systems::by_id("switch").unwrap()
+    /// Wii U: an External System, with Cemu as its Standalone Emulator.
+    fn wii_u() -> &'static System {
+        systems::by_id("wiiu").unwrap()
     }
 
     fn row(id: i64) -> GameRow {
@@ -924,9 +935,9 @@ mod tests {
         let mut ctx = Ctx::empty();
         ctx.games_root = dir.path().to_owned();
         // An installed Standalone Emulator's Game, which Confirm used to launch directly.
-        ctx.library.sync_system("switch", &[found_switch(0)], 0).unwrap();
+        ctx.library.sync_system("wiiu", &[found_wii_u(0)], 0).unwrap();
         let mut grid =
-            GameGrid::new("Switch", switch_source()).sortable(Colour::hex(0), "hint".into(), switch());
+            GameGrid::new("Wii U", wii_u_source()).sortable(Colour::hex(0), "hint".into(), wii_u());
         grid.handle(Input::Action(Action::Down), &mut ctx); // initial load
         assert_eq!(grid.hints()[0], Hint::new(&[Action::Confirm], "Details"));
 
@@ -1052,29 +1063,29 @@ mod tests {
         );
     }
 
-    fn switch_source() -> Source {
-        Box::new(|library| library.system_games("switch", SortOrder::AZ))
+    fn wii_u_source() -> Source {
+        Box::new(|library| library.system_games("wiiu", SortOrder::AZ))
     }
 
-    fn found_switch(n: usize) -> FoundGame {
+    fn found_wii_u(n: usize) -> FoundGame {
         FoundGame {
-            system: "switch",
-            rel_path: format!("switch/b{n:03}.nsp"),
+            system: "wiiu",
+            rel_path: format!("wiiu/b{n:03}.wua"),
             title: format!("B{n:03}"),
         }
     }
 
     /// A Console Page for an External System whose Standalone Emulator isn't installed.
-    fn missing_ryubing_page() -> (Ctx, GameGrid) {
+    fn missing_cemu_page() -> (Ctx, GameGrid) {
         let mut ctx = Ctx::empty();
         ctx.emulators = Emulators::from_installed(Vec::<String>::new());
-        let grid = GameGrid::new("Switch", switch_source()).sortable(Colour::hex(0), "hint".into(), switch());
+        let grid = GameGrid::new("Wii U", wii_u_source()).sortable(Colour::hex(0), "hint".into(), wii_u());
         (ctx, grid)
     }
 
     #[test]
     fn the_notice_shows_for_an_external_system_missing_its_emulator_and_starts_on_copy_command() {
-        let (mut ctx, mut grid) = missing_ryubing_page();
+        let (mut ctx, mut grid) = missing_cemu_page();
         grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
         assert!(grid.notice_shown);
         assert_eq!(grid.notice_focus, Some(NoticeFocus::Copy));
@@ -1100,31 +1111,31 @@ mod tests {
 
     #[test]
     fn check_again_clears_the_notice_once_the_emulator_is_found() {
-        let (mut ctx, mut grid) = missing_ryubing_page();
-        let found = [found_switch(0), found_switch(1)];
-        ctx.library.sync_system("switch", &found, 0).unwrap();
+        let (mut ctx, mut grid) = missing_cemu_page();
+        let found = [found_wii_u(0), found_wii_u(1)];
+        ctx.library.sync_system("wiiu", &found, 0).unwrap();
         grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
         assert!(grid.notice_shown);
-        ctx.detect_emulators = Box::new(|| Emulators::from_installed(["io.github.ryubing.Ryujinx"]));
+        ctx.detect_emulators = Box::new(|| Emulators::from_installed(["info.cemu.Cemu"]));
 
         grid.handle(Input::Action(Action::Right), &mut ctx); // focus Check again
         grid.handle(Input::Action(Action::Confirm), &mut ctx);
 
-        assert!(!grid.notice_shown, "Ryubing is now installed");
+        assert!(!grid.notice_shown, "Cemu is now installed");
         assert_eq!(grid.notice_focus, None, "focus moves to the grid");
         assert_eq!(grid.focus, 0);
     }
 
     #[test]
     fn check_again_keeps_the_notice_when_still_missing() {
-        let (mut ctx, mut grid) = missing_ryubing_page();
+        let (mut ctx, mut grid) = missing_cemu_page();
         grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
         ctx.detect_emulators = Box::new(|| Emulators::from_installed(Vec::<String>::new()));
 
         grid.handle(Input::Action(Action::Right), &mut ctx); // focus Check again
         grid.handle(Input::Action(Action::Confirm), &mut ctx);
 
-        assert!(grid.notice_shown, "Ryubing is still missing");
+        assert!(grid.notice_shown, "Cemu is still missing");
         assert_eq!(
             grid.notice_focus,
             Some(NoticeFocus::Check),
@@ -1134,12 +1145,12 @@ mod tests {
 
     #[test]
     fn a_pointer_over_the_cleared_notices_buttons_focuses_nothing() {
-        let (mut ctx, mut grid) = missing_ryubing_page();
-        ctx.library.sync_system("switch", &[found_switch(0)], 0).unwrap();
+        let (mut ctx, mut grid) = missing_cemu_page();
+        ctx.library.sync_system("wiiu", &[found_wii_u(0)], 0).unwrap();
         grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
         let check = Rect::new(100.0, 100.0, 50.0, 50.0);
         grid.notice_hits = Some((Rect::new(0.0, 100.0, 50.0, 50.0), check)); // as last drawn
-        ctx.detect_emulators = Box::new(|| Emulators::from_installed(["io.github.ryubing.Ryujinx"]));
+        ctx.detect_emulators = Box::new(|| Emulators::from_installed(["info.cemu.Cemu"]));
 
         grid.handle(Input::Action(Action::Right), &mut ctx); // focus Check again
         grid.handle(Input::Action(Action::Confirm), &mut ctx); // clears the notice
@@ -1158,8 +1169,8 @@ mod tests {
 
     #[test]
     fn check_again_in_screenshot_mode_keeps_the_simulated_state() {
-        let (mut ctx, mut grid) = missing_ryubing_page();
-        // As `--missing-emulators switch` does.
+        let (mut ctx, mut grid) = missing_cemu_page();
+        // As `--missing-emulators wiiu` does.
         ctx.simulate_emulators(Emulators::from_installed(Vec::<String>::new()));
         grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
 
@@ -1172,14 +1183,14 @@ mod tests {
 
     #[test]
     fn copy_command_leaves_a_clipboard_request() {
-        let (mut ctx, mut grid) = missing_ryubing_page();
+        let (mut ctx, mut grid) = missing_cemu_page();
         grid.handle(Input::Action(Action::Back), &mut ctx); // initial load, focus on Copy
 
         grid.handle(Input::Action(Action::Confirm), &mut ctx);
 
         assert_eq!(
             ctx.clipboard_request.as_deref(),
-            Some("flatpak install flathub io.github.ryubing.Ryujinx")
+            Some("flatpak install flathub info.cemu.Cemu")
         );
     }
 }

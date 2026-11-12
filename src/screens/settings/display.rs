@@ -1,6 +1,6 @@
-//! Settings → Display (`screen_settings_display` in the mockups): Startup window mode, then the
-//! Screens group with each two-screen System's layout (FR-DS-1, FR-NEW-2), all cycled choices like
-//! Controls' Menu button style.
+//! Settings → Display (`screen_settings_display` in the mockups): Startup window mode and Motion,
+//! then the Screens group with each two-screen System's layout (FR-DS-1, FR-NEW-2), all cycled
+//! choices like Controls' Menu button style.
 
 use super::{Row, Section};
 use crate::cores::{self, ScreenLayouts};
@@ -10,6 +10,9 @@ use crate::ui::input::{Action, Input};
 use crate::ui::nav::Transition;
 
 const MODE: usize = 0;
+const MOTION: usize = 1;
+/// The rows before the Screens group.
+const LEADING: usize = 2;
 
 /// The Systems with two screens, in System Order: one layout row each, after Startup window mode.
 fn two_screen_systems() -> impl Iterator<Item = (&'static System, &'static ScreenLayouts)> {
@@ -29,12 +32,15 @@ impl Section for Display {
         let mode = Row::new("Startup window mode")
             .choice(ctx.window_mode.label())
             .sub("Applies the next time Game37 starts");
+        let motion = Row::new("Motion")
+            .choice(if ctx.animate { "Full" } else { "Reduced" })
+            .sub("Reduced turns off fades, slides and gliding");
         let layouts = two_screen_systems().enumerate().map(|(i, (system, layouts))| {
             let layout = ctx.screen_layout(system);
             let row = Row::new(layouts.label).choice(layout.label()).sub(layout.sub());
             if i == 0 { row.group("Screens") } else { row }
         });
-        std::iter::once(mode).chain(layouts).collect()
+        [mode, motion].into_iter().chain(layouts).collect()
     }
 
     /// Confirm on a row cycles its choice, as Left and Right do in [`Display::handle`].
@@ -68,7 +74,12 @@ fn cycle(i: usize, forward: bool, ctx: &mut Ctx) -> bool {
         ctx.set_window_mode(mode);
         return true;
     }
-    let Some((system, _)) = two_screen_systems().nth(i - 1) else {
+    if i == MOTION {
+        // Two choices: either direction flips it.
+        ctx.set_reduced_motion(ctx.animate);
+        return true;
+    }
+    let Some((system, _)) = two_screen_systems().nth(i - LEADING) else {
         return false;
     };
     let layout = ctx.screen_layout(system);
@@ -148,12 +159,13 @@ mod tests {
             labels,
             [
                 ("Startup window mode", Some("Remember last"), None),
+                ("Motion", Some("Reduced"), None),
                 ("DS layout", Some("Large and small"), Some("Screens")),
                 ("3DS layout", Some("Large and small"), None),
             ]
         );
         assert!(rows.iter().all(|r| r.choice));
-        assert_eq!(rows[1].sub, Some(ScreenLayout::LargeAndSmall.sub()));
+        assert_eq!(rows[2].sub, Some(ScreenLayout::LargeAndSmall.sub()));
     }
 
     /// Down to the DS layout row and Right, Left or Confirm cycle and save DS's layout, which the
@@ -163,11 +175,11 @@ mod tests {
         let mut nav = nav();
         let ctx = &mut Ctx::empty();
         let saved = |ctx: &Ctx, id| ctx.library.screen_layout(id).unwrap();
-        act(&mut nav, ctx, &[Action::Down, Action::Right]);
+        act(&mut nav, ctx, &[Action::Down, Action::Down, Action::Right]);
         assert_eq!(saved(ctx, "nds"), ScreenLayout::SideBySide);
         assert_eq!(saved(ctx, "3ds"), ScreenLayout::LargeAndSmall);
-        assert_eq!(Display.rows(ctx)[1].value.as_deref(), Some("Side by side"));
-        assert_eq!(Display.rows(ctx)[1].sub, Some(ScreenLayout::SideBySide.sub()));
+        assert_eq!(Display.rows(ctx)[2].value.as_deref(), Some("Side by side"));
+        assert_eq!(Display.rows(ctx)[2].sub, Some(ScreenLayout::SideBySide.sub()));
         act(&mut nav, ctx, &[Action::Confirm]);
         assert_eq!(saved(ctx, "nds"), ScreenLayout::OneScreen);
         act(&mut nav, ctx, &[Action::Right]);
@@ -177,6 +189,26 @@ mod tests {
         act(&mut nav, ctx, &[Action::Down, Action::Left]);
         assert_eq!(saved(ctx, "3ds"), ScreenLayout::OneScreen);
         assert_eq!(saved(ctx, "nds"), ScreenLayout::OneScreen);
+        assert_eq!(ctx.window_mode, WindowMode::RememberLast, "untouched");
+    }
+
+    /// The Motion row flips between Full and Reduced with Right, Left or Confirm, turns
+    /// `Ctx::animate` on or off, and is saved.
+    #[test]
+    fn the_motion_row_turns_animation_on_and_off_and_is_saved() {
+        let mut nav = nav();
+        let ctx = &mut Ctx::empty();
+        ctx.animate = true;
+        assert_eq!(Display.rows(ctx)[1].value.as_deref(), Some("Full"));
+        act(&mut nav, ctx, &[Action::Down, Action::Right]);
+        assert!(!ctx.animate);
+        assert!(ctx.library.reduced_motion().unwrap());
+        assert_eq!(Display.rows(ctx)[1].value.as_deref(), Some("Reduced"));
+        act(&mut nav, ctx, &[Action::Left]);
+        assert!(ctx.animate);
+        assert!(!ctx.library.reduced_motion().unwrap());
+        act(&mut nav, ctx, &[Action::Confirm]);
+        assert!(!ctx.animate, "Confirm flips it too");
         assert_eq!(ctx.window_mode, WindowMode::RememberLast, "untouched");
     }
 }

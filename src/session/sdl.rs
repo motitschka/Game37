@@ -68,6 +68,10 @@ pub struct Session {
     touch: Option<TouchControls>,
     /// Whether the left stick also presses the d-pad ([`cores::CoreInfo::stick_is_dpad`]).
     stick_dpad: bool,
+    /// Whether the Core has Save States and a Resume State ([`cores::CoreInfo::has_states`]).
+    has_states: bool,
+    /// Whether the Core can restart the Game ([`cores::CoreInfo::resets`]).
+    resets: bool,
     /// Whether a Nintendo-lettered pad's face buttons map by letter ([`input::faces_by_letter`]).
     by_letter: bool,
     /// How fast the Game really ran, logged when the session ends.
@@ -204,7 +208,13 @@ fn core_options(
     core: &CoreInfo,
     game: &Path,
 ) -> Vec<(&'static str, &'static str)> {
-    core.options_for(system, game, ctx.screen_layout(system))
+    let mut options = core.options_for(system, game, ctx.screen_layout(system));
+    // With the DS's own BIOS and firmware all there, name the firmware, without which melonDS DS
+    // ignores the BIOS too and plays on its built-in ones (#42).
+    if std::ptr::eq(core, &cores::MELONDS_DS) && cores::missing_ds_sysfiles(&ctx.games_root).is_empty() {
+        options.push((cores::DS_FIRMWARE_OPTION, "firmware.bin"));
+    }
+    options
 }
 
 /// The controller `core` is told sits in each port for `game`, of `system`: on Wii the one chosen
@@ -274,7 +284,7 @@ impl Session {
                 message: launch::missing_bios_message(&ctx.games_root, rule),
             });
         }
-        let gl = open_gl(core_info, frontend, None, system.name).map_err(StartError::generic)?;
+        let gl = open_gl(core_info, frontend, None, system.name)?;
         let fail = |e: &dyn Display| format!("{} couldn't start {}: {e}.", core_info.name, game.title);
         let root = &ctx.games_root;
         let dirs = CoreDirs {
@@ -285,6 +295,9 @@ impl Session {
             fs::create_dir_all(dir)
                 .map_err(|e| StartError::generic(fail(&format!("Can't create {}: {e}", dir.display()))))?;
         }
+        // The player's Switch keys go where suyu looks for them, before it loads.
+        cores::stage_keys(core_info, root, &dirs.system)
+            .map_err(|e| StartError::generic(fail(&format!("Can't copy the Switch keys: {e}"))))?;
         // Before the Core loads, or it makes its own (an unformatted PS2 memory card).
         let rel_path = Path::new(&game.rel_path);
         saves::give_first_save(core_info.saves, root, system.id, rel_path)
@@ -317,10 +330,14 @@ impl Session {
         });
         let states = StatePaths::new(root, system.id, Path::new(&game.rel_path));
         // Continue where the player quit (FR-EMB-6), or from the Save State or power-on they chose
-        // (FR-DET-4).
-        let start_message = load_start_state(&states, play.start, |state| {
-            core.unserialize(state).map_err(|e| e.to_string())
-        });
+        // (FR-DET-4). A Core without states always starts from power-on.
+        let start_message = if core_info.has_states() {
+            load_start_state(&states, play.start, |state| {
+                core.unserialize(state).map_err(|e| e.to_string())
+            })
+        } else {
+            None
+        };
         let av = core.av_info();
         let audio = audio.and_then(|a| {
             Audio::open(a, av.sample_rate)
@@ -347,6 +364,8 @@ impl Session {
             paused: false,
             touch: core_info.touch.map(TouchControls::new),
             stick_dpad: core_info.stick_is_dpad(),
+            has_states: core_info.has_states(),
+            resets: core_info.resets(),
             by_letter: input::faces_by_letter(system),
             pace: Pace::default(),
             start_message,
@@ -523,6 +542,9 @@ impl Session {
 
     /// Writes the Resume State the next launch continues from (FR-EMB-6).
     fn write_resume(&mut self) {
+        if !self.has_states {
+            return;
+        }
         store_resume(&self.states.resume(), self.core.serialize());
     }
 
@@ -609,24 +631,37 @@ impl Screen for Session {
 
 /// Opens the OpenGL host `core_info`'s [`GlKind`] needs: beside the SDL renderer's own window and
 /// context `frontend` (`None` on another renderer), or GLX's, on the X display `display` (`None`:
-/// `$DISPLAY`). `Err` is the message to show for the System `system_name`, with the real error
-/// logged to stderr.
+/// `$DISPLAY`). `Err` is the failure to show for the System `system_name`, with the real error
+/// logged to stderr: also when the Core [needs OpenGL](CoreInfo::needs_gl) and `frontend` is
+/// `None`, so the Core is never loaded without the host it needs (issue #43).
 fn open_gl(
     core_info: &CoreInfo,
     frontend: Option<(Window, SDL_GLContext)>,
     display: Option<&CStr>,
     system_name: &str,
-) -> Result<Option<Box<dyn GlHost>>, String> {
-    match core_info.gl() {
-        GlKind::Sdl => Ok(frontend.map(|(window, context)| Box::new(SdlGl::new(window, context)) as _)),
-        GlKind::Glx => GlxGl::open(display, frontend)
+) -> Result<Option<Box<dyn GlHost>>, StartError> {
+    match (core_info.gl(), frontend) {
+        (GlKind::Sdl, Some((window, context))) => Ok(Some(Box::new(SdlGl::new(window, context)))),
+        (GlKind::Sdl, None) if core_info.needs_gl() => Err(StartError {
+            title: NO_GL_TITLE,
+            message: format!(
+                "{system_name} games need OpenGL, which this computer's graphics driver doesn't provide."
+            ),
+        }),
+        (GlKind::Sdl, None) => Ok(None),
+        (GlKind::Glx, frontend) => GlxGl::open(display, frontend)
             .map(|host| Some(Box::new(host) as Box<dyn GlHost>))
             .map_err(|e| {
                 eprintln!("game37: can't open the GLX host: {e}");
-                format!("{system_name} games need X11 (XWayland), which isn't available.")
+                StartError::generic(format!(
+                    "{system_name} games need X11 (XWayland), which isn't available."
+                ))
             }),
     }
 }
+
+/// The title of the message shown when a Game's Core needs OpenGL and the renderer has none.
+const NO_GL_TITLE: &str = "OpenGL isn't available";
 
 /// The state a session starts from: the Save State in `slot` when the player chose one
 /// (FR-DET-4), else the Resume State (FR-EMB-6).
@@ -760,7 +795,13 @@ pub fn tick(
 /// What the pause trigger does: opens the Pause Menu over the session (FR-EMB-3).
 pub fn on_pause(nav: &mut Nav) {
     let Some(session) = running(nav) else { return };
-    let menu = PauseMenu::new(&session.title, session.meta(), slot_infos(&session.states));
+    let slots = if session.has_states {
+        slot_infos(&session.states)
+    } else {
+        vec![None; crate::session::states::SLOTS]
+    };
+    let menu = PauseMenu::new(&session.title, session.meta(), slots)
+        .with_capabilities(session.has_states, session.resets);
     nav.push(Box::new(menu));
 }
 
@@ -1021,13 +1062,8 @@ mod tests {
         );
     }
 
-    /// A chosen slot the Core refuses (a junk file, e.g. after a Core update) starts the Game
-    /// fresh and tells the player, instead of staying silent (FR-DET-4).
-    #[test]
-    #[ignore = "needs /home/matei/Game37/.testdata"]
-    fn a_junk_chosen_slot_starts_fresh_and_tells_the_player() {
-        let _serial = serial();
-        let root = TempDir::new().unwrap();
+    /// A SNES Game in `root` with junk in Save State slot 2, and the Play that starts from it.
+    fn junk_slot_2(root: &TempDir) -> (Ctx, Play) {
         let rel = "snes/240p Test Suite (World).sfc";
         fs::create_dir_all(root.path().join("snes")).unwrap();
         fs::copy(Path::new(TESTDATA).join("games").join(rel), root.path().join(rel)).unwrap();
@@ -1047,11 +1083,21 @@ mod tests {
         let states = StatePaths::new(&ctx.games_root, "snes", Path::new(rel));
         fs::create_dir_all(states.slot(2).parent().unwrap()).unwrap();
         fs::write(states.slot(2), b"not a real save state").unwrap();
-
         let play = Play {
             game,
             start: Start::Slot(2),
         };
+        (ctx, play)
+    }
+
+    /// A chosen slot the Core refuses (a junk file, e.g. after a Core update) starts the Game
+    /// fresh and tells the player, instead of staying silent (FR-DET-4).
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn a_junk_chosen_slot_starts_fresh_and_tells_the_player() {
+        let _serial = serial();
+        let root = TempDir::new().unwrap();
+        let (ctx, play) = junk_slot_2(&root);
         let mut session = Session::start(&play, &ctx, None, None, None).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(
             session.start_message.as_deref(),
@@ -1059,6 +1105,27 @@ mod tests {
             "the player is told, instead of a silent fresh start"
         );
         run(&mut session, 2);
+    }
+
+    /// #47: `start` puts the slot failure up as a Message over the running session, which stays
+    /// below it, rather than in place of it.
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn start_puts_the_slot_failure_message_over_the_session() {
+        let _serial = serial();
+        let root = TempDir::new().unwrap();
+        let (ctx, play) = junk_slot_2(&root);
+        let mut nav = Nav::single(Box::new(crate::screens::Stub::new("Home")));
+        start(&play, &mut nav, &ctx, None, None, None);
+        assert_eq!(nav.depth(), 3, "Home, the session and the Message");
+        assert_eq!(nav.top().title(), SLOT_FAILED_TITLE);
+        assert!(nav.top().is_modal(), "the Message is over the session");
+        assert!(running(&mut nav).is_some(), "the Game runs below the Message");
+        assert_eq!(
+            running(&mut nav).unwrap().start_message,
+            None,
+            "the message was handed to the Message"
+        );
     }
 
     #[test]
@@ -1568,6 +1635,32 @@ mod tests {
         }
         ctx.set_screen_layout(nds, ScreenLayout::SideBySide);
         assert!(options(&ctx).contains(&("melonds_screen_layout1", "left-right")));
+    }
+
+    /// #42: melonDS DS is told to load `firmware.bin`, and so the DS's own BIOS too, only once all
+    /// three of the DS's files are in the BIOS folder; until then it keeps its built-in ones.
+    #[test]
+    fn a_ds_game_names_the_firmware_once_the_ds_bios_and_firmware_are_all_there() {
+        let dir = TempDir::new().unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = dir.path().to_path_buf();
+        let bios = dir.path().join("bios");
+        fs::create_dir_all(&bios).unwrap();
+        let nds = systems::by_id("nds").unwrap();
+        let game = dir.path().join("nds/Game.nds");
+        let firmware = (cores::DS_FIRMWARE_OPTION, "firmware.bin");
+        let options = |ctx: &Ctx| core_options(ctx, nds, &cores::MELONDS_DS, &game);
+
+        fs::write(bios.join("bios7.bin"), b"x").unwrap();
+        fs::write(bios.join("firmware.bin"), b"x").unwrap();
+        assert!(
+            !options(&ctx).iter().any(|(k, _)| *k == cores::DS_FIRMWARE_OPTION),
+            "bios9.bin is missing, and melonDS DS doesn't mix its own files with the DS's"
+        );
+        fs::write(bios.join("bios9.bin"), b"x").unwrap();
+        assert!(options(&ctx).contains(&firmware));
+        let gba = core_options(&ctx, systems::by_id("gba").unwrap(), &cores::MGBA, &game);
+        assert!(!gba.contains(&firmware), "only melonDS DS is told");
     }
 
     /// A Wii Game starts Dolphin with the controller chosen for it in its Options Menu: the Wii
@@ -2125,6 +2218,78 @@ mod tests {
             "the large screen differs from the old small one by {to_small}, the old large one by {to_large}"
         );
         to_small < to_large
+    }
+
+    /// suyu (ADR 0019) boots the Space NX homebrew from `.testdata/games/switch/` on the renderer
+    /// (the Core built by `scripts/build-suyu-core.sh`, in `.testdata/data/cores/`). It keeps its
+    /// own files in the data dir's system folder and its NAND in the Switch save folder, writes
+    /// nothing to the BIOS folder, offers no Save States, and quits promptly. suyu runs on its own
+    /// clock, so the frames are ticked at 60 a second.
+    #[test]
+    #[ignore = "needs /home/matei/Game37/.testdata"]
+    fn hw_suyu_boots_homebrew_keeps_its_files_in_game37s_folders_and_quits() {
+        use crate::ui::text::Fonts;
+
+        let _serial = serial();
+        let file = "Space NX (Homebrew).nro";
+        let root = TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join("switch")).unwrap();
+        fs::copy(
+            Path::new(TESTDATA).join("games/switch").join(file),
+            root.path().join("switch").join(file),
+        )
+        .unwrap();
+        let data = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(Path::new(TESTDATA).join("data/cores"), data.path().join("cores"))
+            .unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = root.path().to_path_buf();
+        ctx.data_dir = data.path().to_path_buf();
+        let game = GameRow {
+            id: 1,
+            system: "switch".into(),
+            rel_path: format!("switch/{file}"),
+            title: "Space NX".into(),
+            date_added: 0,
+            last_played: None,
+            playtime_secs: 0,
+            favorite: false,
+        };
+        let (_sdl, canvas) = offscreen_renderer();
+        let creator = canvas.texture_creator();
+        let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
+        let shot = data.path().join("shot.bmp");
+        let mut session = Session::start(&Play::resume(game), &ctx, gfx.gl_context(), None, Some(60.0))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(!session.has_states && !session.resets);
+        for _ in 0..360 {
+            assert!(!session.tick(&mut gfx, 1.0 / 60.0, &[], Mouse::default(), |_| false));
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+        assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "booted");
+        let frame = session.core.frame();
+        assert_eq!((frame.width, frame.height), (1280, 720), "docked");
+
+        let quitting = Instant::now();
+        drop(session);
+        assert!(
+            quitting.elapsed().as_secs() < 5,
+            "quit took {:?}",
+            quitting.elapsed()
+        );
+        assert!(
+            data.path().join("system/suyu/config").is_dir(),
+            "its config under the data dir"
+        );
+        assert!(
+            root.path().join("saves/switch/suyu/nand").is_dir(),
+            "its NAND with the saves"
+        );
+        assert!(
+            !root.path().join("bios/suyu").exists(),
+            "nothing in the player's BIOS folder"
+        );
+        assert!(!root.path().join("states").exists(), "no Resume State");
     }
 
     /// 3DS with Azahar (FR-NEW-2): ftpd boots through a 3DS session on the SDL OpenGL host and its
@@ -2846,10 +3011,77 @@ mod tests {
         assert!(open_gl(&cores::MESEN, None, None, "NES").unwrap().is_none());
     }
 
+    /// On the software renderer (no frontend context), the Systems whose Cores draw in software
+    /// still play, and those whose Cores need OpenGL are refused with a message saying so
+    /// (issue #43). PSP is left out: its GLX host doesn't come from the renderer.
+    #[test]
+    fn without_a_frontend_context_only_cores_that_need_opengl_are_refused() {
+        for id in ["nes", "snes", "gb", "gbc", "gba", "nds", "ps1"] {
+            let system = systems::by_id(id).unwrap();
+            let core = cores::for_system(system).unwrap();
+            match open_gl(core, None, None, system.name) {
+                Ok(host) => assert!(host.is_none(), "{id}"),
+                Err(e) => panic!("{id} refused: {e}"),
+            }
+        }
+        for id in ["n64", "3ds", "gc", "wii", "ps2"] {
+            let system = systems::by_id(id).unwrap();
+            let core = cores::for_system(system).unwrap();
+            match open_gl(core, None, None, system.name) {
+                Err(e) => {
+                    assert_eq!(e.title, "OpenGL isn't available", "{id}");
+                    assert_eq!(
+                        e.message,
+                        format!(
+                            "{} games need OpenGL, which this computer's graphics driver doesn't provide.",
+                            system.name
+                        )
+                    );
+                }
+                Ok(_) => panic!("{id} was given a Core without OpenGL"),
+            }
+        }
+    }
+
+    /// A Game whose Core needs OpenGL, started without a frontend context, gets the OpenGL message
+    /// before its Core is loaded: there is no Core installed here, so loading it would fail with
+    /// the generic title instead (issue #43).
+    #[test]
+    fn a_game_whose_core_needs_opengl_does_not_start_without_a_frontend_context() {
+        let _serial = serial();
+        let dir = TempDir::new().unwrap();
+        let mut ctx = Ctx::empty();
+        ctx.games_root = dir.path().join("Games");
+        ctx.data_dir = dir.path().join("data");
+        let play = Play {
+            game: GameRow {
+                id: 1,
+                system: "n64".into(),
+                rel_path: "n64/Game.n64".into(),
+                title: "Game".into(),
+                date_added: 0,
+                last_played: None,
+                playtime_secs: 0,
+                favorite: false,
+            },
+            start: Start::PowerOn,
+        };
+        match Session::start(&play, &ctx, None, None, None) {
+            Err(e) => {
+                assert_eq!(e.title, "OpenGL isn't available");
+                assert_eq!(
+                    e.message,
+                    "Nintendo 64 games need OpenGL, which this computer's graphics driver doesn't provide."
+                );
+            }
+            Ok(_) => panic!("expected an error"),
+        }
+    }
+
     #[test]
     fn a_glx_core_with_no_x_display_fails_with_the_system_name_in_the_message() {
         match open_gl(&cores::PPSSPP, None, Some(c"/nonexistent/game37-test:0"), "PSP") {
-            Err(message) => assert_eq!(message, "PSP games need X11 (XWayland), which isn't available."),
+            Err(e) => assert_eq!(e.message, "PSP games need X11 (XWayland), which isn't available."),
             Ok(_) => panic!("expected an error"),
         }
     }
