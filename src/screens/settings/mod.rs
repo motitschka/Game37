@@ -12,6 +12,7 @@ mod cores;
 mod display;
 mod games_root;
 mod hidden;
+mod home;
 mod library;
 
 use crate::ctx::Ctx;
@@ -208,6 +209,7 @@ impl Settings {
             Box::new(bios::Bios::default()),
             Box::new(cores::Cores::default()),
             Box::new(controls::Controls),
+            Box::new(home::Home),
             Box::new(display::Display),
             Box::new(about::About),
         ])
@@ -587,7 +589,7 @@ mod tests {
         assert_eq!(
             names,
             [
-                "Library", "Artwork", "BIOS", "Cores", "Controls", "Display", "About"
+                "Library", "Artwork", "BIOS", "Cores", "Controls", "Home", "Display", "About"
             ]
         );
         assert_eq!((s.title(), s.entry()), ("Settings", Some(Entry::Settings)));
@@ -646,7 +648,7 @@ mod tests {
         }
         assert_eq!(s.hints(), [Hint::new(&[Action::Back], "Back")]);
         let mut real = Settings::new();
-        for _ in 0..6 {
+        for _ in 0..7 {
             act(&mut real, ctx, Action::Down);
         }
         act(&mut real, ctx, Action::Right);

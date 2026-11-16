@@ -7,7 +7,7 @@ use crate::artwork::Artwork;
 use crate::config::Config;
 use crate::cores::{self, CoreAssets, CoreInfo, Download, ScreenLayout};
 use crate::emulators::Emulators;
-use crate::library::db::{DbError, GameRow, Library};
+use crate::library::db::{DbError, GameRow, HomeShelves, Library};
 use crate::library::scan;
 use crate::session::input::PadState;
 use crate::systems::{SYSTEMS, System};
@@ -86,6 +86,9 @@ pub struct Ctx {
     /// How many Games each row of every grid of covers shows (FR-UI-7); `app.rs` loads it from the
     /// library at start, and an open grid follows a change from its next frame.
     pub games_per_row: usize,
+    /// Which Shelf each of Home's slots holds (FR-HOME-2); `app.rs` loads it from the library at
+    /// start, and Home follows a change from its next frame.
+    pub home_shelves: HomeShelves,
     /// How each two-screen System shows its screens, by System id; `app.rs` loads them from the
     /// library at start ([`Ctx::load_screen_layouts`]), and a change is saved as it is made. A
     /// System not in it has Large and small.
@@ -148,6 +151,7 @@ impl Ctx {
             button_style: ButtonStyle::default(),
             window_mode: WindowMode::default(),
             games_per_row: grid::DEFAULT_PER_ROW,
+            home_shelves: HomeShelves::DEFAULT,
             screen_layouts: HashMap::new(),
             emulators: Emulators::all_installed(),
             detect_emulators: Box::new(Emulators::detect),
@@ -194,6 +198,14 @@ impl Ctx {
         self.games_per_row = per_row;
         if let Err(e) = self.library.set_games_per_row(per_row) {
             eprintln!("game37: can't save the Games per row: {e}");
+        }
+    }
+
+    /// Switches which Shelves Home shows, in which order (FR-HOME-2), and saves it.
+    pub fn set_home_shelves(&mut self, shelves: HomeShelves) {
+        self.home_shelves = shelves;
+        if let Err(e) = self.library.set_home_shelves(shelves) {
+            eprintln!("game37: can't save Home's Shelves: {e}");
         }
     }
 
@@ -286,6 +298,11 @@ mod tests {
         ctx.set_games_per_row(10);
         assert_eq!(ctx.games_per_row, 10);
         assert_eq!(ctx.library.games_per_row().unwrap(), 10);
+        let shelves =
+            HomeShelves::new([None, Some(crate::library::db::Shelf::MostPlayed), None, None]).unwrap();
+        ctx.set_home_shelves(shelves);
+        assert_eq!(ctx.home_shelves, shelves);
+        assert_eq!(ctx.library.home_shelves().unwrap(), shelves);
         ctx.remember_fullscreen(true);
         assert!(ctx.library.last_fullscreen().unwrap());
     }

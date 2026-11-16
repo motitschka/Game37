@@ -1166,7 +1166,7 @@ def screen_timer_window():
 
 # ---------- Settings (M6) ----------
 
-SECTIONS = ["Library", "Artwork", "BIOS", "Cores", "Controls", "Display", "About"]
+SECTIONS = ["Library", "Artwork", "BIOS", "Cores", "Controls", "Home", "Display", "About"]
 RX = M + 448  # left edge of the rows column
 RW = W - M - RX
 TOP = 240  # first section and first row
@@ -1451,6 +1451,23 @@ def screen_settings_display():
     for label, layout, focused in [("DS layout", "Side by side", True), ("3DS layout", "Large and small", False)]:
         r = settings_row(sv, y, h, label, sub=SCREEN_LAYOUTS[layout], focused=focused)
         choice_value(sv, r, y, h, layout)
+        y += h + 12
+    hintbar(sv, [(["←", "→"], "Change"), (["B"], "Back")])
+    sv.save()
+
+
+# Settings → Home (FR-HOME-2): four slots, each holding one of the four Shelves or Off; Home shows the
+# slots' Shelves in slot order. Left and right step a slot through the Shelves, then Off.
+HOME_SLOTS = ["Favorites", "Continue playing", "Recently added", "Most played"]
+
+
+def screen_settings_home():
+    sv = Svg("45-settings-home", "Settings: Home")
+    settings_page(sv, "Home")
+    y, h = TOP, 76
+    for i, shelf in enumerate(HOME_SLOTS):
+        r = settings_row(sv, y, h, f"Shelf {i + 1}", focused=i == 1)
+        choice_value(sv, r, y, h, shelf)
         y += h + 12
     hintbar(sv, [(["←", "→"], "Change"), (["B"], "Back")])
     sv.save()
@@ -1855,6 +1872,7 @@ if __name__ == "__main__":
                screen_setup_systems, screen_setup_emulators, screen_setup_folders, screen_setup_cores,
                screen_setup_key, screen_settings_controls, screen_settings_about,
                screen_pause_restart_confirm, screen_3ds_layout_large, screen_3ds_layout_large_3,
-               screen_3ds_layout_side, screen_3ds_layout_single, screen_settings_display]:
+               screen_3ds_layout_side, screen_3ds_layout_single, screen_settings_display,
+               screen_settings_home]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))

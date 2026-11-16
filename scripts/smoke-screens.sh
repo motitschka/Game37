@@ -95,7 +95,7 @@ shot m4-psp "$root/cfg.toml" "nexttab,left,left,left,left,confirm,confirm,confir
 shot m4-ps1-no-bios "$root/cfg.toml" "nexttab,left,left,left,left,left,left,confirm,confirm,confirm"
 # M8: DS side by side, chosen in Settings → Display first (each shot has its own library)
 shot m8-ds-side-by-side "$root/cfg.toml" \
-    "settings$(printf ',down%.0s' {1..5}),right,down,right,back,back,nexttab$(printf ',right%.0s' {1..7}),confirm,confirm,confirm" \
+    "settings$(printf ',down%.0s' {1..6}),right,down,right,back,back,nexttab$(printf ',right%.0s' {1..7}),confirm,confirm,confirm" \
     --frames 300
 # M8: PS2 without a BIOS; 3DS running ftpd on Azahar, the top screen large and the touch screen small;
 # GameCube and Wii running FCE Ultra GX on Dolphin, its menu showing
@@ -171,7 +171,7 @@ shot m6-search-controller "$root/cfg.toml" "search,text:test,up"
 shot m6-settings-library "$root/cfg.toml" "settings,right,down,down"
 shot m6-settings-hidden "$root/cfg.toml" "down,down,options,down,down,down,down,down,confirm,settings,right,down,down,confirm"
 shot m6-settings-reset "$root/cfg.toml" "settings,right,down,down,down,confirm"
-shot m6-settings-about "$root/cfg.toml" "settings$(printf ',down%.0s' {1..6})"
+shot m6-settings-about "$root/cfg.toml" "settings$(printf ',down%.0s' {1..7})"
 # M6: Settings BIOS and Cores, each with the focus on its first row (no download starts)
 shot m6-settings-bios "$root/cfg.toml" "settings,down,down,right"
 shot m6-settings-cores "$root/cfg.toml" "settings,down,down,down,right"
@@ -182,18 +182,24 @@ shot m8-settings-bios-ps2 "$root/cfg.toml" "settings,down,down,right$(printf ',d
 # (its hint glyphs show Xbox labels), and the Display row
 shot m6-settings-controls "$root/cfg.toml" "settings,down,down,down,down,right"
 shot m6-settings-xbox "$root/cfg.toml" "settings,down,down,down,down,right,right"
-shot m6-settings-display "$root/cfg.toml" "settings,down,down,down,down,down,right"
+shot m6-settings-display "$root/cfg.toml" "settings$(printf ',down%.0s' {1..6}),right"
 # M8: Settings Display's Screens group, as in the mockup: the DS layout row (below Startup window
 # mode, Motion and Games per row) switched to Side by side
-shot m8-settings-display-screens "$root/cfg.toml" "settings$(printf ',down%.0s' {1..5}),right,down,down,down,right"
+shot m8-settings-display-screens "$root/cfg.toml" "settings$(printf ',down%.0s' {1..6}),right,down,down,down,right"
 # D1: SNES's Console Page of 20 dummy Games at 10 and at 6 Games per row, set in Settings → Display
 # opened over it
-per_row="nexttab,right,right,confirm,settings$(printf ',down%.0s' {1..5}),right,down,down"
+per_row="nexttab,right,right,confirm,settings$(printf ',down%.0s' {1..6}),right,down,down"
 shot d1-console-page-10 "$root/grid.toml" "$per_row,right,right,back,back"
 shot d1-console-page-6 "$root/grid.toml" "$per_row,left,left,back,back"
 # D1: Home after moving down to the third Shelf (Recently added): it moves by one whole Shelf, so
 # Continue playing and Recently added show
 shot d1-home-lower "$root/cfg.toml" "down,down"
+# D1: Settings → Home with the focus on Shelf 2, as in the mockup; then Home after Shelf 1 steps back
+# from Favorites to Recently added and Shelf 2 back from Continue playing to Most played (each swap
+# leaves Shelves 3 and 4 Off), so Home shows Recently added then Most played
+shot d1-settings-home "$root/cfg.toml" "settings$(printf ',down%.0s' {1..5}),right,down"
+shot d1-home-two-shelves "$root/cfg.toml" \
+    "settings$(printf ',down%.0s' {1..5}),right,left,left,left,down,left,left,left,back,back"
 
 # M6: Settings Artwork: the key row with no key set (screenshot mode runs Artwork off, so it shows
 # "Not set"), and the key entry modal with a typed key

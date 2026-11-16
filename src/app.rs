@@ -20,7 +20,7 @@ use crate::config::{self, Config};
 use crate::ctx::{self, Controller, Ctx};
 use crate::emulators::Emulators;
 use crate::launch::{Launcher, NeverExits, Processes};
-use crate::library::db::Library;
+use crate::library::db::{HomeShelves, Library};
 use crate::library::watch::LibraryWatcher;
 use crate::screens;
 use crate::session::input::{self, Mouse, Ports};
@@ -105,6 +105,10 @@ fn open_library(ctx: &mut Ctx, config: &Config) -> Result<(), String> {
     ctx.games_per_row = ctx.library.games_per_row().unwrap_or_else(|e| {
         eprintln!("game37: can't read the Games per row: {e}");
         grid::DEFAULT_PER_ROW
+    });
+    ctx.home_shelves = ctx.library.home_shelves().unwrap_or_else(|e| {
+        eprintln!("game37: can't read Home's Shelves: {e}");
+        HomeShelves::DEFAULT
     });
     ctx.load_screen_layouts();
     Ok(())

@@ -113,7 +113,8 @@ mod tests {
     use crate::ui::input::{Action, Input};
     use crate::ui::nav::{Hits, Nav};
 
-    /// Settings in a Nav over a root screen, with the focus on Display's first row.
+    /// Settings in a Nav over a root screen, with the focus on Display's first row (past Library,
+    /// Artwork, BIOS, Cores, Controls and Home).
     fn nav() -> Nav {
         let mut nav = Nav::single(Box::new(crate::screens::Stub::new("Home")));
         nav.push(Box::new(Settings::new()));
@@ -121,6 +122,7 @@ mod tests {
             &mut nav,
             &mut Ctx::empty(),
             &[
+                Action::Down,
                 Action::Down,
                 Action::Down,
                 Action::Down,

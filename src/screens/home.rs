@@ -1,5 +1,5 @@
-//! Home: the Shelves (FR-HOME-1 to FR-HOME-5, FR-HOME-7), after `home` and `screen_home_empty` in
-//! `design/generate_mockups.py`.
+//! Home: the Shelves the player switched on, in their order (FR-HOME-1 to FR-HOME-5, FR-HOME-7),
+//! after `home` and `screen_home_empty` in `design/generate_mockups.py`.
 
 use std::path::Path;
 
@@ -18,6 +18,8 @@ use crate::ui::text::Weight;
 use crate::ui::theme::{ACCENT, BG, LINE, MUTED, SURFACE, SURFACE2, TEXT};
 use crate::ui::{M, Rect, W, hit, scroll};
 
+/// The most Shelves Home shows: the per-Shelf arrays are this long, and only the first
+/// `Home::shelves.len()` of each are used.
 const SHELVES: usize = Shelf::ALL.len();
 
 /// The visible content area between the top bar and the hint bar, which follows the bottom of the
@@ -82,11 +84,15 @@ fn block_top(i: usize) -> f32 {
     i as f32 * Layout::now().block_h
 }
 
-/// The first Shelf showing once Shelf `shelf` has focus, from `top`: the view moves by one whole
-/// Shelf, and only when the focus leaves the Shelves showing.
-fn follow(top: usize, shelf: usize) -> usize {
-    top.clamp(shelf.saturating_sub(SHOWN - 1), shelf)
-        .min(SHELVES - SHOWN)
+/// The last Shelf `top` can be with `n` Shelves shown: with one, it sits in the upper half.
+fn max_top(n: usize) -> usize {
+    n.saturating_sub(SHOWN)
+}
+
+/// The first Shelf showing once Shelf `shelf` of `n` has focus, from `top`: the view moves by one
+/// whole Shelf, and only when the focus leaves the Shelves showing.
+fn follow(top: usize, shelf: usize, n: usize) -> usize {
+    top.clamp(shelf.saturating_sub(SHOWN - 1), shelf).min(max_top(n))
 }
 
 pub fn name(shelf: Shelf) -> &'static str {
@@ -132,13 +138,14 @@ impl Focus {
         self.cols[self.shelf]
     }
 
-    /// Moves one step in `dir` given each Shelf's item count. Up and Down go to the neighbouring
-    /// Shelf's remembered position; Left and Right stop at the ends. Returns whether focus moved.
-    pub fn step(&mut self, dir: Action, counts: [usize; SHELVES]) -> bool {
+    /// Moves one step in `dir` given each shown Shelf's item count. Up and Down go to the
+    /// neighbouring Shelf's remembered position; Left and Right stop at the ends. Returns whether
+    /// focus moved.
+    pub fn step(&mut self, dir: Action, counts: &[usize]) -> bool {
         let before = self.clone();
         match dir {
             Action::Up => self.shelf = self.shelf.saturating_sub(1),
-            Action::Down => self.shelf = (self.shelf + 1).min(SHELVES - 1),
+            Action::Down => self.shelf = (self.shelf + 1).min(counts.len() - 1),
             Action::Left => self.cols[self.shelf] = self.col().saturating_sub(1),
             Action::Right => self.cols[self.shelf] = self.col() + 1,
             _ => {}
@@ -187,6 +194,7 @@ enum Target {
 }
 
 pub struct Home {
+    /// The Shelves shown, in `Ctx::home_shelves`' slot order as last seen.
     shelves: Vec<ShelfRow>,
     /// The `Ctx::revision` the Shelves were loaded at.
     revision: Option<u64>,
@@ -213,7 +221,7 @@ impl Default for Home {
 }
 
 impl Home {
-    /// The Shelves load from the library on first use.
+    /// The Shelves load from the library on first use, in `Ctx::home_shelves`' order.
     pub fn new() -> Home {
         Home {
             shelves: Shelf::ALL
@@ -237,6 +245,56 @@ impl Home {
         }
     }
 
+    /// Follows `ctx`: the Shelves switched on, then their Games.
+    fn sync(&mut self, ctx: &Ctx) {
+        self.sync_shelves(ctx);
+        self.reload_if_changed(ctx);
+    }
+
+    /// Follows a change to which Shelves show, made in Settings while Home was below it
+    /// (FR-HOME-2): the Shelves are laid out again in their new order, each one still shown keeping
+    /// its position. The focused Shelf keeps focus, on the same Game, if it is still shown; else
+    /// the first Shelf has it. Home lands on whole Shelves without a glide.
+    fn sync_shelves(&mut self, ctx: &Ctx) {
+        let wanted: Vec<Shelf> = ctx.home_shelves.shown().collect();
+        if self.shelves.iter().map(|r| r.shelf).eq(wanted.iter().copied()) {
+            return;
+        }
+        // Before the first load nothing had focus yet: Home starts on its first Shelf.
+        let focused = self.revision.map(|_| self.shelves[self.focus.shelf].shelf);
+        let mut old: Vec<_> = std::mem::take(&mut self.shelves)
+            .into_iter()
+            .enumerate()
+            .collect();
+        let (cols, hscroll, shown_h) = (self.focus.cols, self.hscroll, self.shown_h.clone());
+        self.focus = Focus::default();
+        self.hscroll = [0.0; SHELVES];
+        self.shown_h = std::array::from_fn(|_| Eased::new(0.0));
+        for (j, &shelf) in wanted.iter().enumerate() {
+            let row = match old.iter().position(|(_, row)| row.shelf == shelf) {
+                Some(k) => {
+                    let (i, row) = old.swap_remove(k);
+                    self.focus.cols[j] = cols[i];
+                    self.hscroll[j] = hscroll[i];
+                    self.shown_h[j] = shown_h[i].clone();
+                    row
+                }
+                None => ShelfRow {
+                    shelf,
+                    games: Vec::new(),
+                    total: 0,
+                },
+            };
+            self.shelves.push(row);
+        }
+        self.focus.shelf = wanted.iter().position(|&s| Some(s) == focused).unwrap_or(0);
+        // Loads the Shelves new to Home, and reloads the others, keeping each one's Game.
+        self.revision = None;
+        self.hits.clear();
+        self.top = follow(self.top, self.focus.shelf, self.shelves.len());
+        self.shown_v.jump(self.rest_offset());
+    }
+
     /// Reloads if `ctx.revision` changed since the last load. The previous frame's hit rects may
     /// point at Games that moved or went, so they are dropped until the next draw.
     fn reload_if_changed(&mut self, ctx: &Ctx) {
@@ -258,14 +316,17 @@ impl Home {
             row.total = total;
         }
         self.revision = Some(ctx.revision);
-        for i in 0..SHELVES {
+        for i in 0..self.shelves.len() {
             self.reveal(i);
         }
         self.reveal_shelf();
     }
 
-    fn counts(&self) -> [usize; SHELVES] {
-        std::array::from_fn(|i| item_count(self.shelves[i].games.len()))
+    fn counts(&self) -> Vec<usize> {
+        self.shelves
+            .iter()
+            .map(|row| item_count(row.games.len()))
+            .collect()
     }
 
     /// Home's vertical offset at rest: the top of the first Shelf showing.
@@ -293,14 +354,18 @@ impl Home {
 
     /// Moves Home by a whole Shelf when the focus left the Shelves showing.
     fn reveal_shelf(&mut self) {
-        self.top = follow(self.top, self.focus.shelf);
+        self.top = follow(self.top, self.focus.shelf, self.shelves.len());
     }
 
     /// The mouse wheel moves Home by `by` whole Shelves and pulls the focus onto a Shelf showing,
     /// to the position that Shelf remembers.
     fn wheel(&mut self, by: isize) {
-        self.top = self.top.saturating_add_signed(by).min(SHELVES - SHOWN);
-        let shelf = self.focus.shelf.clamp(self.top, self.top + SHOWN - 1);
+        let n = self.shelves.len();
+        self.top = self.top.saturating_add_signed(by).min(max_top(n));
+        let shelf = self
+            .focus
+            .shelf
+            .clamp(self.top, (self.top + SHOWN - 1).min(n - 1));
         if shelf != self.focus.shelf {
             self.focus.shelf = shelf;
             self.focus.cols[shelf] = self.focus.cols[shelf].min(self.counts()[shelf].saturating_sub(1));
@@ -316,7 +381,7 @@ impl Home {
             return;
         }
         self.fitted_h = crate::ui::h();
-        for i in 0..SHELVES {
+        for i in 0..self.shelves.len() {
             self.reveal(i);
             self.shown_h[i].jump(self.hscroll[i]);
         }
@@ -520,12 +585,12 @@ impl Screen for Home {
     }
 
     fn handle(&mut self, input: Input, ctx: &mut Ctx) -> Transition {
-        self.reload_if_changed(ctx);
+        self.sync(ctx);
         match input {
             Input::Action(Action::Confirm) => return self.confirm(ctx),
             Input::Action(Action::Options) => return self.options(ctx),
             Input::Action(dir) if dir.is_direction() => {
-                if self.focus.step(dir, self.counts()) {
+                if self.focus.step(dir, &self.counts()) {
                     self.reveal(self.focus.shelf);
                     self.reveal_shelf();
                 }
@@ -563,7 +628,7 @@ impl Screen for Home {
     }
 
     fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
-        self.reload_if_changed(ctx);
+        self.sync(ctx);
         self.refit();
         self.hits.clear();
         for (shown, &target) in self.shown_h.iter_mut().zip(&self.hscroll) {
@@ -584,7 +649,7 @@ impl Screen for Home {
         let view_h = lay.view_h;
         gfx.clip(Some(Rect::new(0.0, VIEW_TOP, W, view_h)));
         let title = TextStyle::new(28, Weight::Bold, TEXT);
-        for i in 0..SHELVES {
+        for i in 0..self.shelves.len() {
             let top = VIEW_TOP + block_top(i) - vs;
             if top >= view_bottom || top + lay.block_h <= VIEW_TOP {
                 continue;
@@ -621,6 +686,7 @@ impl Screen for Home {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::library::db::HomeShelves;
     use crate::ui;
 
     fn row(id: i64) -> GameRow {
@@ -667,11 +733,11 @@ mod tests {
     fn left_and_right_stop_at_the_ends() {
         let mut f = Focus::default();
         let counts = [3, 1, 21, 1];
-        assert!(!f.step(Action::Left, counts));
-        assert!(f.step(Action::Right, counts));
-        assert!(f.step(Action::Right, counts));
+        assert!(!f.step(Action::Left, &counts));
+        assert!(f.step(Action::Right, &counts));
+        assert!(f.step(Action::Right, &counts));
         assert_eq!(f.col(), 2, "See all of a 2-Game Shelf");
-        assert!(!f.step(Action::Right, counts));
+        assert!(!f.step(Action::Right, &counts));
         assert_eq!(f.col(), 2);
     }
 
@@ -679,12 +745,12 @@ mod tests {
     fn up_and_down_visit_every_shelf_in_order_including_empty_ones() {
         let mut f = Focus::default();
         let counts = [6, 1, 21, 1];
-        assert!(!f.step(Action::Up, counts));
+        assert!(!f.step(Action::Up, &counts));
         for shelf in 1..SHELVES {
-            assert!(f.step(Action::Down, counts));
+            assert!(f.step(Action::Down, &counts));
             assert_eq!(f.shelf, shelf);
         }
-        assert!(!f.step(Action::Down, counts));
+        assert!(!f.step(Action::Down, &counts));
         assert_eq!(f.col(), 0, "an empty Shelf's hint");
     }
 
@@ -693,14 +759,14 @@ mod tests {
         let mut f = Focus::default();
         let counts = [6, 21, 21, 1];
         for _ in 0..4 {
-            f.step(Action::Right, counts);
+            f.step(Action::Right, &counts);
         }
-        f.step(Action::Down, counts);
+        f.step(Action::Down, &counts);
         assert_eq!(f.col(), 0, "a Shelf not visited yet starts at its first Game");
-        f.step(Action::Right, counts);
-        f.step(Action::Up, counts);
+        f.step(Action::Right, &counts);
+        f.step(Action::Up, &counts);
         assert_eq!((f.shelf, f.col()), (0, 4));
-        f.step(Action::Down, counts);
+        f.step(Action::Down, &counts);
         assert_eq!((f.shelf, f.col()), (1, 1));
     }
 
@@ -710,7 +776,7 @@ mod tests {
             shelf: 0,
             cols: [0, 9, 0, 0],
         };
-        f.step(Action::Down, [3, 4, 1, 1]);
+        f.step(Action::Down, &[3, 4, 1, 1]);
         assert_eq!(f.col(), 3, "See all of the 3-Game Shelf");
     }
 
@@ -1047,6 +1113,136 @@ mod tests {
             (0, 1),
             "the first Shelf shows: no further"
         );
+    }
+
+    fn shown(home: &Home) -> Vec<Shelf> {
+        home.shelves.iter().map(|row| row.shelf).collect()
+    }
+
+    /// With 1, 2 or 3 Shelves switched on, Home shows them in slot order, Down visits each, and
+    /// every move, by the keys or the wheel, leaves Home on whole Shelves with `top` in
+    /// 0..=max(0, n - 2): one Shelf alone sits in the upper half.
+    #[test]
+    fn with_one_two_or_three_shelves_home_shows_them_in_slot_order_on_whole_shelves() {
+        use Shelf::{ContinuePlaying, Favorites, MostPlayed, RecentlyAdded};
+        let down = Input::Action(Action::Down);
+        let up = Input::Action(Action::Up);
+        let right = Input::Action(Action::Right);
+        let notch_down = Input::Pointer(Pointer::Wheel { dy: -1.0 });
+        let notch_up = Input::Pointer(Pointer::Wheel { dy: 1.0 });
+        for (slots, order) in [
+            ([None, None, Some(MostPlayed), None], vec![MostPlayed]),
+            (
+                [Some(RecentlyAdded), None, Some(Favorites), None],
+                vec![RecentlyAdded, Favorites],
+            ),
+            (
+                [Some(MostPlayed), Some(ContinuePlaying), None, Some(RecentlyAdded)],
+                vec![MostPlayed, ContinuePlaying, RecentlyAdded],
+            ),
+        ] {
+            let mut ctx = Ctx::empty();
+            ctx.home_shelves = HomeShelves::new(slots).unwrap();
+            let mut home = Home::new();
+            home.handle(Input::Action(Action::Left), &mut ctx); // initial load
+            assert_eq!(shown(&home), order);
+            for row in &mut home.shelves {
+                row.games = rows(1..=20);
+            }
+            let n = order.len();
+            let mut visited = vec![home.focus.shelf];
+            let moves = [
+                [down; 4],
+                [right; 4],
+                [up; 4],
+                [notch_down; 4],
+                [notch_up; 4],
+                [down; 4],
+            ];
+            for input in moves.into_iter().flatten() {
+                home.handle(input, &mut ctx);
+                if input == down && visited.last() != Some(&home.focus.shelf) {
+                    visited.push(home.focus.shelf);
+                }
+                assert!(
+                    home.top <= n.saturating_sub(2),
+                    "top {} with {n} Shelves",
+                    home.top
+                );
+                assert!(home.focus.shelf < n);
+                assert_at_rest_on_the_focus(&home);
+            }
+            assert_eq!(
+                visited,
+                (0..n).collect::<Vec<_>>(),
+                "Down visits each of {n} Shelves"
+            );
+        }
+    }
+
+    /// Home under Settings: once Settings → Home changes the Shelves, Home shows the new ones.
+    /// The focused Shelf keeps focus, on the same Game, while it is still shown; when it is no
+    /// longer shown, the first Shelf has focus.
+    #[test]
+    fn a_change_in_settings_shows_the_new_shelves_keeping_the_focused_shelf_if_shown() {
+        use Shelf::{ContinuePlaying, Favorites, MostPlayed, RecentlyAdded};
+        let mut ctx = Ctx::empty();
+        let many: Vec<_> = (0..20).map(found).collect();
+        ctx.library.sync_system("snes", &many, 0).unwrap();
+        let mut home = Home::new();
+        let act = |home: &mut Home, ctx: &mut Ctx, actions: &[Action]| {
+            for &action in actions {
+                home.handle(Input::Action(action), ctx);
+            }
+        };
+        act(&mut home, &mut ctx, &[Action::Down, Action::Down]);
+        act(&mut home, &mut ctx, &[Action::Right; 5]);
+        let recently_added = 2; // Shelf::ALL's index for Shelf::RecentlyAdded
+        assert_eq!((home.focus.shelf, home.top), (recently_added, 1));
+        let game = home.shelves[recently_added].games[5].id;
+
+        // Settings over Home: Shelf 1 steps back from Favorites to Off, Most played (from Shelf 4)
+        // and Recently added (from Shelf 3), then Back twice returns to Home.
+        let mut settings = crate::screens::settings::Settings::new();
+        let mut actions = vec![Action::Down; 5];
+        actions.extend([Action::Right, Action::Left, Action::Left, Action::Left]);
+        for action in actions {
+            settings.handle(Input::Action(action), &mut ctx);
+        }
+        assert!(matches!(
+            settings.handle(Input::Action(Action::Back), &mut ctx),
+            Transition::None
+        ));
+        assert!(matches!(
+            settings.handle(Input::Action(Action::Back), &mut ctx),
+            Transition::Pop
+        ));
+        let nothing = Input::Pointer(Pointer::Move { x: -1.0, y: -1.0 });
+        home.handle(nothing, &mut ctx);
+        assert_eq!(shown(&home), [RecentlyAdded, ContinuePlaying, MostPlayed]);
+        assert_eq!(home.focus.shelf, 0, "Recently added keeps focus, now first");
+        assert_eq!(
+            home.shelves[0].games[home.focus.col()].id,
+            game,
+            "on the same Game"
+        );
+        assert_eq!(home.top, 0);
+        assert_at_rest_on_the_focus(&home);
+        assert_eq!(home.shown_v.value(), home.rest_offset(), "no glide");
+
+        // Down to Most played, the third Shelf, which a change then switches off.
+        act(&mut home, &mut ctx, &[Action::Down, Action::Down]);
+        assert_eq!((home.focus.shelf, home.top), (2, 1));
+        ctx.set_home_shelves(HomeShelves::new([Some(Favorites), None, Some(ContinuePlaying), None]).unwrap());
+        home.handle(nothing, &mut ctx);
+        assert_eq!(shown(&home), [Favorites, ContinuePlaying]);
+        assert_eq!(
+            (home.focus.shelf, home.focus.col()),
+            (0, 0),
+            "the first Shelf has focus"
+        );
+        assert_eq!(home.top, 0);
+        assert_at_rest_on_the_focus(&home);
     }
 
     #[test]
