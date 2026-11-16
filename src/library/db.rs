@@ -50,6 +50,9 @@ const MIGRATIONS: &[&str] = &[
     "
     ALTER TABLE games ADD COLUMN wii_controller TEXT;
 ",
+    "
+    ALTER TABLE games ADD COLUMN release_date INTEGER;
+",
 ];
 
 /// Games that appear in views: still on disk and not Hidden (FR-DET-6).
@@ -296,6 +299,8 @@ pub struct GameRow {
     pub last_played: Option<i64>,
     pub playtime_secs: u64,
     pub favorite: bool,
+    /// The Release Date (FR-ART-5), unix seconds; `None` while unknown.
+    pub release_date: Option<i64>,
 }
 
 /// A [`GameRow`] plus the columns only sorting needs.
@@ -320,6 +325,7 @@ impl Fetched {
                 last_played: r.get(5)?,
                 playtime_secs: playtime_secs.max(0) as u64,
                 favorite: favorited_at.is_some(),
+                release_date: r.get(9)?,
             },
             playtime_secs,
             favorited_at,
@@ -517,7 +523,7 @@ impl Library {
     /// absent Hidden Game isn't listed: it only comes back once it reappears on disk, still Hidden.
     pub fn hidden_games(&self) -> Result<Vec<GameRow>, DbError> {
         let sql = "SELECT id, system, rel_path, COALESCE(renamed_title, title), date_added, last_played,
-                    playtime_secs, favorited_at, title
+                    playtime_secs, favorited_at, title, release_date
              FROM games WHERE present = 1 AND hidden = 1";
         let mut stmt = self.conn.prepare(sql)?;
         let mut games = stmt
@@ -577,7 +583,7 @@ impl Library {
     fn fetch(&self, filter: &str, params: impl Params) -> Result<Vec<Fetched>, DbError> {
         let sql = format!(
             "SELECT id, system, rel_path, COALESCE(renamed_title, title), date_added, last_played,
-                    playtime_secs, favorited_at, title
+                    playtime_secs, favorited_at, title, release_date
              FROM games WHERE {VISIBLE} AND {filter}"
         );
         let mut stmt = self.conn.prepare(&sql)?;
@@ -609,11 +615,11 @@ impl Library {
     pub fn all_favorites(&self) -> Result<Vec<(GameRow, bool)>, DbError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, system, rel_path, COALESCE(renamed_title, title), date_added, last_played,
-                    playtime_secs, favorited_at, title, present
+                    playtime_secs, favorited_at, title, release_date, present
              FROM games WHERE favorited_at IS NOT NULL AND hidden = 0",
         )?;
         let mut games = stmt
-            .query_map([], |r| Ok((Fetched::from_row(r)?, r.get::<_, bool>(9)?)))?
+            .query_map([], |r| Ok((Fetched::from_row(r)?, r.get::<_, bool>(10)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         games.sort_by_cached_key(|(g, _)| (Shelf::Favorites.key(g), g.row.title.to_lowercase(), g.row.id));
         Ok(games.into_iter().map(|(g, present)| (g.row, present)).collect())
@@ -703,6 +709,15 @@ impl Library {
     pub fn set_artwork(&self, id: i64, record: &str) -> Result<(), DbError> {
         self.conn
             .execute("UPDATE games SET artwork = ?2 WHERE id = ?1", params![id, record])?;
+        Ok(())
+    }
+
+    /// Sets Game `id`'s Release Date (FR-ART-5), unix seconds; `None`: unknown.
+    pub fn set_release_date(&self, id: i64, date: Option<i64>) -> Result<(), DbError> {
+        self.conn.execute(
+            "UPDATE games SET release_date = ?2 WHERE id = ?1",
+            params![id, date],
+        )?;
         Ok(())
     }
 
@@ -1701,6 +1716,37 @@ mod tests {
             lib.wii_controller(kart).unwrap(),
             WiiController::ClassicController
         );
+    }
+
+    /// A database from before Release Dates (schema version 2) opens with every Game's Release Date
+    /// unknown, and a date set then reads back, until it is set unknown again.
+    #[test]
+    fn an_old_database_without_release_dates_reads_them_as_unknown_and_round_trips_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(MIGRATIONS[0]).unwrap();
+            conn.execute_batch(MIGRATIONS[1]).unwrap();
+            conn.pragma_update(None, "user_version", 2).unwrap();
+            conn.execute(
+                "INSERT INTO games (system, rel_path, title, date_added, playtime_secs)
+                 VALUES ('snes', 'snes/Alpha.sfc', 'Alpha', 100, 60)",
+                [],
+            )
+            .unwrap();
+        }
+        let lib = Library::open(&path).unwrap();
+        let alpha = id_of(&lib, "snes", "Alpha");
+        let game = lib.game(alpha).unwrap().unwrap();
+        assert_eq!((game.playtime_secs, game.release_date), (60, None));
+
+        lib.set_release_date(alpha, Some(659145600)).unwrap();
+        assert_eq!(lib.game(alpha).unwrap().unwrap().release_date, Some(659145600));
+        let all = lib.all_games(SortOrder::AZ).unwrap();
+        assert_eq!(all[0].release_date, Some(659145600));
+        lib.set_release_date(alpha, None).unwrap();
+        assert_eq!(lib.game(alpha).unwrap().unwrap().release_date, None);
     }
 
     #[test]

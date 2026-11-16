@@ -179,6 +179,7 @@ mod tests {
                 last_played: None,
                 playtime_secs: 0,
                 favorite: false,
+                release_date: None,
             })
             .collect();
         HiddenGames {

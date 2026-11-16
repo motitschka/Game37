@@ -926,6 +926,7 @@ mod tests {
             last_played: None,
             playtime_secs: 0,
             favorite: false,
+            release_date: None,
         };
 
         let mut session = Session::start(&Play::resume(game.clone()), &ctx, None, None, None)
@@ -1020,6 +1021,7 @@ mod tests {
             last_played: None,
             playtime_secs: 0,
             favorite: false,
+            release_date: None,
         };
 
         let mut nav = Nav::single(Box::new(Stub::new("Home")));
@@ -1082,6 +1084,7 @@ mod tests {
             last_played: None,
             playtime_secs: 0,
             favorite: false,
+            release_date: None,
         };
         let states = StatePaths::new(&ctx.games_root, "snes", Path::new(rel));
         fs::create_dir_all(states.slot(2).parent().unwrap()).unwrap();
@@ -1260,6 +1263,7 @@ mod tests {
             last_played: None,
             playtime_secs: 0,
             favorite: false,
+            release_date: None,
         };
         let mut session =
             Session::start(&Play::resume(game), &ctx, None, None, None).unwrap_or_else(|e| panic!("{e}"));
@@ -1327,6 +1331,7 @@ mod tests {
             last_played: None,
             playtime_secs: 0,
             favorite: false,
+            release_date: None,
         };
         let (_sdl, canvas) = offscreen_renderer();
         let creator = canvas.texture_creator();
@@ -1377,6 +1382,7 @@ mod tests {
             last_played: None,
             playtime_secs: 0,
             favorite: false,
+            release_date: None,
         };
         let mut session =
             Session::start(&Play::resume(game), &ctx, None, None, None).unwrap_or_else(|e| panic!("{e}"));
@@ -1596,6 +1602,7 @@ mod tests {
             last_played: None,
             playtime_secs: 0,
             favorite: false,
+            release_date: None,
         };
         let play = Play {
             game,
@@ -1722,6 +1729,7 @@ mod tests {
             last_played: None,
             playtime_secs: 0,
             favorite: false,
+            release_date: None,
         }
     }
 
@@ -2185,6 +2193,7 @@ mod tests {
             last_played: None,
             playtime_secs: 0,
             favorite: false,
+            release_date: None,
         };
         (root, data, ctx, game)
     }
@@ -2265,6 +2274,7 @@ mod tests {
             last_played: None,
             playtime_secs: 0,
             favorite: false,
+            release_date: None,
         };
         let (_sdl, canvas) = offscreen_renderer();
         let creator = canvas.texture_creator();
@@ -2616,6 +2626,7 @@ mod tests {
             last_played: None,
             playtime_secs: 0,
             favorite: false,
+            release_date: None,
         };
         (root, data, ctx, game)
     }
@@ -3076,6 +3087,7 @@ mod tests {
                 last_played: None,
                 playtime_secs: 0,
                 favorite: false,
+                release_date: None,
             },
             start: Start::PowerOn,
         };
@@ -3138,6 +3150,7 @@ mod tests {
             last_played: None,
             playtime_secs: 0,
             favorite: false,
+            release_date: None,
         };
 
         sdl3::hint::set("SDL_VIDEO_DRIVER", "offscreen");

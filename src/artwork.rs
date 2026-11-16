@@ -13,12 +13,15 @@
 //! first. A queued job that hasn't been asked for in about a second is dropped unrun, so Games
 //! scrolled past are never fetched, and at most [`MAX_QUEUED_NET`] network jobs wait at once.
 //!
-//! Only Games a screen asks about are looked up, never the whole library: SteamGridDB's terms forbid
-//! bulk loading. Only SteamGridDB hosts are contacted (NFR-5), and the API key only goes to the API.
+//! Only Games a screen asks about have their Artwork looked up, never the whole library: SteamGridDB's
+//! terms forbid bulk loading. The one exception is each Game's Release Date (FR-ART-5), which
+//! [`Artwork::ask_release_dates`] asks for once per Game, one paced request each and no images, only
+//! while nothing a screen asks for waits. Only SteamGridDB hosts are contacted (NFR-5), and the API
+//! key only goes to the API.
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::cmp::Reverse;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::io::{Cursor, Write};
 use std::panic::{self, AssertUnwindSafe};
@@ -30,10 +33,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::config::ApiKey;
-use crate::library::db::{DbError, GameRow, Library};
+use crate::library::db::{DbError, GameRow, Library, SortOrder};
 
 const API: &str = "https://www.steamgriddb.com/api/v2";
 
@@ -246,6 +249,12 @@ struct State {
     /// Jobs not given to a worker yet, in no order: `poll` picks which goes next.
     disk: Vec<DiskJob>,
     net: Vec<NetJob>,
+    /// Release Dates to ask for, in order, each only once `net` is empty: nothing a screen asks
+    /// for ever waits behind one, and none is dropped for not being asked for.
+    dates: VecDeque<DateJob>,
+    /// The Games (library id, search title) whose Release Date was queued this run, so a later
+    /// pass doesn't queue them again, not even after a failed request.
+    dating: HashSet<(i64, String)>,
     /// Jobs given to a worker whose results haven't been collected.
     disk_running: usize,
     net_running: bool,
@@ -321,6 +330,7 @@ impl State {
                 }) => Some(*asked),
                 _ => None,
             },
+            NetJob::Date(_) => None,
         }
     }
 
@@ -338,6 +348,7 @@ impl State {
                 }) => Some(*first),
                 _ => None,
             },
+            NetJob::Date(_) => None,
         }
     }
 
@@ -361,6 +372,7 @@ impl State {
                     self.candidates.remove(&key);
                 }
             }
+            NetJob::Date(_) => {}
         }
     }
 
@@ -418,6 +430,17 @@ impl State {
             (rank(job), first)
         })?;
         Some(self.net.swap_remove(next))
+    }
+
+    /// The queued Release Date to ask for next, skipping the Games dated meanwhile (their Artwork's
+    /// search learnt it).
+    fn next_date(&mut self, library: &Library) -> Option<DateJob> {
+        while let Some(job) = self.dates.pop_front() {
+            if !read_record(library, job.game_id).is_some_and(|r| r.is_dated(&job.title)) {
+                return Some(job);
+            }
+        }
+        None
     }
 
     /// The queued cached file to read next: the one first asked for in the most recent poll (what
@@ -510,6 +533,10 @@ struct Record {
     cover: Option<Pick>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     hero: Option<Pick>,
+    /// Whether the Release Date of `game`, the match for `title`, has been asked for and stored
+    /// in the library, even if SteamGridDB has none (FR-ART-5).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    dated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -538,6 +565,11 @@ impl Record {
         (self.title.as_deref() == Some(title)).then_some(self.game)
     }
 
+    /// Whether the Release Date stored for the Game is the one for the search title `title`.
+    fn is_dated(&self, title: &str) -> bool {
+        self.dated && self.search(title).is_some()
+    }
+
     /// The pick of `kind` that holds for the search title `title`: the player's choice always, an
     /// automatic one only while it was matched for `title`.
     fn pick(&self, kind: Kind, title: &str) -> Option<&Pick> {
@@ -549,7 +581,7 @@ impl Record {
     }
 
     /// The record once searching `title` found `game`: the player's choices stay, and automatic
-    /// picks only if they came from this same search.
+    /// picks and being dated only if they came from this same search.
     fn searched(self, title: &str, game: Option<u64>) -> Record {
         if self.search(title) == Some(game) {
             return self;
@@ -560,6 +592,7 @@ impl Record {
             game,
             cover: chosen(self.cover),
             hero: chosen(self.hero),
+            dated: false,
         }
     }
 
@@ -575,6 +608,18 @@ impl Record {
 fn read_record(library: &Library, id: i64) -> Option<Record> {
     let text = library.artwork(id).ok().flatten()?;
     serde_json::from_str(&text).ok()
+}
+
+/// Stores `date` as Game `id`'s Release Date, and whether that worked: only then may its record
+/// say it is dated. On failure the next run asks again.
+fn store_date(library: &Library, id: i64, date: Option<i64>) -> bool {
+    match library.set_release_date(id, date) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("game37: can't record a Release Date: {e}");
+            false
+        }
+    }
 }
 
 fn write_record(library: &Library, id: i64, record: &Record) -> Result<(), DbError> {
@@ -832,6 +877,54 @@ impl Artwork {
         Ok(())
     }
 
+    /// Queues asking SteamGridDB for the Release Date (FR-ART-5) of every Game in `library` that is
+    /// not a Hidden Game and not dated yet: a search for one never searched for its search title,
+    /// a look at the match for one matched before Release Dates were recorded, and no images
+    /// either way. They go one at a time through the same paced requests as Artwork, each only once
+    /// nothing a screen asks for waits. A Game is queued at most once a run, so one whose request
+    /// fails is asked about again next run. Call it once the library is open and whenever a scan
+    /// changes it; without a key it does nothing.
+    pub fn ask_release_dates(&self, library: &Library) {
+        if self.dir.is_none() || !self.online() {
+            return;
+        }
+        let games = match library.all_games(SortOrder::AZ) {
+            Ok(games) => games,
+            Err(e) => {
+                eprintln!("game37: can't list the Games to ask Release Dates for: {e}");
+                return;
+            }
+        };
+        let mut state = self.state.borrow_mut();
+        for game in games {
+            let key = (game.id, game.search_title);
+            if state.dating.contains(&key) {
+                continue;
+            }
+            let record = read_record(library, game.id).unwrap_or_default();
+            if record.is_dated(&key.1) {
+                continue;
+            }
+            match record.search(&key.1) {
+                // Found no match before Release Dates were recorded: there is none to ask for.
+                Some(None) => {
+                    if store_date(library, game.id, None) {
+                        update_record(library, game.id, |record| Record {
+                            dated: true,
+                            ..record
+                        });
+                    }
+                }
+                search => state.dates.push_back(DateJob {
+                    game_id: game.id,
+                    title: key.1.clone(),
+                    game: search.flatten(),
+                }),
+            }
+            state.dating.insert(key);
+        }
+    }
+
     /// Collects finished background work and records it in `library`, drops queued work no longer
     /// asked for, and gives the workers their next jobs. Never blocks; call it once a frame.
     /// Returns whether anything arrived.
@@ -860,9 +953,10 @@ impl Artwork {
                 arrived = true;
                 self.finish(&mut state, library, job.failed());
             }
+            state.dates.clear();
         }
         state.drop_stale();
-        if state.disk.is_empty() && state.net.is_empty() {
+        if state.disk.is_empty() && state.net.is_empty() && state.dates.is_empty() {
             return arrived;
         }
         let workers = self.workers(dir);
@@ -873,7 +967,9 @@ impl Artwork {
             workers.disk(job);
         }
         if !state.net_running
-            && let Some(job) = state.next_net()
+            && let Some(job) = state
+                .next_net()
+                .or_else(|| state.next_date(library).map(NetJob::Date))
         {
             state.net_running = true;
             workers.net(job);
@@ -905,10 +1001,17 @@ impl Artwork {
                             path: Some(path),
                         });
                     }
-                    Outcome::Found { game, pick, picture } => {
+                    Outcome::Found {
+                        game,
+                        release_date,
+                        pick,
+                        picture,
+                    } => {
                         let Key::Game(id, kind, title) = &key else { return };
+                        let dated = release_date.is_some_and(|date| store_date(library, *id, date));
                         update_record(library, *id, |record| {
                             let mut record = record.searched(title, Some(game));
+                            record.dated |= dated;
                             // The player may have chosen other Artwork meanwhile: theirs stays.
                             if record.pick(*kind, title).is_none() {
                                 record.set(*kind, pick);
@@ -925,12 +1028,18 @@ impl Artwork {
                         }
                     }
                     Outcome::NoMatch | Outcome::Searched { .. } => {
-                        let game = match outcome {
-                            Outcome::Searched { game } => Some(game),
-                            _ => None,
+                        let (game, release_date) = match outcome {
+                            Outcome::Searched { game, release_date } => (Some(game), release_date),
+                            // No match, so no Release Date.
+                            _ => (None, Some(None)),
                         };
                         let Key::Game(id, _, title) = &key else { return };
-                        update_record(library, *id, |record| record.searched(title, game));
+                        let dated = release_date.is_some_and(|date| store_date(library, *id, date));
+                        update_record(library, *id, |record| {
+                            let mut record = record.searched(title, game);
+                            record.dated |= dated;
+                            record
+                        });
                         if current {
                             state.slots.insert(key, Slot::Placeholder);
                         }
@@ -947,13 +1056,24 @@ impl Artwork {
                 title,
                 result,
             } => {
+                let dated = |date: Learnt| date.is_some_and(|date| store_date(library, game_id, date));
                 let candidates = match result {
-                    Ok((game, list)) => {
-                        update_record(library, game_id, |record| record.searched(&title, Some(game)));
+                    Ok((game, release_date, list)) => {
+                        let dated = dated(release_date);
+                        update_record(library, game_id, |record| {
+                            let mut record = record.searched(&title, Some(game));
+                            record.dated |= dated;
+                            record
+                        });
                         Candidates::Ready(list.into())
                     }
                     Err(Failure::NoMatch) => {
-                        update_record(library, game_id, |record| record.searched(&title, None));
+                        let dated = dated(Some(None));
+                        update_record(library, game_id, |record| {
+                            let mut record = record.searched(&title, None);
+                            record.dated |= dated;
+                            record
+                        });
                         Candidates::Unavailable(Reason::NoMatch)
                     }
                     Err(Failure::Failed) => Candidates::Unavailable(Reason::Failed),
@@ -964,6 +1084,20 @@ impl Artwork {
                     first: Asked::default(),
                 };
                 state.candidates.insert((game_id, kind, title), listing);
+            }
+            Done::Date {
+                game_id,
+                title,
+                result,
+            } => {
+                // A failed request leaves the Game not dated, for the next run to ask again.
+                let Ok((game, date)) = result else { return };
+                let dated = store_date(library, game_id, date);
+                update_record(library, game_id, |record| {
+                    let mut record = record.searched(&title, game);
+                    record.dated |= dated;
+                    record
+                });
             }
         }
     }
@@ -1206,6 +1340,16 @@ enum NetJob {
         title: String,
         game: Option<u64>,
     },
+    /// Asks for a Game's Release Date, and nothing else.
+    Date(DateJob),
+}
+
+/// Asks for a Game's Release Date (FR-ART-5): the match's, if the SteamGridDB `game` is known,
+/// else the top search result's for the search title.
+struct DateJob {
+    game_id: i64,
+    title: String,
+    game: Option<u64>,
 }
 
 impl NetJob {
@@ -1225,6 +1369,11 @@ impl NetJob {
                 title: title.clone(),
                 result: Err(Failure::Failed),
             },
+            NetJob::Date(job) => Done::Date {
+                game_id: job.game_id,
+                title: job.title.clone(),
+                result: Err(Failure::Failed),
+            },
         }
     }
 }
@@ -1240,9 +1389,20 @@ enum Done {
         kind: Kind,
         /// The search title they were listed for.
         title: String,
-        result: Result<(u64, Vec<Candidate>), Failure>,
+        result: Result<(u64, Learnt, Vec<Candidate>), Failure>,
+    },
+    /// What asking for a Game's Release Date found: the match for `title` (`None`: none) and its
+    /// Release Date.
+    Date {
+        game_id: i64,
+        title: String,
+        result: Result<(Option<u64>, Option<i64>), Failure>,
     },
 }
+
+/// A Release Date as far as a lookup learnt it: `None` if it didn't search (the match was known),
+/// else what the search's match gave (`Some(None)`: SteamGridDB has none).
+type Learnt = Option<Option<i64>>;
 
 enum Outcome {
     Loaded(Picture),
@@ -1254,6 +1414,7 @@ enum Outcome {
     /// The search title matched SteamGridDB's `game`, whose top result of the kind is `pick`.
     Found {
         game: u64,
+        release_date: Learnt,
         pick: Pick,
         picture: Option<Picture>,
     },
@@ -1262,6 +1423,7 @@ enum Outcome {
     /// next run fetches them without searching again.
     Searched {
         game: u64,
+        release_date: Learnt,
     },
     /// Couldn't fetch or decode it this run.
     Failed,
@@ -1283,13 +1445,30 @@ enum FileError {
 #[derive(Deserialize)]
 struct Envelope<T> {
     success: bool,
-    #[serde(default = "Vec::new")]
-    data: Vec<T>,
+    /// An array for searches and lists, one object for a game by id.
+    #[serde(default)]
+    data: T,
 }
 
 #[derive(Deserialize)]
 struct FoundGame {
     id: u64,
+    /// Unix seconds; absent on some games.
+    #[serde(default, deserialize_with = "release_date")]
+    release_date: Option<i64>,
+}
+
+/// A Release Date as SteamGridDB gives it, unix seconds; anything else counts as none, so an odd
+/// date never costs a Game its Artwork.
+fn release_date<'de, D: Deserializer<'de>>(d: D) -> Result<Option<i64>, D::Error> {
+    Ok(serde_json::Value::deserialize(d)?.as_i64())
+}
+
+/// A search's match: SteamGridDB's game and its Release Date, if it gives one.
+#[derive(Clone, Copy)]
+struct Matched {
+    game: u64,
+    release_date: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -1320,8 +1499,8 @@ struct Net {
     rejected: Arc<AtomicBool>,
     /// Set once the owning `Artwork` is dropped: no further request, so none with an old key.
     cancelled: Arc<AtomicBool>,
-    /// Searches done this run, so a Game's cover and hero search once.
-    searched: HashMap<String, Option<u64>>,
+    /// Searches done this run, so a Game's cover, hero and Release Date search once.
+    searched: HashMap<String, Option<Matched>>,
     /// The least time between the starts of two requests.
     gap: Duration,
     /// When the last request started.
@@ -1355,10 +1534,25 @@ impl Net {
             } => {
                 let result = self
                     .resolve(&title, game)
-                    .and_then(|game| Ok((game, self.list(kind, game)?)));
+                    .and_then(|(game, date)| Ok((game, date, self.list(kind, game)?)));
                 Done::Candidates {
                     game_id,
                     kind,
+                    title,
+                    result,
+                }
+            }
+            NetJob::Date(DateJob { game_id, title, game }) => {
+                let result = match game {
+                    Some(game) => self
+                        .api::<Option<FoundGame>>(&format!("/games/id/{game}"))
+                        .map(|found| (Some(game), found.and_then(|g| g.release_date))),
+                    None => self
+                        .search(&title)
+                        .map(|found| (found.map(|m| m.game), found.and_then(|m| m.release_date))),
+                };
+                Done::Date {
+                    game_id,
                     title,
                     result,
                 }
@@ -1371,8 +1565,8 @@ impl Net {
             return Outcome::Failed;
         };
         let kind = *kind;
-        let game = match self.resolve(title, game) {
-            Ok(game) => game,
+        let (game, release_date) = match self.resolve(title, game) {
+            Ok(found) => found,
             Err(Failure::NoMatch) => return Outcome::NoMatch,
             Err(Failure::Failed) => return Outcome::Failed,
         };
@@ -1390,6 +1584,7 @@ impl Net {
                 Ok(picture) => {
                     return Outcome::Found {
                         game,
+                        release_date,
                         pick: Pick::File {
                             id: top.id,
                             url: top.url.clone(),
@@ -1398,35 +1593,47 @@ impl Net {
                         picture: Some(picture),
                     };
                 }
-                Err(FileError::Fetch(FetchError::Connect)) => return Outcome::Searched { game },
+                Err(FileError::Fetch(FetchError::Connect)) => {
+                    return Outcome::Searched { game, release_date };
+                }
                 Err(FileError::Fetch(FetchError::Status(404 | 410))) => {}
                 Err(FileError::Fetch(FetchError::Status(_))) => refused = true,
                 Err(FileError::Fetch(FetchError::TooLarge) | FileError::Unusable) => {}
             }
         }
         if refused {
-            return Outcome::Searched { game };
+            return Outcome::Searched { game, release_date };
         }
         Outcome::Found {
             game,
+            release_date,
             pick: Pick::NoArtwork,
             picture: None,
         }
     }
 
     /// The SteamGridDB game for a Game with the search title `title`: `known`, or the top search
-    /// result for `title`.
-    fn resolve(&mut self, title: &str, known: Option<u64>) -> Result<u64, Failure> {
+    /// result for `title`, with the Release Date the search learnt.
+    fn resolve(&mut self, title: &str, known: Option<u64>) -> Result<(u64, Learnt), Failure> {
         if let Some(game) = known {
-            return Ok(game);
+            return Ok((game, None));
         }
+        let found = self.search(title)?.ok_or(Failure::NoMatch)?;
+        Ok((found.game, Some(found.release_date)))
+    }
+
+    /// The top search result for `title`, if any; searched once a run.
+    fn search(&mut self, title: &str) -> Result<Option<Matched>, Failure> {
         if let Some(found) = self.searched.get(title) {
-            return found.ok_or(Failure::NoMatch);
+            return Ok(*found);
         }
         let found: Vec<FoundGame> = self.api(&format!("/search/autocomplete/{}", encode(title)))?;
-        let found = found.first().map(|g| g.id);
+        let found = found.first().map(|g| Matched {
+            game: g.id,
+            release_date: g.release_date,
+        });
         self.searched.insert(title.to_owned(), found);
-        found.ok_or(Failure::NoMatch)
+        Ok(found)
     }
 
     /// `game`'s Artwork of `kind` that is on SteamGridDB's own hosts, in SteamGridDB's order.
@@ -1452,13 +1659,13 @@ impl Net {
     }
 
     /// GETs an API path and returns its `data`. A 404 (SteamGridDB's "Game not found") is no data.
-    fn api<T: DeserializeOwned>(&self, path: &str) -> Result<Vec<T>, Failure> {
+    fn api<T: DeserializeOwned + Default>(&self, path: &str) -> Result<T, Failure> {
         let Some(key) = &self.key else {
             return Err(Failure::Failed);
         };
         let body = match self.get(&format!("{API}{path}"), Some(key), MAX_API_BYTES) {
             Ok(body) => body,
-            Err(FetchError::Status(404)) => return Ok(Vec::new()),
+            Err(FetchError::Status(404)) => return Ok(T::default()),
             Err(_) => return Err(Failure::Failed),
         };
         match serde_json::from_slice::<Envelope<T>>(&body) {
@@ -1864,6 +2071,8 @@ pub(crate) mod tests {
                 game: Some(42),
                 cover: Some(file(7, "grid/7.png")),
                 hero: Some(file(9, "hero/9.png")),
+                // The search learnt the Release Date too.
+                dated: true,
             })
         );
         // One search serves both; only the API gets the key.
@@ -2143,6 +2352,7 @@ pub(crate) mod tests {
         let searched = Record {
             title: Some("Alpha".to_owned()),
             game: Some(42),
+            dated: true,
             ..Record::default()
         };
         assert_eq!(read_record(&library, games[0].id), Some(searched));
@@ -2259,6 +2469,7 @@ pub(crate) mod tests {
         assert_eq!(fake.calls(), 1);
         let no_match = Record {
             title: Some("Alpha".to_owned()),
+            dated: true,
             ..Record::default()
         };
         assert_eq!(read_record(&library, games[0].id), Some(no_match));
@@ -2915,5 +3126,211 @@ pub(crate) mod tests {
     fn titles_are_percent_encoded() {
         assert_eq!(encode("Super Mario World"), "Super%20Mario%20World");
         assert_eq!(encode("Pokémon: Red/Blue?"), "Pok%C3%A9mon%3A%20Red%2FBlue%3F");
+    }
+
+    /// An API answer whose `data` is `data`.
+    fn answer(data: &str) -> Response {
+        Ok(format!("{{\"success\":true,\"data\":{data}}}").into_bytes())
+    }
+
+    /// Polls until every queued Release Date has been asked for and recorded.
+    fn settle_dates(artwork: &Artwork, library: &Library) {
+        let busy = || {
+            let state = artwork.state.borrow();
+            !state.dates.is_empty() || !state.net.is_empty() || state.net_running
+        };
+        settle(artwork, library, busy, |busy| *busy);
+    }
+
+    fn release_date(library: &Library, game: &GameRow) -> Option<i64> {
+        library.game(game.id).unwrap().unwrap().release_date
+    }
+
+    fn is_dated(library: &Library, game: &GameRow) -> bool {
+        read_record(library, game.id).is_some_and(|r| r.is_dated(&game.search_title))
+    }
+
+    /// SteamGridDB as [`steamgriddb`] knows it, with "Alpha" first released on 21 Nov 1990 and
+    /// "Beta" without a Release Date.
+    fn with_release_dates() -> Fake {
+        let fake = steamgriddb();
+        fake.route_first(
+            &format!("{API}/search/autocomplete/Alpha"),
+            answer("[{\"id\":42,\"release_date\":659145600},{\"id\":43,\"release_date\":1}]"),
+        );
+        fake
+    }
+
+    #[test]
+    fn a_cover_search_stores_its_matchs_release_date_or_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = with_release_dates();
+        let (library, games) = library(dir.path());
+        let artwork = artwork(dir.path(), &fake, true);
+        size(&wait(&artwork, &library, &games[0], Kind::Cover));
+        size(&wait(&artwork, &library, &games[1], Kind::Cover));
+
+        assert_eq!(release_date(&library, &games[0]), Some(659145600));
+        assert_eq!(release_date(&library, &games[1]), None);
+        assert!(is_dated(&library, &games[0]) && is_dated(&library, &games[1]));
+    }
+
+    #[test]
+    fn release_dates_are_searched_for_without_fetching_any_images() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = with_release_dates();
+        let (library, games) = library(dir.path());
+        let artwork = artwork(dir.path(), &fake, true);
+        artwork.ask_release_dates(&library);
+        settle_dates(&artwork, &library);
+
+        assert_eq!(
+            fake.urls(),
+            [
+                format!("{API}/search/autocomplete/Alpha"),
+                format!("{API}/search/autocomplete/Beta"),
+            ]
+        );
+        assert_eq!(release_date(&library, &games[0]), Some(659145600));
+        assert_eq!(release_date(&library, &games[1]), None);
+        assert!(is_dated(&library, &games[0]) && is_dated(&library, &games[1]));
+        // The match is recorded, so a cover asked for later doesn't search again.
+        assert_eq!(
+            read_record(&library, games[0].id).unwrap().search("Alpha"),
+            Some(Some(42))
+        );
+    }
+
+    #[test]
+    fn dated_games_are_not_asked_again_after_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let (library, _) = library(dir.path());
+        {
+            let fake = with_release_dates();
+            let artwork = artwork(dir.path(), &fake, true);
+            artwork.ask_release_dates(&library);
+            settle_dates(&artwork, &library);
+            assert_eq!(fake.calls(), 2);
+        }
+        let fake = with_release_dates();
+        let artwork = artwork(dir.path(), &fake, true);
+        artwork.ask_release_dates(&library);
+        settle_dates(&artwork, &library);
+        assert_eq!(fake.calls(), 0);
+    }
+
+    #[test]
+    fn a_game_matched_before_release_dates_gets_one_look_at_its_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = steamgriddb();
+        fake.route_first(
+            &format!("{API}/games/id/42"),
+            answer("{\"id\":42,\"name\":\"Alpha\",\"release_date\":794880000,\"verified\":true}"),
+        );
+        let (library, games) = library(dir.path());
+        // As recorded before Release Dates: Alpha matched with no cover, Beta with no match.
+        let alpha = Record {
+            title: Some("Alpha".to_owned()),
+            game: Some(42),
+            cover: Some(Pick::NoArtwork),
+            ..Record::default()
+        };
+        let beta = Record {
+            title: Some("Beta".to_owned()),
+            ..Record::default()
+        };
+        write_record(&library, games[0].id, &alpha).unwrap();
+        write_record(&library, games[1].id, &beta).unwrap();
+        let artwork = artwork(dir.path(), &fake, true);
+        artwork.ask_release_dates(&library);
+        settle_dates(&artwork, &library);
+
+        assert_eq!(fake.urls(), [format!("{API}/games/id/42")]);
+        assert_eq!(release_date(&library, &games[0]), Some(794880000));
+        assert_eq!(
+            read_record(&library, games[0].id),
+            Some(Record { dated: true, ..alpha })
+        );
+        // No match, so no Release Date, without asking.
+        assert_eq!(release_date(&library, &games[1]), None);
+        assert_eq!(
+            read_record(&library, games[1].id),
+            Some(Record { dated: true, ..beta })
+        );
+    }
+
+    #[test]
+    fn no_release_date_is_asked_for_without_a_key_or_for_a_hidden_game() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = with_release_dates();
+        let (library, games) = library(dir.path());
+        let artwork = self::artwork(dir.path(), &fake, false);
+        artwork.ask_release_dates(&library);
+        for _ in 0..20 {
+            artwork.poll(&library);
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(fake.calls(), 0);
+        drop(artwork);
+
+        library.set_hidden(games[1].id, true).unwrap();
+        let artwork = self::artwork(dir.path(), &fake, true);
+        artwork.ask_release_dates(&library);
+        settle_dates(&artwork, &library);
+        assert_eq!(fake.urls(), [format!("{API}/search/autocomplete/Alpha")]);
+        assert!(!is_dated(&library, &games[1]));
+    }
+
+    #[test]
+    fn a_cover_asked_for_during_the_pass_is_fetched_before_the_remaining_release_dates() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = any_title();
+        let (library, games) = many(dir.path(), 4);
+        let artwork = artwork(dir.path(), &fake, true);
+        fake.set_gate(false);
+        artwork.ask_release_dates(&library);
+        // The first Release Date's search is on its way, held at the gate.
+        artwork.poll(&library);
+        assert!(matches!(artwork.cover(&library, &games[3]), Art::Loading));
+        fake.set_gate(true);
+        size(&wait(&artwork, &library, &games[3], Kind::Cover));
+        settle_dates(&artwork, &library);
+
+        let search = |i: usize| format!("{API}/search/autocomplete/Game%20000{i}");
+        assert_eq!(
+            fake.urls(),
+            [
+                search(0),
+                search(3),
+                format!("{API}/grids/game/42?{COVER_QUERY}"),
+                format!("{CDN}/grid/7.png"),
+                search(1),
+                search(2),
+            ]
+        );
+        assert!(games.iter().all(|g| is_dated(&library, g)));
+    }
+
+    #[test]
+    fn a_failed_release_date_request_leaves_the_game_not_dated_and_is_not_retried_this_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = steamgriddb();
+        fake.route_first(
+            &format!("{API}/search/autocomplete/Alpha"),
+            Err(FetchError::Status(503)),
+        );
+        let (library, games) = library(dir.path());
+        let artwork = artwork(dir.path(), &fake, true);
+        artwork.ask_release_dates(&library);
+        settle_dates(&artwork, &library);
+        assert_eq!(fake.calls(), 2, "Beta is still asked about");
+        assert!(!is_dated(&library, &games[0]));
+        assert!(is_dated(&library, &games[1]));
+
+        // A scan changing the library starts the pass again: the failed Game waits for next run.
+        artwork.ask_release_dates(&library);
+        settle_dates(&artwork, &library);
+        assert_eq!(fake.calls(), 2);
+        assert!(!is_dated(&library, &games[0]));
     }
 }

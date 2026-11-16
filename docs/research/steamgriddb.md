@@ -45,7 +45,7 @@ Response (wrapped — see §5): `data` is an array of:
 | `name` | string | README example JSON |
 | `types` | string[] (platform tags, e.g. `"steam"`) | README example JSON |
 | `verified` | boolean | README example JSON |
-| `release_date` | number (unix timestamp, presumed) | `SGDBGame` interface in `src/index.ts` only — not shown in the example JSON, so its exact shape is **inferred from a library's source**, unverified |
+| `release_date` | number: unix seconds; **absent** on some games | **verified** by a real request on 2026-11-16: "Super Mario World" (id 36886) gave `659145600`, 21 Nov 1990, its Japanese release, so the date is the first release anywhere; "Super Mario World: Super Mario Advance 2" (id 34527) had no `release_date` at all. `GET /games/id/{id}` gives the same field, with `data` there ONE object, not an array: `{"success":true,"data":{"id":17593,"name":"Chrono Trigger","release_date":794880000,"types":["steam"],"verified":true}}` |
 
 Example from the [README](https://github.com/SteamGridDB/node-steamgriddb):
 ```json

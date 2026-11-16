@@ -375,6 +375,7 @@ mod tests {
             last_played: None,
             playtime_secs: 0,
             favorite: false,
+            release_date: None,
         };
         let download = spawn(&PPSSPP, dir.path().to_owned(), core_zip(&PPSSPP), None);
         let screen = DownloadCore::new(Play::resume(g), &PPSSPP, download);
