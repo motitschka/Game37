@@ -586,6 +586,7 @@ mod tests {
             system: "snes".into(),
             rel_path: format!("snes/{id}.sfc"),
             title: format!("Game {id}"),
+            search_title: format!("Game {id}"),
             date_added: 0,
             last_played: None,
             playtime_secs: 0,

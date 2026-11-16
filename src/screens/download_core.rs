@@ -370,6 +370,7 @@ mod tests {
             system: "psp".into(),
             rel_path: "psp/Game.iso".into(),
             title: "Game".into(),
+            search_title: "Game".into(),
             date_added: 0,
             last_played: None,
             playtime_secs: 0,

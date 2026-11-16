@@ -192,6 +192,9 @@ pub struct GameRow {
     pub rel_path: String,
     /// The Display Title: the player's rename if there is one, else the cleaned title.
     pub title: String,
+    /// The cleaned title from the file or folder name, which Artwork is searched by (FR-ART-1),
+    /// whatever the Game is renamed to.
+    pub search_title: String,
     /// Unix seconds.
     pub date_added: i64,
     /// Unix seconds.
@@ -217,6 +220,7 @@ impl Fetched {
                 system: r.get(1)?,
                 rel_path: r.get(2)?,
                 title: r.get(3)?,
+                search_title: r.get(8)?,
                 date_added: r.get(4)?,
                 last_played: r.get(5)?,
                 playtime_secs: playtime_secs.max(0) as u64,
@@ -396,7 +400,7 @@ impl Library {
     /// absent Hidden Game isn't listed: it only comes back once it reappears on disk, still Hidden.
     pub fn hidden_games(&self) -> Result<Vec<GameRow>, DbError> {
         let sql = "SELECT id, system, rel_path, COALESCE(renamed_title, title), date_added, last_played,
-                    playtime_secs, favorited_at
+                    playtime_secs, favorited_at, title
              FROM games WHERE present = 1 AND hidden = 1";
         let mut stmt = self.conn.prepare(sql)?;
         let mut games = stmt
@@ -456,7 +460,7 @@ impl Library {
     fn fetch(&self, filter: &str, params: impl Params) -> Result<Vec<Fetched>, DbError> {
         let sql = format!(
             "SELECT id, system, rel_path, COALESCE(renamed_title, title), date_added, last_played,
-                    playtime_secs, favorited_at
+                    playtime_secs, favorited_at, title
              FROM games WHERE {VISIBLE} AND {filter}"
         );
         let mut stmt = self.conn.prepare(&sql)?;
@@ -488,11 +492,11 @@ impl Library {
     pub fn all_favorites(&self) -> Result<Vec<(GameRow, bool)>, DbError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, system, rel_path, COALESCE(renamed_title, title), date_added, last_played,
-                    playtime_secs, favorited_at, present
+                    playtime_secs, favorited_at, title, present
              FROM games WHERE favorited_at IS NOT NULL AND hidden = 0",
         )?;
         let mut games = stmt
-            .query_map([], |r| Ok((Fetched::from_row(r)?, r.get::<_, bool>(8)?)))?
+            .query_map([], |r| Ok((Fetched::from_row(r)?, r.get::<_, bool>(9)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         games.sort_by_cached_key(|(g, _)| (Shelf::Favorites.key(g), g.row.title.to_lowercase(), g.row.id));
         Ok(games.into_iter().map(|(g, present)| (g.row, present)).collect())

@@ -11,6 +11,13 @@
 - **Switch 2 Games in `.nup` files are listed** in `switch2/`, next to `.nsp` and `.xci`. Like every
   Switch 2 Game they can't be played yet: Play says "Not playable yet" and starts nothing.
 
+### Changed
+- **Artwork is searched by the file name, not the Display Title.** Renaming a Game in Game37 now only
+  changes the name shown, and its cover and hero stay. To get different Artwork, rename the file, or
+  pick it with Choose artwork. A year in parentheses stays in the title, so a remake can be told from
+  the original: `The Legend of Zelda - Ocarina of Time (2026).nup` finds the Switch 2 Artwork, not the
+  N64 one. The `.nkit` of a `.nkit.iso` no longer shows in titles.
+
 ## 0.2.0-beta.3 (2026-11-03)
 
 The menus fill screens taller than 16:9, such as 16:10 and 3:2 laptop screens.

@@ -518,6 +518,7 @@ mod tests {
             system: "snes".into(),
             rel_path: "snes/Alpha.sfc".into(),
             title: "Alpha".into(),
+            search_title: "Alpha".into(),
             date_added: 0,
             last_played: None,
             playtime_secs: 0,

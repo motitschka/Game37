@@ -2,19 +2,22 @@
 
 /// The Display Title for a Game, from its file name without the extension or its folder name.
 ///
-/// Removes region, revision and dump tags (`(...)` and `[...]` groups) but keeps disc numbers,
-/// turns `_` into spaces and moves a trailing article to the front:
+/// Removes region, revision and dump tags (`(...)` and `[...]` groups) but keeps disc numbers and
+/// a release year such as `(2026)`, which tells a remake from the original when searching Artwork.
+/// Drops a `.nkit` left over from a `.nkit.iso` file, turns `_` into spaces and moves a trailing
+/// article to the front:
 /// `Legend of Zelda, The - A Link to the Past (USA) [!]` becomes
 /// `The Legend of Zelda - A Link to the Past`.
 pub fn display_title(name: &str) -> String {
+    let name = strip_nkit(name);
     let (stripped, discs) = strip_groups(name);
     let stripped = stripped.replace('_', " ");
     let mut title = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
     if let Some(rest) = title.strip_suffix(" -") {
         title = rest.trim_end().to_string();
     }
-    // The article is moved on the title with any `(Disc N)` tags taken out, so a kept disc tag
-    // doesn't block `move_article` from seeing the trailing article; the tags go back on after.
+    // The article is moved on the title with any kept `(Disc N)` and year tags taken out, so they
+    // don't block `move_article` from seeing the trailing article; the tags go back on after.
     let mut title = move_article(&title);
     for disc in discs {
         if title.is_empty() {
@@ -30,8 +33,9 @@ pub fn display_title(name: &str) -> String {
     }
 }
 
-/// Removes every `(...)` and `[...]` group except `(Disc N)` / `(Disk N)`, whose normalised
-/// `(Disc N)` form is returned separately so callers can move an article before reattaching it.
+/// Removes every `(...)` and `[...]` group except `(Disc N)` / `(Disk N)` and a `(YYYY)` year, which
+/// are returned separately (a disc in its normalised `(Disc N)` form) so callers can move an article
+/// before reattaching them.
 /// An unclosed bracket and everything after it is kept as it is. Bracket depth (counting both
 /// `()` and `[]` nesting) is tracked so a nested group doesn't end the outer one early.
 fn strip_groups(name: &str) -> (String, Vec<String>) {
@@ -64,6 +68,10 @@ fn strip_groups(name: &str) -> (String, Vec<String>) {
                 discs.push(format!(" (Disc {n})"));
                 out.push(' ');
             }
+            _ if close_char == ')' && is_year(inner) => {
+                discs.push(format!(" ({inner})"));
+                out.push(' ');
+            }
             // A space keeps the words on either side apart, as in `Game(USA)Extra`.
             _ => out.push(' '),
         }
@@ -71,6 +79,22 @@ fn strip_groups(name: &str) -> (String, Vec<String>) {
     }
     out.push_str(rest);
     (out, discs)
+}
+
+/// `name` without a trailing `.nkit` (any case), as in the stem of `Game (USA).nkit.iso`.
+fn strip_nkit(name: &str) -> &str {
+    let cut = name.len().saturating_sub(".nkit".len());
+    match name.get(cut..) {
+        Some(tail) if cut > 0 && tail.eq_ignore_ascii_case(".nkit") => &name[..cut],
+        _ => name,
+    }
+}
+
+/// Whether a group holds a release year, 1970 to 2099.
+fn is_year(inner: &str) -> bool {
+    inner.len() == 4
+        && inner.bytes().all(|b| b.is_ascii_digit())
+        && ((inner.starts_with("19") && inner >= "1970") || inner.starts_with("20"))
 }
 
 /// The number in a `Disc N` or `Disk N` group.
@@ -106,6 +130,26 @@ fn article_first(part: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::display_title;
+
+    #[test]
+    fn keeps_a_release_year_and_drops_the_other_tags() {
+        assert_eq!(
+            display_title("The Legend of Zelda - Ocarina of Time (2026)"),
+            "The Legend of Zelda - Ocarina of Time (2026)"
+        );
+        assert_eq!(
+            display_title("Legend of Zelda, The - Ocarina of Time (2026) (World) [v1]"),
+            "The Legend of Zelda - Ocarina of Time (2026)"
+        );
+        assert_eq!(display_title("Game (1234) [1998] (Rev 1)"), "Game");
+    }
+
+    #[test]
+    fn drops_the_nkit_of_a_nkit_iso() {
+        assert_eq!(display_title("Animal Crossing (USA).nkit"), "Animal Crossing");
+        assert_eq!(display_title("Mario Kart Wii.NKIT"), "Mario Kart Wii");
+        assert_eq!(display_title(".nkit"), ".nkit");
+    }
 
     #[test]
     fn removes_region_and_dump_tags() {

@@ -51,7 +51,7 @@ The name shown for a Game: the cleaned-up file name, unless the player has renam
 _Avoid_: Name, label
 
 **Artwork**:
-The cover (tall) and hero (wide) images shown for a Game, sourced from SteamGridDB.
+The cover (tall) and hero (wide) images shown for a Game, sourced from SteamGridDB and matched by the cleaned-up file name, never by a rename.
 _Avoid_: Box art, thumbnail, image
 
 **Favorite**:

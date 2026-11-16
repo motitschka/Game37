@@ -76,8 +76,11 @@ Details are in [docs/milestones.md](docs/milestones.md), and the current state i
   emulator isn't installed, its System says so and shows the install command.
 - **Playtime and last played** are tracked for every Game, embedded and external.
 - **Artwork:** with a SteamGridDB API key, Game37 fetches a cover and a wide hero image for each Game
-  you browse, caches them, and lets you pick different ones. Without a key, Games show their Display
-  Title and System.
+  you browse, caches them, and lets you pick different ones. It searches by the file name with its
+  region and other tags taken out, so renaming a Game in Game37 keeps its Artwork. To tell a remake
+  from the original, put the year in the file name, as in
+  `The Legend of Zelda - Ocarina of Time (2026).nup`. Without a key, Games show their Display Title
+  and System.
 - **Details Page:** selecting a Game opens it, with its hero image, Playtime, last played, Save States,
   file and size. Play starts it from there.
 - **Options Menu:** on any Game, add it to your five Favorites, start it from a Save State slot, choose
@@ -618,7 +621,7 @@ a second at most.
   folders, and Delete save data leaves a shared card alone.
 - Hiding a Game also removes it from Favorites.
 - When SteamGridDB has no Artwork for a Game, Game37 remembers that and doesn't ask again unless you
-  rename the Game.
+  rename its file.
 
 ## Development
 
