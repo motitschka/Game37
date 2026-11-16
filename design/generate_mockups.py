@@ -292,7 +292,15 @@ def dim(sv, opacity=0.6, x=0, w=W):
 
 # ---------- screens ----------
 
-CW, CH, GAP = 176, 264, 28  # Shelf cover size
+GAP = 28  # between covers
+# Home (FR-HOME-7): the view from under the top bar to the hint bar holds exactly two Shelves, each block
+# half of it, filled or empty. The 2:3 covers are sized from the block: their top 78 under the block's,
+# 60 left free under them, so 208x312 at 1080 high. A Shelf's title has its baseline 46 under the block's.
+HOME_TOP = 110
+SHELF_BLOCK = (H - 70 - HOME_TOP) / 2
+SHELF_TITLE_DY, SHELF_COVERS_DY = 46, 78
+CH = SHELF_BLOCK - SHELF_COVERS_DY - 60
+CW = CH * 2 / 3
 # A grid of covers (Console Page, "See all", Search results) at the default 8 Games per row (FR-UI-7): the
 # row runs from margin to margin with GAP between covers, so the covers grow or shrink to fit; 2:3 covers.
 GRID_COLS = 8
@@ -309,17 +317,28 @@ def fit(s, w, size, weight=400):
     return s.rstrip() + "…"
 
 
+def shelf_more_right(sv, y):
+    """A Shelf running past the right edge, covers' top at `y`: it fades into the background under a
+    paging arrow, as in the app."""
+    sv.add(rect(W - 140, y - 16, 140, CH + 32, sv.lin([(0, C["bg"], 0), (1, C["bg"], 0.9)], 0, 0, 1, 0)))
+    cx, cy = W - M / 2, y + CH / 2
+    sv.add(circle(cx, cy, 26, C["surface2"], 0.92),
+           f'<path d="M{cx - 6},{cy - 12} l12,12 l-12,12" fill="none" stroke="{C["text"]}"'
+           f' stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>')
+
+
 def home(sv, focus=0):
     background(sv)
     topbar(sv, active="home")
-    rows = [("Favorites", "5 of 5", FAVS, None, 152), ("Continue playing", None, CONTINUE, 23, 590),
-            ("Recently added", None, RECENT, 20, 968)]
+    rows = [("Favorites", "5 of 5", FAVS, None), ("Continue playing", None, CONTINUE, 23)]
     titles = []
-    for title, suffix, games, total, ty in rows:
+    for k, (title, suffix, games, total) in enumerate(rows):
+        top = HOME_TOP + k * SHELF_BLOCK
+        ty = top + SHELF_TITLE_DY
         titles.append(text(M, ty, title, 28, 700))
         if suffix:
             titles.append(text(M + tw(title, 28, 700) + 18, ty, suffix, 20, 500, fill=C["muted"]))
-        y = ty + 44
+        y = top + SHELF_COVERS_DY
         for i, g in enumerate(games):
             focused = title == "Favorites" and i == focus
             x = M + i * (CW + GAP)
@@ -327,9 +346,12 @@ def home(sv, focus=0):
                 cover(sv, x - 8, y - 12, CW + 16, CH + 24, g, focused=True)
             else:
                 cover(sv, x, y, CW, CH, g)
+        end = M + len(games) * (CW + GAP)
         if total:
-            see_all(sv, M + len(games) * (CW + GAP), y, 150, CH, total)
-    sv.add(rect(0, 930, W, 80, sv.lin([(0, C["bg"], 0), (1, C["bg"], 1)])))
+            see_all(sv, end, y, 150, CH, total)
+            end += 150
+        if end > W - M:
+            shelf_more_right(sv, y)
     sv.add(*titles)
 
 
@@ -348,14 +370,18 @@ def screen_home_empty():
             ("Continue playing", "Games you play show up here, newest first."),
             ("Recently added", "Put games in ~/Games/<system>/ and they appear here automatically."),
             ("Most played", "Fills up as you play. Ordered by playtime.")]
-    for i, (title, hint) in enumerate(rows):
-        ty = 160 + i * 218
-        sv.add(text(M, ty, title, 28, 700))
-        sv.add(rect(M, ty + 22, W - 2 * M, 140, C["surface"], rx=14, stroke=C["line"], sw=2, opacity=0.6,
+    # An empty Shelf is as tall as a filled one (FR-HOME-5): its hint box is as tall as a cover and sits
+    # where the covers would, placeholders and text centred in it. Two Shelves show, the rest below.
+    for i, (title, hint) in enumerate(rows[:2]):
+        top = HOME_TOP + i * SHELF_BLOCK
+        sv.add(text(M, top + SHELF_TITLE_DY, title, 28, 700))
+        y = top + SHELF_COVERS_DY
+        sv.add(rect(M, y, W - 2 * M, CH, C["surface"], rx=14, stroke=C["line"], sw=2, opacity=0.6,
                     dash="10 8"))
+        mid = y + CH / 2
         for k in range(5):
-            sv.add(rect(M + 28 + k * 116, ty + 44, 96, 96, C["surface2"], rx=8, opacity=0.7))
-        sv.add(text(M + 640, ty + 100, hint, 22, 500, fill=C["muted"]))
+            sv.add(rect(M + 28 + k * 116, mid - 48, 96, 96, C["surface2"], rx=8, opacity=0.7))
+        sv.add(text(M + 640, mid + 8, hint, 22, 500, fill=C["muted"]))
     hintbar(sv, [(["L1", "R1"], "Switch view"), (["L3"], "Search")])
     sv.save()
 

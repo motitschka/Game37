@@ -1,4 +1,4 @@
-//! Home: the Shelves (FR-HOME-1 to FR-HOME-5), after `home` and `screen_home_empty` in
+//! Home: the Shelves (FR-HOME-1 to FR-HOME-5, FR-HOME-7), after `home` and `screen_home_empty` in
 //! `design/generate_mockups.py`.
 
 use std::path::Path;
@@ -10,7 +10,7 @@ use crate::ctx::Ctx;
 use crate::library::db::{GameRow, SHELF_SIZE, Shelf};
 use crate::ui::anim::{Eased, FOCUS_TAU, SCROLL_TAU};
 use crate::ui::chrome;
-use crate::ui::cover::{self, COVER_GAP, COVER_H, COVER_RADIUS, COVER_W, RING_REACH, ellipsize};
+use crate::ui::cover::{self, COVER_GAP, COVER_RADIUS, RING_REACH, ellipsize};
 use crate::ui::gfx::{Align, Gfx, TextStyle};
 use crate::ui::input::{Action, Input, Pointer, glyph_label};
 use crate::ui::nav::{Hint, Screen, Transition};
@@ -29,21 +29,65 @@ fn view_bottom() -> f32 {
 fn view_h() -> f32 {
     view_bottom() - VIEW_TOP
 }
-/// The fade over the last Shelf showing, when more lies below.
-const FADE_H: f32 = 80.0;
 const VIEW_W: f32 = W - 2.0 * M;
+/// How many Shelves one screen of Home shows (FR-HOME-7).
+const SHOWN: usize = 2;
 /// Distance from the top of a Shelf's block to its title's baseline.
 const TITLE_DY: f32 = 46.0;
-/// Block heights: a Shelf with Games leaves room for the caption under the focused cover.
-const FILLED_H: f32 = 438.0;
-const EMPTY_H: f32 = 218.0;
-const PITCH: f32 = COVER_W + COVER_GAP;
+/// Distance from the top of a Shelf's block to its covers' top (or its hint box's).
+const COVERS_DY: f32 = 78.0;
+/// The space kept free under the covers, for a line of text under the focused one.
+const CAPTION_H: f32 = 60.0;
 const SEE_ALL_W: f32 = 150.0;
 /// The focused cover grows by this much on each side.
 const GROW: f32 = 8.0;
 /// How wide the fade under a Shelf's paging arrow is.
 const EDGE_FADE_W: f32 = 140.0;
-const WHEEL_STEP: f32 = 120.0;
+/// The hint an empty Shelf shows: the placeholder squares' size and pitch.
+const PLACEHOLDER: f32 = 96.0;
+const PLACEHOLDER_PITCH: f32 = 116.0;
+
+/// Home's sizes at the canvas height ([`ui::h`](crate::ui::h)): the view holds exactly [`SHOWN`]
+/// Shelves whatever its height, so every Shelf's block, filled or empty, is that share of it, and
+/// the 2:3 covers are sized from the block (FR-HOME-7, FR-HOME-5).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Layout {
+    view_h: f32,
+    block_h: f32,
+    cover_w: f32,
+    cover_h: f32,
+    /// From one cover's left edge to the next one's.
+    pitch: f32,
+}
+
+impl Layout {
+    /// The layout at the current canvas height.
+    fn now() -> Layout {
+        let view_h = view_h();
+        let block_h = view_h / SHOWN as f32;
+        let cover_h = block_h - COVERS_DY - CAPTION_H;
+        let cover_w = cover_h * 2.0 / 3.0;
+        Layout {
+            view_h,
+            block_h,
+            cover_w,
+            cover_h,
+            pitch: cover_w + COVER_GAP,
+        }
+    }
+}
+
+/// Top of Shelf `i`'s block in content coordinates: every block, filled or empty, is as tall.
+fn block_top(i: usize) -> f32 {
+    i as f32 * Layout::now().block_h
+}
+
+/// The first Shelf showing once Shelf `shelf` has focus, from `top`: the view moves by one whole
+/// Shelf, and only when the focus leaves the Shelves showing.
+fn follow(top: usize, shelf: usize) -> usize {
+    top.clamp(shelf.saturating_sub(SHOWN - 1), shelf)
+        .min(SHELVES - SHOWN)
+}
 
 pub fn name(shelf: Shelf) -> &'static str {
     match shelf {
@@ -148,10 +192,11 @@ pub struct Home {
     revision: Option<u64>,
     focus: Focus,
     hscroll: [f32; SHELVES],
-    vscroll: f32,
-    /// The view height `vscroll` was last fitted to; a resize refits it in `draw`.
-    vscroll_view: f32,
-    /// What is drawn: `hscroll` and `vscroll` eased, so the Shelves glide to the focus.
+    /// The first Shelf showing: Home rests on whole Shelves, `top` and the one below it.
+    top: usize,
+    /// The canvas height `hscroll` was last fitted to; a resize refits it in `draw`.
+    fitted_h: f32,
+    /// What is drawn: `hscroll` and `top`'s offset eased, so the Shelves glide to the focus.
     shown_h: [Eased; SHELVES],
     shown_v: Eased,
     /// How far the focused cover has grown, 0 to 1: it grows into place after each move.
@@ -182,8 +227,8 @@ impl Home {
             revision: None,
             focus: Focus::default(),
             hscroll: [0.0; SHELVES],
-            vscroll: 0.0,
-            vscroll_view: view_h(),
+            top: 0,
+            fitted_h: crate::ui::h(),
             shown_h: std::array::from_fn(|_| Eased::new(0.0)),
             shown_v: Eased::new(0.0),
             grow: Eased::new(1.0),
@@ -223,50 +268,59 @@ impl Home {
         std::array::from_fn(|i| item_count(self.shelves[i].games.len()))
     }
 
-    fn block_h(&self, i: usize) -> f32 {
-        if self.shelves[i].games.is_empty() {
-            EMPTY_H
-        } else {
-            FILLED_H
-        }
-    }
-
-    /// Top of each Shelf's block in content coordinates, and the content height.
-    fn block_top(&self, i: usize) -> f32 {
-        (0..i).map(|k| self.block_h(k)).sum()
-    }
-
-    fn content_h(&self) -> f32 {
-        self.block_top(SHELVES)
+    /// Home's vertical offset at rest: the top of the first Shelf showing.
+    fn rest_offset(&self) -> f32 {
+        block_top(self.top)
     }
 
     fn content_w(&self, i: usize) -> f32 {
         let n = self.shelves[i].games.len();
-        n as f32 * PITCH + SEE_ALL_W + RING_REACH
+        n as f32 * Layout::now().pitch + SEE_ALL_W + RING_REACH
     }
 
     /// Scrolls Shelf `i` sideways to show its remembered position.
     fn reveal(&mut self, i: usize) {
-        let x = self.focus.cols[i] as f32 * PITCH - GROW - RING_REACH;
-        let s = scroll::keep_visible(self.hscroll[i], x, COVER_W + 2.0 * (GROW + RING_REACH), VIEW_W);
+        let lay = Layout::now();
+        let x = self.focus.cols[i] as f32 * lay.pitch - GROW - RING_REACH;
+        let s = scroll::keep_visible(
+            self.hscroll[i],
+            x,
+            lay.cover_w + 2.0 * (GROW + RING_REACH),
+            VIEW_W,
+        );
         self.hscroll[i] = scroll::clamp(s, self.content_w(i), VIEW_W);
     }
 
-    /// Scrolls Home to show the focused Shelf.
+    /// Moves Home by a whole Shelf when the focus left the Shelves showing.
     fn reveal_shelf(&mut self) {
-        let i = self.focus.shelf;
-        let view = view_h();
-        let s = scroll::keep_visible(self.vscroll, self.block_top(i), self.block_h(i), view);
-        self.vscroll = scroll::clamp(s, self.content_h(), view);
-        self.vscroll_view = view;
+        self.top = follow(self.top, self.focus.shelf);
     }
 
-    /// After a resize (`ui::h` changed), scrolls again so the focused Shelf shows and no space is
-    /// left below the last one.
-    fn refit(&mut self) {
-        if self.vscroll_view != view_h() {
-            self.reveal_shelf();
+    /// The mouse wheel moves Home by `by` whole Shelves and pulls the focus onto a Shelf showing,
+    /// to the position that Shelf remembers.
+    fn wheel(&mut self, by: isize) {
+        self.top = self.top.saturating_add_signed(by).min(SHELVES - SHOWN);
+        let shelf = self.focus.shelf.clamp(self.top, self.top + SHOWN - 1);
+        if shelf != self.focus.shelf {
+            self.focus.shelf = shelf;
+            self.focus.cols[shelf] = self.focus.cols[shelf].min(self.counts()[shelf].saturating_sub(1));
+            self.reveal(shelf);
         }
+    }
+
+    /// After a resize (`ui::h` changed) the covers' size changed: scrolls each Shelf again so its
+    /// remembered position shows, and lands on the new sizes without a glide. Home stays on the
+    /// same whole Shelves.
+    fn refit(&mut self) {
+        if self.fitted_h == crate::ui::h() {
+            return;
+        }
+        self.fitted_h = crate::ui::h();
+        for i in 0..SHELVES {
+            self.reveal(i);
+            self.shown_h[i].jump(self.hscroll[i]);
+        }
+        self.shown_v.jump(self.rest_offset());
     }
 
     fn confirm(&self, ctx: &mut Ctx) -> Transition {
@@ -293,19 +347,21 @@ impl Home {
         }
     }
 
-    fn draw_filled(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx, i: usize, base: f32) {
+    /// Draws Shelf `i`'s Games in its block, whose top is at `top`.
+    fn draw_filled(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx, i: usize, top: f32) {
+        let lay = Layout::now();
         let focused_shelf = self.focus.shelf == i;
         let col = self.focus.cols[i];
-        let y = base + 44.0;
+        let y = top + COVERS_DY;
         let row = &self.shelves[i];
         let n = row.games.len();
         let hs = self.shown_h[i].value();
         let left = M - hs;
-        let first = (((hs - M) / PITCH).floor().max(0.0)) as usize;
-        let last = (((hs + W) / PITCH).ceil() as usize).min(n);
+        let first = (((hs - M) / lay.pitch).floor().max(0.0)) as usize;
+        let last = (((hs + W) / lay.pitch).ceil() as usize).min(n);
         let mut focused = None;
         for (c, game) in row.games.iter().enumerate().take(last).skip(first) {
-            let r = Rect::new(left + c as f32 * PITCH, y, COVER_W, COVER_H);
+            let r = Rect::new(left + c as f32 * lay.pitch, y, lay.cover_w, lay.cover_h);
             self.hits.push((r, Target::Item(i, c)));
             if focused_shelf && c == col {
                 focused = Some(r);
@@ -313,7 +369,7 @@ impl Home {
                 cover::draw(gfx, r, game, &ctx.artwork.cover(&ctx.library, game), true, false);
             }
         }
-        let see_all = Rect::new(left + n as f32 * PITCH, y, SEE_ALL_W, COVER_H);
+        let see_all = Rect::new(left + n as f32 * lay.pitch, y, SEE_ALL_W, lay.cover_h);
         if see_all.x < W {
             draw_see_all(gfx, see_all, row.total, focused_shelf && col == n);
             self.hits.push((see_all, Target::Item(i, n)));
@@ -330,7 +386,7 @@ impl Home {
             cover::draw_focused(gfx, big, game, &ctx.artwork.cover(&ctx.library, game), true, g);
         }
         // Mouse paging, when the Shelf runs past the screen.
-        let cy = y + COVER_H / 2.0;
+        let cy = y + lay.cover_h / 2.0;
         let max = scroll::clamp(f32::MAX, self.content_w(i), VIEW_W);
         for (show, x, dir) in [
             (self.hscroll[i] > 0.0, M / 2.0, -1.0),
@@ -343,7 +399,7 @@ impl Home {
                     if dir < 0.0 { 0.0 } else { W - EDGE_FADE_W },
                     y - 16.0,
                     EDGE_FADE_W,
-                    COVER_H + 32.0,
+                    lay.cover_h + 32.0,
                 );
                 let (from, to) = if dir < 0.0 {
                     (BG.alpha(0.9), BG.alpha(0.0))
@@ -363,8 +419,11 @@ impl Home {
         }
     }
 
-    fn draw_empty(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx, i: usize, base: f32) {
-        let r = Rect::new(M, base + 22.0, VIEW_W, 140.0);
+    /// Draws empty Shelf `i`'s hint in its block, whose top is at `top`: a box as tall as a cover
+    /// where the covers would be, its placeholders and text centred in it (FR-HOME-5).
+    fn draw_empty(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx, i: usize, top: f32) {
+        let r = Rect::new(M, top + COVERS_DY, VIEW_W, Layout::now().cover_h);
+        let mid = r.y + r.h / 2.0;
         gfx.fill_round_rect(r, 14.0, SURFACE.alpha(0.6));
         // An empty Shelf only holds a hint, so its focus is a quiet outline, not a cover's ring.
         if self.focus.shelf == i {
@@ -373,12 +432,18 @@ impl Home {
             gfx.stroke_round_rect_dashed(r, 14.0, 2.0, 10.0, 8.0, LINE);
         }
         for k in 0..5 {
-            let sq = Rect::new(M + 28.0 + k as f32 * 116.0, base + 44.0, 96.0, 96.0);
+            let sq = Rect::new(
+                M + 28.0 + k as f32 * PLACEHOLDER_PITCH,
+                mid - PLACEHOLDER / 2.0,
+                PLACEHOLDER,
+                PLACEHOLDER,
+            );
             gfx.fill_round_rect(sq, 8.0, SURFACE2.alpha(0.7));
         }
         self.hits.push((r, Target::Item(i, 0)));
         let style = TextStyle::new(22, Weight::Medium, MUTED);
-        let (x, y) = (M + 640.0, base + 100.0);
+        // The baseline sits a little under the middle, so the 22 px text reads as centred.
+        let (x, y) = (M + 640.0, mid + 8.0);
         match self.shelves[i].shelf {
             Shelf::Favorites => {
                 let mut x = x + gfx.text(x, y, "Press ", style, Align::Left);
@@ -478,7 +543,7 @@ impl Screen for Home {
                     return self.confirm(ctx);
                 }
                 Some(Target::Page(s, dir)) => {
-                    let s_off = self.hscroll[s] + dir * (VIEW_W - PITCH);
+                    let s_off = self.hscroll[s] + dir * (VIEW_W - Layout::now().pitch);
                     self.hscroll[s] = scroll::clamp(s_off, self.content_w(s), VIEW_W);
                 }
                 None => {}
@@ -490,11 +555,8 @@ impl Screen for Home {
                     return self.options(ctx);
                 }
             }
-            Input::Pointer(Pointer::Wheel { dy }) => {
-                let view = view_h();
-                self.vscroll = scroll::clamp(self.vscroll - dy * WHEEL_STEP, self.content_h(), view);
-                self.vscroll_view = view;
-            }
+            Input::Pointer(Pointer::Wheel { dy }) if dy > 0.0 => self.wheel(-1),
+            Input::Pointer(Pointer::Wheel { dy }) if dy < 0.0 => self.wheel(1),
             _ => {}
         }
         Transition::None
@@ -516,31 +578,23 @@ impl Screen for Home {
             self.grown = Some(item);
         }
         self.grow.step(ctx.animate, FOCUS_TAU);
-        self.shown_v.set(self.vscroll);
+        self.shown_v.set(self.rest_offset());
         let vs = self.shown_v.step(ctx.animate, SCROLL_TAU);
-        let (view_bottom, view_h) = (view_bottom(), view_h());
+        let (view_bottom, lay) = (view_bottom(), Layout::now());
+        let view_h = lay.view_h;
         gfx.clip(Some(Rect::new(0.0, VIEW_TOP, W, view_h)));
         let title = TextStyle::new(28, Weight::Bold, TEXT);
         for i in 0..SHELVES {
-            let top = VIEW_TOP + self.block_top(i) - vs;
-            if top > view_bottom || top + self.block_h(i) < VIEW_TOP {
+            let top = VIEW_TOP + block_top(i) - vs;
+            if top >= view_bottom || top + lay.block_h <= VIEW_TOP {
                 continue;
             }
-            let base = top + TITLE_DY;
             if self.shelves[i].games.is_empty() {
-                self.draw_empty(gfx, ctx, i, base);
+                self.draw_empty(gfx, ctx, i, top);
             } else {
-                self.draw_filled(gfx, ctx, i, base);
+                self.draw_filled(gfx, ctx, i, top);
             }
-            gfx.text(M, base, name(self.shelves[i].shelf), title, Align::Left);
-        }
-        if self.content_h() - vs > view_h {
-            gfx.fill_round_rect_vgradient(
-                Rect::new(0.0, view_bottom - FADE_H, W, FADE_H),
-                0.0,
-                BG.alpha(0.0),
-                BG,
-            );
+            gfx.text(M, top + TITLE_DY, name(self.shelves[i].shelf), title, Align::Left);
         }
         gfx.clip(None);
         self.hits = clip_hits(&self.hits, Rect::new(0.0, VIEW_TOP, W, view_h));
@@ -853,8 +907,9 @@ mod tests {
         let view = Rect::new(0.0, VIEW_TOP, W, view_h());
         // A cover scrolled so most of it sits above the top bar; only its bottom sliver is
         // visible.
+        let lay = Layout::now();
         let hits = vec![(
-            Rect::new(100.0, VIEW_TOP - 80.0, COVER_W, COVER_H),
+            Rect::new(100.0, VIEW_TOP - 80.0, lay.cover_w, lay.cover_h),
             Target::Item(0, 2),
         )];
         let clipped = clip_hits(&hits, view);
@@ -870,53 +925,150 @@ mod tests {
         );
     }
 
-    /// Every Shelf filled, so Home is taller than the view however tall the canvas is.
-    fn filled_home() -> Home {
+    /// Every Shelf filled with `n` Games.
+    fn filled_home(n: i64) -> Home {
         let mut home = Home::new();
         for row in &mut home.shelves {
-            row.games = rows(1..=3);
+            row.games = rows(1..=n);
         }
         home
     }
 
     #[test]
-    fn a_taller_canvas_shows_more_of_home_and_scrolls_less_to_the_last_shelf() {
-        let mut home = filled_home();
-        home.focus.shelf = SHELVES - 1;
-        home.reveal_shelf();
-        assert_eq!(view_h(), 900.0);
-        assert_eq!(home.vscroll, home.content_h() - 900.0);
-        ui::with_h(1200.0, || {
-            assert_eq!((view_bottom(), view_h()), (1130.0, 1020.0));
-            let mut home = filled_home();
-            home.focus.shelf = SHELVES - 1;
-            home.reveal_shelf();
-            assert_eq!(home.vscroll, home.content_h() - 1020.0);
-        });
+    fn two_shelves_fill_the_view_with_2_by_3_covers_sized_from_the_height() {
+        for (h, view, cover_w, cover_h) in [
+            (1080.0, 900.0, 208.0, 312.0),
+            (1200.0, 1020.0, 248.0, 372.0),
+            (1440.0, 1260.0, 328.0, 492.0),
+        ] {
+            ui::with_h(h, || {
+                let lay = Layout::now();
+                assert_eq!(view_bottom(), h - 70.0, "at {h}");
+                assert_eq!(lay.view_h, view, "at {h}");
+                assert_eq!(2.0 * lay.block_h, lay.view_h, "two blocks fill the view at {h}");
+                assert_eq!((lay.cover_w, lay.cover_h), (cover_w, cover_h), "at {h}");
+                assert_eq!(lay.cover_w * 3.0, lay.cover_h * 2.0, "2:3 at {h}");
+                assert_eq!(lay.pitch, cover_w + COVER_GAP, "at {h}");
+                assert_eq!(
+                    lay.block_h - COVERS_DY - lay.cover_h,
+                    60.0,
+                    "the space under the covers stays free at {h}"
+                );
+            });
+        }
     }
 
     #[test]
-    fn a_resize_refits_the_scroll_to_the_new_view() {
-        let mut home = filled_home();
-        home.focus.shelf = SHELVES - 1;
-        home.reveal_shelf();
-        ui::with_h(1200.0, || {
-            home.refit();
-            assert_eq!(
-                home.vscroll,
-                home.content_h() - 1020.0,
-                "no space left under the last Shelf"
-            );
-        });
-        home.refit();
-        assert_eq!(
-            home.vscroll,
-            home.content_h() - 900.0,
-            "the focused Shelf shows in full again"
+    fn an_empty_shelf_is_as_tall_as_a_filled_one() {
+        let mut home = filled_home(3);
+        home.shelves[1].games.clear();
+        let lay = Layout::now();
+        for i in 0..SHELVES {
+            assert_eq!(block_top(i + 1) - block_top(i), lay.block_h, "Shelf {i}");
+        }
+    }
+
+    /// The resting offset is a whole number of blocks and the focused Shelf lies inside the view.
+    fn assert_at_rest_on_the_focus(home: &Home) {
+        let lay = Layout::now();
+        let offset = home.rest_offset();
+        assert_eq!(offset % lay.block_h, 0.0, "{offset} is a whole number of Shelves");
+        let top = block_top(home.focus.shelf);
+        assert!(
+            top >= offset && top + lay.block_h <= offset + lay.view_h,
+            "Shelf {} at {top} is inside the view at {offset}",
+            home.focus.shelf
         );
-        // Wheeled away from the focused Shelf: an unchanged height leaves the scroll alone.
-        home.vscroll = 0.0;
-        home.refit();
-        assert_eq!(home.vscroll, 0.0);
+    }
+
+    #[test]
+    fn home_rests_on_whole_shelves_and_moves_by_one_when_the_focus_leaves_them() {
+        for h in [1080.0, 1200.0] {
+            ui::with_h(h, || {
+                let mut ctx = Ctx::empty();
+                let mut home = Home::new();
+                let down = Input::Action(Action::Down);
+                let up = Input::Action(Action::Up);
+                // Down: Shelf 1 is already showing, then each Down leaves the lower Shelf showing.
+                for (shelf, top) in [(0, 0), (1, 0), (2, 1), (3, 2), (3, 2)] {
+                    assert_eq!((home.focus.shelf, home.top), (shelf, top), "going down at {h}");
+                    assert_at_rest_on_the_focus(&home);
+                    home.handle(down, &mut ctx);
+                }
+                // Up: Shelf 2 is still showing, then each Up leaves the upper Shelf showing.
+                for (shelf, top) in [(3, 2), (2, 2), (1, 1), (0, 0), (0, 0)] {
+                    assert_eq!((home.focus.shelf, home.top), (shelf, top), "going up at {h}");
+                    assert_at_rest_on_the_focus(&home);
+                    home.handle(up, &mut ctx);
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn a_wheel_notch_moves_by_one_shelf_and_pulls_the_focus_onto_a_shelf_showing() {
+        let mut ctx = Ctx::empty();
+        let many: Vec<_> = (0..20).map(found).collect();
+        ctx.library.sync_system("snes", &many, 0).unwrap();
+        let mut home = Home::new();
+        home.handle(Input::Action(Action::Left), &mut ctx); // initial load
+        let recently_added = 2; // Shelf::ALL's index for Shelf::RecentlyAdded
+        home.focus.cols[recently_added] = 7;
+        let notch_down = Input::Pointer(Pointer::Wheel { dy: -1.0 });
+        let notch_up = Input::Pointer(Pointer::Wheel { dy: 1.0 });
+
+        home.handle(notch_down, &mut ctx);
+        assert_eq!(home.top, 1, "one Shelf down");
+        assert_eq!(
+            home.focus.shelf, 1,
+            "the focus left Shelf 0 for the upper Shelf showing"
+        );
+        assert_at_rest_on_the_focus(&home);
+        home.handle(notch_down, &mut ctx);
+        assert_eq!(home.top, 2);
+        assert_eq!(
+            (home.focus.shelf, home.focus.col()),
+            (recently_added, 7),
+            "onto Recently added, at the position it remembers"
+        );
+        assert_at_rest_on_the_focus(&home);
+        home.handle(notch_down, &mut ctx);
+        assert_eq!(home.top, 2, "the last two Shelves show: no further");
+
+        home.focus.shelf = 3;
+        home.handle(notch_up, &mut ctx);
+        assert_eq!((home.top, home.focus.shelf), (1, 2), "one Shelf up");
+        assert_at_rest_on_the_focus(&home);
+        home.handle(notch_up, &mut ctx);
+        assert_eq!((home.top, home.focus.shelf), (0, 1));
+        home.handle(notch_up, &mut ctx);
+        assert_eq!(
+            (home.top, home.focus.shelf),
+            (0, 1),
+            "the first Shelf shows: no further"
+        );
+    }
+
+    #[test]
+    fn a_resize_keeps_the_same_whole_shelves_and_the_focused_cover_showing() {
+        let mut home = filled_home(20);
+        home.focus.shelf = SHELVES - 1;
+        home.focus.cols[SHELVES - 1] = 6;
+        home.reveal_shelf();
+        home.reveal(SHELVES - 1);
+        assert_eq!(home.top, SHELVES - 2);
+        for h in [1440.0, 1200.0, 1080.0] {
+            ui::with_h(h, || {
+                home.refit();
+                assert_eq!(home.top, SHELVES - 2, "the same Shelves at {h}");
+                assert_eq!(home.shown_v.value(), home.rest_offset(), "no glide at {h}");
+                let lay = Layout::now();
+                let x = 6.0 * lay.pitch - home.hscroll[SHELVES - 1];
+                assert!(
+                    x >= 0.0 && x + lay.cover_w <= VIEW_W,
+                    "the focused cover at {x} shows at {h}"
+                );
+            });
+        }
     }
 }

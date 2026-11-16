@@ -188,7 +188,7 @@ checks so that they are made once, on the final look. The speedrun timer (M7) fo
 | Step | Status |
 |---|---|
 | 1 Grids | Done |
-| 2 Home | Not started |
+| 2 Home | Layout done; Settings → Home not started |
 | 3 Sorting and See all | Not started |
 | 4 Playtime | Not started |
 | 5 Release dates | Not started |

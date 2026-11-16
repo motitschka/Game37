@@ -191,6 +191,9 @@ shot m8-settings-display-screens "$root/cfg.toml" "settings$(printf ',down%.0s' 
 per_row="nexttab,right,right,confirm,settings$(printf ',down%.0s' {1..5}),right,down,down"
 shot d1-console-page-10 "$root/grid.toml" "$per_row,right,right,back,back"
 shot d1-console-page-6 "$root/grid.toml" "$per_row,left,left,back,back"
+# D1: Home after moving down to the third Shelf (Recently added): it moves by one whole Shelf, so
+# Continue playing and Recently added show
+shot d1-home-lower "$root/cfg.toml" "down,down"
 
 # M6: Settings Artwork: the key row with no key set (screenshot mode runs Artwork off, so it shows
 # "Not set"), and the key entry modal with a typed key
@@ -205,6 +208,7 @@ shot m6-settings-games-root "$root/cfg.toml" "settings,right,confirm"
 # overwrites slot 1, which m3-pause-saved already filled).
 tall=(--size 1920x1200)
 shot tall-home "$root/cfg.toml" "" "${tall[@]}"                                         # m1-home
+shot tall-home-lower "$root/cfg.toml" "down,down" "${tall[@]}"                         # d1-home-lower
 shot tall-carousel "$root/cfg.toml" "nexttab,right,right" "${tall[@]}"                  # m1-carousel
 shot tall-console-page "$root/cfg.toml" "nexttab,right,right,confirm,sort" "${tall[@]}" # m1-console-page
 shot tall-details "$root/cfg.toml" "nexttab,right,right,confirm,confirm" "${tall[@]}"   # m5-details
