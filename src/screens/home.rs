@@ -305,13 +305,12 @@ impl Home {
         let first = (((hs - M) / PITCH).floor().max(0.0)) as usize;
         let last = (((hs + W) / PITCH).ceil() as usize).min(n);
         let mut focused = None;
-        for c in first..last {
+        for (c, game) in row.games.iter().enumerate().take(last).skip(first) {
             let r = Rect::new(left + c as f32 * PITCH, y, COVER_W, COVER_H);
             self.hits.push((r, Target::Item(i, c)));
             if focused_shelf && c == col {
                 focused = Some(r);
             } else {
-                let game = &row.games[c];
                 cover::draw(gfx, r, game, &ctx.artwork.cover(&ctx.library, game), true, false);
             }
         }
