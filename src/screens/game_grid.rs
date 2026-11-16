@@ -12,7 +12,7 @@ use crate::library::db::{DbError, GameRow, Library, SortOrder};
 use crate::systems::System;
 use crate::ui::anim::{Eased, FOCUS_TAU, SCROLL_TAU};
 use crate::ui::chrome;
-use crate::ui::cover::{self, RING_REACH};
+use crate::ui::cover::{self, CoverPlace, RING_REACH};
 use crate::ui::gfx::{Align, Gfx, TextStyle};
 use crate::ui::grid::Grid;
 use crate::ui::input::{Action, Input, Pointer, glyph_label};
@@ -680,7 +680,8 @@ impl Screen for GameGrid {
         let grid = self.grid;
         let first_row = ((scroll - RING_REACH) / grid.pitch_y).floor().max(0.0) as usize;
         let last_row = ((scroll + bottom - top) / grid.pitch_y).ceil() as usize;
-        let caption = TextStyle::new(17, Weight::Medium, MUTED);
+        // The focused cover's Playtime fades in with its ring (FR-UI-8).
+        let caption = TextStyle::new(17, Weight::Medium, MUTED.alpha(ring));
         for i in first_row * grid.cols..((last_row + 1) * grid.cols).min(self.games.len()) {
             let r = grid.cover(i, top - scroll);
             let game = &self.games[i];
@@ -688,7 +689,7 @@ impl Screen for GameGrid {
             let art = ctx.artwork.cover(&ctx.library, game);
             let focused = i == self.focus && self.notice_focus.is_none();
             cover::draw_focused(gfx, r, game, &art, true, if focused { ring } else { 0.0 });
-            if game.playtime_secs > 0 {
+            if cover::shows_playtime(ctx.show_playtime, CoverPlace::Grid, focused, game.playtime_secs) {
                 gfx.text(
                     r.x,
                     r.y + r.h + 32.0,

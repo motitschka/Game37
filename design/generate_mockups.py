@@ -455,7 +455,8 @@ def screen_console_page():
         r, c = divmod(i, cols)
         x, y = M + c * (GW + GAP), top + r * pitch
         cover(sv, x, y, GW, GH, g, focused=(i == 2), show_sys=False)
-        sv.add(text(x, y + GH + 32, g["hours"], 17, 500, fill=C["muted"]))
+        if i == 2:
+            sv.add(text(x, y + GH + 32, g["hours"], 17, 500, fill=C["muted"]))
     sv.add(rect(0, 900, W, 110, sv.lin([(0, C["bg"], 0), (1, C["bg"], 1)])))
     hintbar(sv, [(["A"], "Details"), (["B"], "Back"), (["Y"], "Options"), (["X"], "Sort")])
     sv.save()
@@ -481,7 +482,7 @@ def screen_see_all():
         r, c = divmod(i, cols)
         x, y = M + c * (GW + GAP), top + r * pitch
         cover(sv, x, y, GW, GH, g, focused=(i == 0))
-        if g["hours"]:
+        if i == 0 and g["hours"]:
             sv.add(text(x, y + GH + 32, g["hours"], 17, 500, fill=C["muted"]))
     sv.add(rect(0, 900, W, 110, sv.lin([(0, C["bg"], 0), (1, C["bg"], 1)])))
     hintbar(sv, [(["A"], "Details"), (["B"], "Back"), (["Y"], "Options"), (["X"], "Sort")])
@@ -539,7 +540,6 @@ def screen_console_missing_emulator():
         r, c = divmod(i, cols)
         x, y = M + c * (GW + GAP), top + r * pitch
         cover(sv, x, y, GW, GH, g, show_sys=False)
-        sv.add(text(x, y + GH + 32, "Never played", 17, 500, fill=C["muted"]))
     sv.add(rect(0, 900, W, 110, sv.lin([(0, C["bg"], 0), (1, C["bg"], 1)])))
     hintbar(sv, [(["A"], "Copy command"), (["B"], "Back")])
     sv.save()
@@ -1474,6 +1474,9 @@ def screen_settings_display():
     y += h + 12
     r = settings_row(sv, y, h, "Games per row", sub="Covers in each row of Console Pages, See all and Search")
     choice_value(sv, r, y, h, "8")
+    y += h + 12
+    r = settings_row(sv, y, h, "Show Playtime", sub="Under the selected cover")
+    choice_value(sv, r, y, h, "Grids")
     y = settings_group(sv, y + h + 12, "Screens")
     for label, layout, focused in [("DS layout", "Side by side", True), ("3DS layout", "Large and small", False)]:
         r = settings_row(sv, y, h, label, sub=SCREEN_LAYOUTS[layout], focused=focused)

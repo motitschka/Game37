@@ -153,7 +153,8 @@ Built in milestone 8 (ADR 0016, research in [research/m8-newer-cores.md](researc
   or shrink to fit.
 - **FR-UI-8** Playtime is shown under the focused cover only, without the Display Title, and not for
   a Game played for less than a minute. A setting in Settings → Display chooses where: Off, Grids
-  (default), or Grids and Home.
+  (default), or Grids and Home. Grids are Console Pages and "See all"; Search results keep their
+  Display Title and System under every cover and show no Playtime.
 
 ### Settings
 

@@ -11,6 +11,7 @@ use crate::library::db::{DbError, GameRow, HomeShelves, Library};
 use crate::library::scan;
 use crate::session::input::PadState;
 use crate::systems::{SYSTEMS, System};
+use crate::ui::cover::ShowPlaytime;
 use crate::ui::gfx::WindowMode;
 use crate::ui::grid;
 use crate::ui::input::{ButtonStyle, InputKind};
@@ -86,6 +87,9 @@ pub struct Ctx {
     /// How many Games each row of every grid of covers shows (FR-UI-7); `app.rs` loads it from the
     /// library at start, and an open grid follows a change from its next frame.
     pub games_per_row: usize,
+    /// Where the focused cover's Playtime shows (FR-UI-8); `app.rs` loads it from the library at
+    /// start, and grids and Home read it on every draw.
+    pub show_playtime: ShowPlaytime,
     /// Which Shelf each of Home's slots holds (FR-HOME-2); `app.rs` loads it from the library at
     /// start, and Home follows a change from its next frame.
     pub home_shelves: HomeShelves,
@@ -151,6 +155,7 @@ impl Ctx {
             button_style: ButtonStyle::default(),
             window_mode: WindowMode::default(),
             games_per_row: grid::DEFAULT_PER_ROW,
+            show_playtime: ShowPlaytime::default(),
             home_shelves: HomeShelves::DEFAULT,
             screen_layouts: HashMap::new(),
             emulators: Emulators::all_installed(),
@@ -198,6 +203,14 @@ impl Ctx {
         self.games_per_row = per_row;
         if let Err(e) = self.library.set_games_per_row(per_row) {
             eprintln!("game37: can't save the Games per row: {e}");
+        }
+    }
+
+    /// Switches where the focused cover's Playtime shows (FR-UI-8) and saves it.
+    pub fn set_show_playtime(&mut self, show: ShowPlaytime) {
+        self.show_playtime = show;
+        if let Err(e) = self.library.set_show_playtime(show) {
+            eprintln!("game37: can't save where Playtime shows: {e}");
         }
     }
 
@@ -298,6 +311,9 @@ mod tests {
         ctx.set_games_per_row(10);
         assert_eq!(ctx.games_per_row, 10);
         assert_eq!(ctx.library.games_per_row().unwrap(), 10);
+        ctx.set_show_playtime(ShowPlaytime::GridsAndHome);
+        assert_eq!(ctx.show_playtime, ShowPlaytime::GridsAndHome);
+        assert_eq!(ctx.library.show_playtime().unwrap(), ShowPlaytime::GridsAndHome);
         let shelves =
             HomeShelves::new([None, Some(crate::library::db::Shelf::MostPlayed), None, None]).unwrap();
         ctx.set_home_shelves(shelves);

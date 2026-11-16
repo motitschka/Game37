@@ -10,7 +10,7 @@ use crate::ctx::Ctx;
 use crate::library::db::{GameRow, SHELF_SIZE, Shelf};
 use crate::ui::anim::{Eased, FOCUS_TAU, SCROLL_TAU};
 use crate::ui::chrome;
-use crate::ui::cover::{self, COVER_GAP, COVER_RADIUS, RING_REACH, ellipsize};
+use crate::ui::cover::{self, COVER_GAP, COVER_RADIUS, CoverPlace, RING_REACH, ellipsize};
 use crate::ui::gfx::{Align, Gfx, TextStyle};
 use crate::ui::input::{Action, Input, Pointer, glyph_label};
 use crate::ui::nav::{Hint, Screen, Transition};
@@ -40,6 +40,9 @@ const TITLE_DY: f32 = 46.0;
 const COVERS_DY: f32 = 78.0;
 /// The space kept free under the covers, for a line of text under the focused one.
 const CAPTION_H: f32 = 60.0;
+/// From the focused cover's resting bottom to its Playtime's baseline, under the grown cover (12
+/// lower) and its ring (15 further).
+const PLAYTIME_DY: f32 = 43.0;
 const SEE_ALL_W: f32 = 150.0;
 /// The focused cover grows by this much on each side.
 const GROW: f32 = 8.0;
@@ -460,6 +463,17 @@ impl Home {
             );
             let game = &row.games[col];
             cover::draw_focused(gfx, big, game, &ctx.artwork.cover(&ctx.library, game), true, g);
+            // In the space kept free under the covers, clear of the grown cover and its ring, and
+            // fading in with the ring (FR-UI-8).
+            if cover::shows_playtime(ctx.show_playtime, CoverPlace::Home, true, game.playtime_secs) {
+                gfx.text(
+                    r.x,
+                    r.y + r.h + PLAYTIME_DY,
+                    &cover::playtime_label(game.playtime_secs),
+                    TextStyle::new(17, Weight::Medium, MUTED.alpha(g)),
+                    Align::Left,
+                );
+            }
         }
         // Mouse paging, when the Shelf runs past the screen.
         let cy = y + lay.cover_h / 2.0;

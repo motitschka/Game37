@@ -93,9 +93,10 @@ shot m4-ds "$root/cfg.toml" "nexttab,right,right,right,right,right,right,right,c
     --frames 300
 shot m4-psp "$root/cfg.toml" "nexttab,left,left,left,left,confirm,confirm,confirm" --frames 900
 shot m4-ps1-no-bios "$root/cfg.toml" "nexttab,left,left,left,left,left,left,confirm,confirm,confirm"
-# M8: DS side by side, chosen in Settings → Display first (each shot has its own library)
+# M8: DS side by side, chosen in Settings → Display first (each shot has its own library): four downs
+# past Startup window mode, Motion, Games per row and Show Playtime reach the DS layout row
 shot m8-ds-side-by-side "$root/cfg.toml" \
-    "settings$(printf ',down%.0s' {1..6}),right,down,right,back,back,nexttab$(printf ',right%.0s' {1..7}),confirm,confirm,confirm" \
+    "settings$(printf ',down%.0s' {1..6}),right$(printf ',down%.0s' {1..4}),right,back,back,nexttab$(printf ',right%.0s' {1..7}),confirm,confirm,confirm" \
     --frames 300
 # M8: PS2 without a BIOS; 3DS running ftpd on Azahar, the top screen large and the touch screen small;
 # GameCube and Wii running FCE Ultra GX on Dolphin, its menu showing
@@ -184,8 +185,8 @@ shot m6-settings-controls "$root/cfg.toml" "settings,down,down,down,down,right"
 shot m6-settings-xbox "$root/cfg.toml" "settings,down,down,down,down,right,right"
 shot m6-settings-display "$root/cfg.toml" "settings$(printf ',down%.0s' {1..6}),right"
 # M8: Settings Display's Screens group, as in the mockup: the DS layout row (below Startup window
-# mode, Motion and Games per row) switched to Side by side
-shot m8-settings-display-screens "$root/cfg.toml" "settings$(printf ',down%.0s' {1..6}),right,down,down,down,right"
+# mode, Motion, Games per row and Show Playtime) switched to Side by side
+shot m8-settings-display-screens "$root/cfg.toml" "settings$(printf ',down%.0s' {1..6}),right$(printf ',down%.0s' {1..4}),right"
 # D1: SNES's Console Page of 20 dummy Games at 10 and at 6 Games per row, set in Settings → Display
 # opened over it
 per_row="nexttab,right,right,confirm,settings$(printf ',down%.0s' {1..6}),right,down,down"

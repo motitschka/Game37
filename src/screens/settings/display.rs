@@ -1,5 +1,5 @@
-//! Settings → Display (`screen_settings_display` in the mockups): Startup window mode, Motion and
-//! Games per row (FR-UI-7), then the Screens group with each two-screen System's layout (FR-DS-1,
+//! Settings → Display (`screen_settings_display` in the mockups): Startup window mode, Motion,
+//! Games per row (FR-UI-7) and Show Playtime (FR-UI-8), then the Screens group with each two-screen System's layout (FR-DS-1,
 //! FR-NEW-2), all cycled choices like Controls' Menu button style.
 
 use super::{Row, Section};
@@ -13,8 +13,9 @@ use crate::ui::nav::Transition;
 const MODE: usize = 0;
 const MOTION: usize = 1;
 const PER_ROW: usize = 2;
+const PLAYTIME: usize = 3;
 /// The rows before the Screens group.
-const LEADING: usize = 3;
+const LEADING: usize = 4;
 
 /// The Systems with two screens, in System Order: one layout row each, after Startup window mode.
 fn two_screen_systems() -> impl Iterator<Item = (&'static System, &'static ScreenLayouts)> {
@@ -40,12 +41,18 @@ impl Section for Display {
         let per_row = Row::new("Games per row")
             .choice(ctx.games_per_row.to_string())
             .sub("Covers in each row of Console Pages, See all and Search");
+        let playtime = Row::new("Show Playtime")
+            .choice(ctx.show_playtime.label())
+            .sub("Under the selected cover");
         let layouts = two_screen_systems().enumerate().map(|(i, (system, layouts))| {
             let layout = ctx.screen_layout(system);
             let row = Row::new(layouts.label).choice(layout.label()).sub(layout.sub());
             if i == 0 { row.group("Screens") } else { row }
         });
-        [mode, motion, per_row].into_iter().chain(layouts).collect()
+        [mode, motion, per_row, playtime]
+            .into_iter()
+            .chain(layouts)
+            .collect()
     }
 
     /// Confirm on a row cycles its choice, as Left and Right do in [`Display::handle`].
@@ -94,6 +101,11 @@ fn cycle(i: usize, forward: bool, ctx: &mut Ctx) -> bool {
             false => n - 1,
         };
         ctx.set_games_per_row(next);
+        return true;
+    }
+    if i == PLAYTIME {
+        let show = ctx.show_playtime;
+        ctx.set_show_playtime(if forward { show.next() } else { show.prev() });
         return true;
     }
     let Some((system, _)) = two_screen_systems().nth(i - LEADING) else {
@@ -180,12 +192,14 @@ mod tests {
                 ("Startup window mode", Some("Remember last"), None),
                 ("Motion", Some("Reduced"), None),
                 ("Games per row", Some("8"), None),
+                ("Show Playtime", Some("Grids"), None),
                 ("DS layout", Some("Large and small"), Some("Screens")),
                 ("3DS layout", Some("Large and small"), None),
             ]
         );
         assert!(rows.iter().all(|r| r.choice));
-        assert_eq!(rows[3].sub, Some(ScreenLayout::LargeAndSmall.sub()));
+        assert_eq!(rows[3].sub, Some("Under the selected cover"));
+        assert_eq!(rows[4].sub, Some(ScreenLayout::LargeAndSmall.sub()));
     }
 
     /// Down to the DS layout row and Right, Left or Confirm cycle and save DS's layout, which the
@@ -198,12 +212,18 @@ mod tests {
         act(
             &mut nav,
             ctx,
-            &[Action::Down, Action::Down, Action::Down, Action::Right],
+            &[
+                Action::Down,
+                Action::Down,
+                Action::Down,
+                Action::Down,
+                Action::Right,
+            ],
         );
         assert_eq!(saved(ctx, "nds"), ScreenLayout::SideBySide);
         assert_eq!(saved(ctx, "3ds"), ScreenLayout::LargeAndSmall);
-        assert_eq!(Display.rows(ctx)[3].value.as_deref(), Some("Side by side"));
-        assert_eq!(Display.rows(ctx)[3].sub, Some(ScreenLayout::SideBySide.sub()));
+        assert_eq!(Display.rows(ctx)[4].value.as_deref(), Some("Side by side"));
+        assert_eq!(Display.rows(ctx)[4].sub, Some(ScreenLayout::SideBySide.sub()));
         act(&mut nav, ctx, &[Action::Confirm]);
         assert_eq!(saved(ctx, "nds"), ScreenLayout::OneScreen);
         act(&mut nav, ctx, &[Action::Right]);
@@ -257,5 +277,32 @@ mod tests {
             !ctx.animate && ctx.window_mode == WindowMode::RememberLast,
             "untouched"
         );
+    }
+
+    /// The Show Playtime row steps Off, Grids, Grids and Home with Right and Confirm, back with
+    /// Left, wraps round at either end, and is saved.
+    #[test]
+    fn the_show_playtime_row_steps_off_grids_grids_and_home_and_is_saved() {
+        use crate::ui::cover::ShowPlaytime;
+        let mut nav = nav();
+        let ctx = &mut Ctx::empty();
+        ctx.set_show_playtime(ShowPlaytime::Off);
+        act(&mut nav, ctx, &[Action::Down, Action::Down, Action::Down]);
+        for show in [ShowPlaytime::Grids, ShowPlaytime::GridsAndHome, ShowPlaytime::Off] {
+            act(&mut nav, ctx, &[Action::Right]);
+            assert_eq!(ctx.show_playtime, show);
+            assert_eq!(ctx.library.show_playtime().unwrap(), show);
+        }
+        assert_eq!(Display.rows(ctx)[3].value.as_deref(), Some("Off"));
+        act(&mut nav, ctx, &[Action::Left]);
+        assert_eq!(
+            ctx.show_playtime,
+            ShowPlaytime::GridsAndHome,
+            "wraps round backwards too"
+        );
+        assert_eq!(Display.rows(ctx)[3].value.as_deref(), Some("Grids and Home"));
+        act(&mut nav, ctx, &[Action::Confirm]);
+        assert_eq!(ctx.library.show_playtime().unwrap(), ShowPlaytime::Off);
+        assert_eq!(ctx.games_per_row, 8, "untouched");
     }
 }

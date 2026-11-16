@@ -27,6 +27,7 @@ use crate::session::input::{self, Mouse, Ports};
 use crate::session::sdl;
 use crate::ui::chrome::{self, TopBar};
 use crate::ui::controls::{ControlEvent, Controls, StickAxis};
+use crate::ui::cover::ShowPlaytime;
 use crate::ui::gfx::{Gfx, Layer, WindowMode};
 use crate::ui::grid;
 use crate::ui::hit;
@@ -105,6 +106,10 @@ fn open_library(ctx: &mut Ctx, config: &Config) -> Result<(), String> {
     ctx.games_per_row = ctx.library.games_per_row().unwrap_or_else(|e| {
         eprintln!("game37: can't read the Games per row: {e}");
         grid::DEFAULT_PER_ROW
+    });
+    ctx.show_playtime = ctx.library.show_playtime().unwrap_or_else(|e| {
+        eprintln!("game37: can't read where Playtime shows: {e}");
+        ShowPlaytime::default()
     });
     ctx.home_shelves = ctx.library.home_shelves().unwrap_or_else(|e| {
         eprintln!("game37: can't read Home's Shelves: {e}");

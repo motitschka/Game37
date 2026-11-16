@@ -15,6 +15,7 @@ use unicode_normalization::char::is_combining_mark;
 use super::FoundGame;
 use crate::cores::{ScreenLayout, WiiController};
 use crate::systems;
+use crate::ui::cover::ShowPlaytime;
 use crate::ui::gfx::WindowMode;
 use crate::ui::grid;
 use crate::ui::input::ButtonStyle;
@@ -783,6 +784,20 @@ impl Library {
         self.set_setting("games_per_row", &per_row.to_string())
     }
 
+    /// Where the focused cover's Playtime shows (FR-UI-8); Grids until changed, or if the stored
+    /// choice is unknown.
+    pub fn show_playtime(&self) -> Result<ShowPlaytime, DbError> {
+        Ok(self
+            .setting("show_playtime")?
+            .as_deref()
+            .and_then(ShowPlaytime::from_id)
+            .unwrap_or_default())
+    }
+
+    pub fn set_show_playtime(&self, show: ShowPlaytime) -> Result<(), DbError> {
+        self.set_setting("show_playtime", show.id())
+    }
+
     /// Which Shelf each of Home's slots holds (FR-HOME-2); all four in their default order until
     /// changed, or if the stored value is not four slots with each Shelf at most once and at least
     /// one on.
@@ -1448,6 +1463,28 @@ mod tests {
         for stored in ["5", "11", "0", "-7", "eight", "", "8.5"] {
             lib.set_setting("games_per_row", stored).unwrap();
             assert_eq!(lib.games_per_row().unwrap(), 8, "stored {stored:?}");
+        }
+    }
+
+    #[test]
+    fn show_playtime_defaults_to_grids_round_trips_and_reads_garbage_as_grids() {
+        let lib = Library::open_in_memory().unwrap();
+        assert_eq!(lib.show_playtime().unwrap(), ShowPlaytime::Grids);
+        for show in ShowPlaytime::ALL {
+            lib.set_show_playtime(show).unwrap();
+            assert_eq!(lib.show_playtime().unwrap(), show);
+        }
+        assert_eq!(
+            lib.setting("show_playtime").unwrap().as_deref(),
+            Some("grids_and_home")
+        );
+        for stored in ["", "Grids", "home", "on"] {
+            lib.set_setting("show_playtime", stored).unwrap();
+            assert_eq!(
+                lib.show_playtime().unwrap(),
+                ShowPlaytime::Grids,
+                "stored {stored:?}"
+            );
         }
     }
 

@@ -122,6 +122,73 @@ pub fn playtime_label(secs: u64) -> String {
     format!("{}h {:02}m", minutes / 60, minutes % 60)
 }
 
+/// Where the focused cover's Playtime shows (FR-UI-8), chosen in Settings → Display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShowPlaytime {
+    Off,
+    /// On Console Pages and "See all".
+    #[default]
+    Grids,
+    GridsAndHome,
+}
+
+impl ShowPlaytime {
+    pub const ALL: [ShowPlaytime; 3] = [ShowPlaytime::Off, ShowPlaytime::Grids, ShowPlaytime::GridsAndHome];
+
+    /// The name the library's `settings` table stores it under.
+    pub fn id(self) -> &'static str {
+        match self {
+            ShowPlaytime::Off => "off",
+            ShowPlaytime::Grids => "grids",
+            ShowPlaytime::GridsAndHome => "grids_and_home",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<ShowPlaytime> {
+        ShowPlaytime::ALL.into_iter().find(|s| s.id() == id)
+    }
+
+    /// The label its Settings row shows.
+    pub fn label(self) -> &'static str {
+        match self {
+            ShowPlaytime::Off => "Off",
+            ShowPlaytime::Grids => "Grids",
+            ShowPlaytime::GridsAndHome => "Grids and Home",
+        }
+    }
+
+    /// The next choice in [`ShowPlaytime::ALL`], wrapping around.
+    pub fn next(self) -> ShowPlaytime {
+        let i = ShowPlaytime::ALL.iter().position(|&s| s == self).unwrap_or(0);
+        ShowPlaytime::ALL[(i + 1) % ShowPlaytime::ALL.len()]
+    }
+
+    /// The previous choice in [`ShowPlaytime::ALL`], wrapping around.
+    pub fn prev(self) -> ShowPlaytime {
+        let n = ShowPlaytime::ALL.len();
+        let i = ShowPlaytime::ALL.iter().position(|&s| s == self).unwrap_or(0);
+        ShowPlaytime::ALL[(i + n - 1) % n]
+    }
+}
+
+/// Where a cover is drawn, for [`shows_playtime`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoverPlace {
+    /// A Console Page or "See all".
+    Grid,
+    Home,
+}
+
+/// Whether a cover shows its Game's Playtime under it (FR-UI-8): only the focused one, only where
+/// `setting` says, and only for a Game played for at least a minute.
+pub fn shows_playtime(setting: ShowPlaytime, place: CoverPlace, focused: bool, secs: u64) -> bool {
+    let here = match place {
+        CoverPlace::Grid => setting != ShowPlaytime::Off,
+        CoverPlace::Home => setting == ShowPlaytime::GridsAndHome,
+    };
+    here && focused && secs >= 60
+}
+
 /// Wraps `text` at spaces into at most `max_lines` lines no wider than `max_w`, as `measure`
 /// reports widths. A word too wide for a line, and the last line when text is left over, end in
 /// an ellipsis.
@@ -243,5 +310,49 @@ mod tests {
     fn playtime_shows_hours_and_minutes() {
         assert_eq!(playtime_label(0), "0h 00m");
         assert_eq!(playtime_label(45_600), "12h 40m");
+    }
+
+    #[test]
+    fn playtime_shows_under_the_focused_cover_where_the_setting_says_from_a_minute_on() {
+        use CoverPlace::{Grid, Home};
+        use ShowPlaytime::{GridsAndHome, Off};
+        let hour = 3600;
+        assert!(!shows_playtime(Off, Grid, true, hour), "Off: not in a grid");
+        assert!(!shows_playtime(Off, Home, true, hour), "Off: not on Home");
+        assert!(shows_playtime(ShowPlaytime::Grids, Grid, true, hour));
+        assert!(
+            !shows_playtime(ShowPlaytime::Grids, Home, true, hour),
+            "Grids: not on Home"
+        );
+        assert!(shows_playtime(GridsAndHome, Grid, true, hour));
+        assert!(shows_playtime(GridsAndHome, Home, true, hour));
+        for place in [Grid, Home] {
+            assert!(
+                !shows_playtime(GridsAndHome, place, false, hour),
+                "never unfocused"
+            );
+            assert!(
+                !shows_playtime(GridsAndHome, place, true, 59),
+                "never under a minute"
+            );
+            assert!(!shows_playtime(GridsAndHome, place, true, 0));
+            assert!(
+                shows_playtime(GridsAndHome, place, true, 60),
+                "from exactly a minute"
+            );
+        }
+    }
+
+    #[test]
+    fn show_playtime_steps_off_grids_grids_and_home_and_wraps() {
+        use ShowPlaytime::{Grids, GridsAndHome, Off};
+        assert_eq!(
+            [Off.next(), Grids.next(), GridsAndHome.next()],
+            [Grids, GridsAndHome, Off]
+        );
+        assert_eq!(
+            [Off.prev(), Grids.prev(), GridsAndHome.prev()],
+            [GridsAndHome, Off, Grids]
+        );
     }
 }
