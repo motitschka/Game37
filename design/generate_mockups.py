@@ -311,9 +311,6 @@ def home(sv, focus=0):
             x = M + i * (CW + GAP)
             if focused:
                 cover(sv, x - 8, y - 12, CW + 16, CH + 24, g, focused=True)
-                sv.add(text(x - 8, y + CH + 44, g["title"], 22, 700),
-                       text(x - 8, y + CH + 72, f"{SYS[g['sys']][1]} · {g['hours']} played", 17, 400,
-                            fill=C["muted"]))
             else:
                 cover(sv, x, y, CW, CH, g)
         if total:

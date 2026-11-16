@@ -8,7 +8,6 @@ use super::game_grid::GameGrid;
 use super::options::OptionsMenu;
 use crate::ctx::Ctx;
 use crate::library::db::{GameRow, SHELF_SIZE, Shelf};
-use crate::systems;
 use crate::ui::anim::{Eased, FOCUS_TAU, SCROLL_TAU};
 use crate::ui::chrome;
 use crate::ui::cover::{self, COVER_GAP, COVER_H, COVER_RADIUS, COVER_W, RING_REACH, ellipsize};
@@ -329,16 +328,6 @@ impl Home {
             );
             let game = &row.games[col];
             cover::draw_focused(gfx, big, game, &ctx.artwork.cover(&ctx.library, game), true, g);
-            let max_w = (W - M / 2.0 - big.x).min(4.0 * PITCH);
-            let title = TextStyle::new(22, Weight::Bold, TEXT);
-            let label = ellipsize(&game.title, max_w, |s| gfx.measure(s, title));
-            gfx.text(big.x, y + COVER_H + 44.0, &label, title, Align::Left);
-            let mut meta = systems::by_id(&game.system).map_or(String::new(), |s| s.name.to_owned());
-            if game.playtime_secs > 0 {
-                meta = format!("{meta} · {} played", cover::playtime_label(game.playtime_secs));
-            }
-            let style = TextStyle::new(17, Weight::Regular, MUTED);
-            gfx.text(big.x, y + COVER_H + 72.0, &meta, style, Align::Left);
         }
         // Mouse paging, when the Shelf runs past the screen.
         let cy = y + COVER_H / 2.0;
