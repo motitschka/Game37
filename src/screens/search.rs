@@ -8,8 +8,9 @@ use super::options::OptionsMenu;
 use crate::ctx::Ctx;
 use crate::library::db::GameRow;
 use crate::systems;
-use crate::ui::cover::{self, COVER_GAP, COVER_H, COVER_W, RING_REACH};
+use crate::ui::cover::{self, RING_REACH};
 use crate::ui::gfx::{Align, Gfx, TextStyle};
+use crate::ui::grid::Grid;
 use crate::ui::input::{Action, Input, InputKind, Pointer};
 use crate::ui::nav::{Entry, Hint, Screen, Transition};
 use crate::ui::text::Weight;
@@ -26,17 +27,12 @@ const MAX_QUERY_CHARS: usize = 100;
 
 /// The count line and the grid below it, sized like a Console Page's.
 const COUNT_Y: f32 = 160.0;
-const COLS: usize = 8;
 const TOP: f32 = 196.0;
 /// Where the grid ends without the on-screen keyboard: the hint bar, which follows the bottom of
 /// the canvas (`ui::h`).
 fn view_bottom() -> f32 {
     chrome::hintbar_top()
 }
-const PITCH_X: f32 = COVER_W + COVER_GAP;
-const PITCH_Y: f32 = COVER_H + 72.0;
-/// Pixels scrolled per wheel notch.
-const WHEEL_STEP: f32 = PITCH_Y / 2.0;
 /// How far below a cover the focused Game's Display Title and System name reach.
 const CAPTION_H: f32 = 76.0;
 /// Where the empty-query hint and the no-match message go: 520 on a 1080 canvas, and as much
@@ -67,6 +63,8 @@ pub struct Search {
     total: usize,
     /// The `Ctx::revision` the results were loaded at.
     revision: Option<u64>,
+    /// The layout for `Ctx::games_per_row` as last seen; a change refits it (FR-UI-7).
+    grid: Grid,
     /// The focused result, while the results have focus.
     grid_focus: usize,
     scroll: f32,
@@ -87,6 +85,7 @@ impl Search {
             games: Vec::new(),
             total: 0,
             revision: None,
+            grid: Grid::new(ctx.games_per_row),
             grid_focus: 0,
             scroll: 0.0,
             scroll_h: ui::h(),
@@ -130,6 +129,18 @@ impl Search {
         }
     }
 
+    /// Follows a change to the Games per row, made in Settings while Search was open below it: the
+    /// same result keeps focus and is scrolled into view (FR-UI-7).
+    fn sync_grid(&mut self, ctx: &Ctx) {
+        let grid = Grid::new(ctx.games_per_row);
+        if grid != self.grid {
+            self.grid = grid;
+            // The previous frame's hit rects are for the old layout.
+            self.hits.clear();
+            self.reveal_focus();
+        }
+    }
+
     /// The query changed: match it afresh, from the first result.
     fn requery(&mut self, ctx: &Ctx) {
         self.grid_focus = 0;
@@ -162,16 +173,16 @@ impl Search {
     }
 
     fn content_h(&self) -> f32 {
-        self.games.len().div_ceil(COLS) as f32 * PITCH_Y
+        self.grid.content_h(self.games.len())
     }
 
     fn reveal_focus(&mut self) {
-        let row = (self.grid_focus / COLS) as f32;
+        let row = (self.grid_focus / self.grid.cols) as f32;
         let view = self.bottom() - TOP;
         let s = scroll::keep_visible(
             self.scroll,
-            row * PITCH_Y - RING_REACH,
-            RING_REACH + COVER_H + CAPTION_H,
+            row * self.grid.pitch_y - RING_REACH,
+            RING_REACH + self.grid.cover_h + CAPTION_H,
             view,
         );
         self.scroll = scroll::clamp(s, self.content_h(), view);
@@ -254,9 +265,9 @@ impl Search {
         match input {
             Input::Action(Action::Back) => return Transition::Pop,
             Input::Action(Action::Search) => self.focus = Focus::Field,
-            Input::Action(Action::Up) if self.grid_focus < COLS => self.focus = Focus::Field,
+            Input::Action(Action::Up) if self.grid_focus < self.grid.cols => self.focus = Focus::Field,
             Input::Action(dir) if dir.is_direction() => {
-                self.grid_focus = step(self.grid_focus, self.games.len(), COLS, dir);
+                self.grid_focus = step(self.grid_focus, self.games.len(), self.grid.cols, dir);
                 self.reveal_focus();
             }
             Input::Action(Action::Confirm) => return self.confirm(ctx),
@@ -284,7 +295,9 @@ impl Search {
             Input::Pointer(Pointer::Click { x, y }) if FIELD.contains(x, y) => self.focus = Focus::Field,
             Input::Pointer(Pointer::Wheel { dy }) => {
                 let view = self.bottom() - TOP;
-                self.scroll = scroll::clamp(self.scroll - dy * WHEEL_STEP, self.content_h(), view);
+                // Half a row per wheel notch.
+                let wheel_step = self.grid.pitch_y / 2.0;
+                self.scroll = scroll::clamp(self.scroll - dy * wheel_step, self.content_h(), view);
                 self.scroll_h = ui::h();
             }
             _ => {}
@@ -359,19 +372,14 @@ impl Search {
         let bottom = self.bottom();
         let clip_top = TOP - RING_REACH - 4.0;
         gfx.clip(Some(Rect::new(0.0, clip_top, W, bottom - clip_top)));
-        let first_row = ((self.scroll - RING_REACH - CAPTION_H) / PITCH_Y)
+        let grid = self.grid;
+        let first_row = ((self.scroll - RING_REACH - CAPTION_H) / grid.pitch_y)
             .floor()
             .max(0.0) as usize;
-        let last_row = ((self.scroll + bottom - TOP) / PITCH_Y).ceil() as usize;
+        let last_row = ((self.scroll + bottom - TOP) / grid.pitch_y).ceil() as usize;
         let focused = (self.focus == Focus::Results).then_some(self.grid_focus);
-        for i in first_row * COLS..((last_row + 1) * COLS).min(self.games.len()) {
-            let (row, col) = (i / COLS, i % COLS);
-            let r = Rect::new(
-                M + col as f32 * PITCH_X,
-                TOP + row as f32 * PITCH_Y - self.scroll,
-                COVER_W,
-                COVER_H,
-            );
+        for i in first_row * grid.cols..((last_row + 1) * grid.cols).min(self.games.len()) {
+            let r = grid.cover(i, TOP - self.scroll);
             let game = &self.games[i];
             let art = ctx.artwork.cover(&ctx.library, game);
             cover::draw(gfx, r, game, &art, true, focused == Some(i));
@@ -414,15 +422,16 @@ fn message(query: &str, total: usize) -> String {
     }
 }
 
-/// The focused Game's Display Title and System name under its cover `r`.
+/// The focused Game's Display Title and System name under its cover `r`, each cut to the cover's
+/// width.
 fn caption(gfx: &mut Gfx<'_>, r: Rect, game: &GameRow) {
-    let room = W - M - r.x;
     let title = TextStyle::new(22, Weight::Bold, TEXT);
-    let shown = cover::ellipsize(&game.title, room, |s| gfx.measure(s, title));
-    gfx.text(r.x, r.y + COVER_H + 40.0, &shown, title, Align::Left);
+    let shown = cover::ellipsize(&game.title, r.w, |s| gfx.measure(s, title));
+    gfx.text(r.x, r.y + r.h + 40.0, &shown, title, Align::Left);
     let system = systems::by_id(&game.system).map_or("?", |s| s.name);
     let name = TextStyle::new(17, Weight::Regular, MUTED);
-    gfx.text(r.x, r.y + COVER_H + 68.0, system, name, Align::Left);
+    let shown = cover::ellipsize(system, r.w, |s| gfx.measure(s, name));
+    gfx.text(r.x, r.y + r.h + 68.0, &shown, name, Align::Left);
 }
 
 impl Screen for Search {
@@ -432,6 +441,7 @@ impl Screen for Search {
 
     fn handle(&mut self, input: Input, ctx: &mut Ctx) -> Transition {
         self.kind = ctx.input_kind;
+        self.sync_grid(ctx);
         self.reload_if_changed(ctx);
         match self.focus {
             Focus::Field => self.handle_field(input, ctx),
@@ -441,6 +451,7 @@ impl Screen for Search {
 
     fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
         self.kind = ctx.input_kind;
+        self.sync_grid(ctx);
         self.reload_if_changed(ctx);
         self.refit();
         self.hits.clear();
@@ -574,6 +585,41 @@ mod tests {
             assert!(search.text_input(), "Up from the top row goes back to the field");
             assert_eq!(search.query(), "game", "and keeps the query");
         }
+    }
+
+    #[test]
+    fn with_6_games_per_row_down_moves_by_6_and_up_from_the_top_row_goes_to_the_field() {
+        let titles: Vec<String> = (0..10).map(|i| format!("Game {i:02}")).collect();
+        let titles: Vec<&str> = titles.iter().map(String::as_str).collect();
+        let (_dir, mut ctx) = ctx_with(&titles);
+        ctx.games_per_row = 6;
+        let mut search = Search::new(&ctx);
+        type_text(&mut search, "game", &mut ctx);
+        act(&mut search, Action::Down, &mut ctx);
+        act(&mut search, Action::Down, &mut ctx);
+        assert_eq!(search.grid_focus, 6);
+        act(&mut search, Action::Up, &mut ctx);
+        assert!(!search.text_input(), "Up from Game 6 stays in the results");
+        assert_eq!(search.grid_focus, 0);
+        act(&mut search, Action::Up, &mut ctx);
+        assert!(search.text_input(), "Up from the top row goes to the field");
+    }
+
+    /// The player changes the Games per row in Settings, opened over Search: back on Search, the
+    /// same result has focus, in view in the new layout.
+    #[test]
+    fn a_change_to_the_games_per_row_keeps_the_focused_result_and_scrolls_to_it() {
+        let (_dir, mut ctx, mut search) = search_scrolled_to_the_end();
+        let end_at_8 = search.scroll;
+        ctx.set_games_per_row(6);
+        search.handle(Input::Pointer(Pointer::Move { x: 0.0, y: 0.0 }), &mut ctx);
+        assert_eq!((search.grid.cols, search.grid_focus), (6, 49));
+        assert_eq!(
+            search.scroll,
+            search.content_h() - (1010.0 - TOP),
+            "the last row shows"
+        );
+        assert!(search.scroll > end_at_8);
     }
 
     #[test]

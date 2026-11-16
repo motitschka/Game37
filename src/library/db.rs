@@ -16,6 +16,7 @@ use super::FoundGame;
 use crate::cores::{ScreenLayout, WiiController};
 use crate::systems;
 use crate::ui::gfx::WindowMode;
+use crate::ui::grid;
 use crate::ui::input::ButtonStyle;
 
 /// How many Games a Shelf shows on Home (FR-HOME-3).
@@ -653,6 +654,20 @@ impl Library {
         self.set_setting("button_style", style.id())
     }
 
+    /// How many Games each row of every grid of covers shows (FR-UI-7); 8 until changed, or if the
+    /// stored value is not a number from 6 to 10.
+    pub fn games_per_row(&self) -> Result<usize, DbError> {
+        Ok(self
+            .setting("games_per_row")?
+            .and_then(|v| v.parse().ok())
+            .filter(|n| (grid::MIN_PER_ROW..=grid::MAX_PER_ROW).contains(n))
+            .unwrap_or(grid::DEFAULT_PER_ROW))
+    }
+
+    pub fn set_games_per_row(&self, per_row: usize) -> Result<(), DbError> {
+        self.set_setting("games_per_row", &per_row.to_string())
+    }
+
     /// Whether the window opens fullscreen (FR-UI-3); Remember last until changed, or if the stored
     /// one is unknown.
     pub fn window_mode(&self) -> Result<WindowMode, DbError> {
@@ -1236,6 +1251,26 @@ mod tests {
             lib.setting("button_style").unwrap().as_deref(),
             Some("playstation")
         );
+    }
+
+    #[test]
+    fn games_per_row_defaults_to_8_and_round_trips() {
+        let lib = Library::open_in_memory().unwrap();
+        assert_eq!(lib.games_per_row().unwrap(), 8);
+        for n in [6, 10] {
+            lib.set_games_per_row(n).unwrap();
+            assert_eq!(lib.games_per_row().unwrap(), n);
+        }
+        assert_eq!(lib.setting("games_per_row").unwrap().as_deref(), Some("10"));
+    }
+
+    #[test]
+    fn games_per_row_outside_6_to_10_or_not_a_number_reads_as_8() {
+        let lib = Library::open_in_memory().unwrap();
+        for stored in ["5", "11", "0", "-7", "eight", "", "8.5"] {
+            lib.set_setting("games_per_row", stored).unwrap();
+            assert_eq!(lib.games_per_row().unwrap(), 8, "stored {stored:?}");
+        }
     }
 
     #[test]

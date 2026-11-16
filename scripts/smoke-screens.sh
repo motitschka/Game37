@@ -24,8 +24,12 @@ for f in "wiiu/Xenoblade Chronicles X (Europe).wua" \
     : > "$root/games/$f"
 done
 mkdir -p "$root/empty"
+# A Games Root whose SNES Console Page has enough empty dummy Games to fill rows of covers.
+mkdir -p "$root/grid/snes"
+for i in $(seq -w 1 20); do : > "$root/grid/snes/Game $i.sfc"; done
 printf 'games_root = "%s/games"\n' "$root" > "$root/cfg.toml"
 printf 'games_root = "%s/empty"\n' "$root" > "$root/empty.toml"
+printf 'games_root = "%s/grid"\n' "$root" > "$root/grid.toml"
 
 (cd "$repo" && cargo build -q)
 bin=$repo/target/debug/game37
@@ -179,8 +183,14 @@ shot m8-settings-bios-ps2 "$root/cfg.toml" "settings,down,down,right$(printf ',d
 shot m6-settings-controls "$root/cfg.toml" "settings,down,down,down,down,right"
 shot m6-settings-xbox "$root/cfg.toml" "settings,down,down,down,down,right,right"
 shot m6-settings-display "$root/cfg.toml" "settings,down,down,down,down,down,right"
-# M8: Settings Display's Screens group, as in the mockup: the DS layout row switched to Side by side
-shot m8-settings-display-screens "$root/cfg.toml" "settings$(printf ',down%.0s' {1..5}),right,down,right"
+# M8: Settings Display's Screens group, as in the mockup: the DS layout row (below Startup window
+# mode, Motion and Games per row) switched to Side by side
+shot m8-settings-display-screens "$root/cfg.toml" "settings$(printf ',down%.0s' {1..5}),right,down,down,down,right"
+# D1: SNES's Console Page of 20 dummy Games at 10 and at 6 Games per row, set in Settings → Display
+# opened over it
+per_row="nexttab,right,right,confirm,settings$(printf ',down%.0s' {1..5}),right,down,down"
+shot d1-console-page-10 "$root/grid.toml" "$per_row,right,right,back,back"
+shot d1-console-page-6 "$root/grid.toml" "$per_row,left,left,back,back"
 
 # M6: Settings Artwork: the key row with no key set (screenshot mode runs Artwork off, so it shows
 # "Not set"), and the key entry modal with a typed key

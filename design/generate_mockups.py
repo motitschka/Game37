@@ -292,7 +292,21 @@ def dim(sv, opacity=0.6, x=0, w=W):
 
 # ---------- screens ----------
 
-CW, CH, GAP = 176, 264, 28  # shelf/grid cover size
+CW, CH, GAP = 176, 264, 28  # Shelf cover size
+# A grid of covers (Console Page, "See all", Search results) at the default 8 Games per row (FR-UI-7): the
+# row runs from margin to margin with GAP between covers, so the covers grow or shrink to fit; 2:3 covers.
+GRID_COLS = 8
+GW = (W - 2 * M - (GRID_COLS - 1) * GAP) / GRID_COLS
+GH = GW * 1.5
+
+
+def fit(s, w, size, weight=400):
+    """`s`, cut short with an ellipsis to fit `w` wide, as the app's `cover::ellipsize` does."""
+    if tw(s, size, weight) <= w:
+        return s
+    while s and tw(s + "…", size, weight) > w:
+        s = s[:-1]
+    return s.rstrip() + "…"
 
 
 def home(sv, focus=0):
@@ -410,12 +424,12 @@ def screen_console_page():
     glyph(sv, cx + 14, 194, "X")
     sv.add(text(cx + 60, 201, "Sort:", 19, 500, fill=C["muted"]), text(cx + 112, 201, "Most played", 19, 700),
            text(cx + chip_w - 22, 201, "▾", 18, 700, fill=C["muted"], anchor="end"))
-    cols, top, pitch = 8, 288, CH + 72
+    cols, top, pitch = GRID_COLS, 288, GH + 72
     for i, g in enumerate(GAMECUBE[:24]):
         r, c = divmod(i, cols)
-        x, y = M + c * (CW + GAP), top + r * pitch
-        cover(sv, x, y, CW, CH, g, focused=(i == 2), show_sys=False)
-        sv.add(text(x, y + CH + 32, g["hours"], 17, 500, fill=C["muted"]))
+        x, y = M + c * (GW + GAP), top + r * pitch
+        cover(sv, x, y, GW, GH, g, focused=(i == 2), show_sys=False)
+        sv.add(text(x, y + GH + 32, g["hours"], 17, 500, fill=C["muted"]))
     sv.add(rect(0, 900, W, 110, sv.lin([(0, C["bg"], 0), (1, C["bg"], 1)])))
     hintbar(sv, [(["A"], "Details"), (["B"], "Back"), (["Y"], "Options"), (["X"], "Sort")])
     sv.save()
@@ -467,12 +481,12 @@ def screen_console_missing_emulator():
            f' stroke-linecap="round" stroke-linejoin="round"/>',
            text(bx2 + 52, cy + 31, "Check again", 18, 600))
     # games stay browsable
-    cols, top, pitch = 8, by + bh + 40, CH + 72
+    cols, top, pitch = GRID_COLS, by + bh + 40, GH + 72
     for i, g in enumerate(WIIU):
         r, c = divmod(i, cols)
-        x, y = M + c * (CW + GAP), top + r * pitch
-        cover(sv, x, y, CW, CH, g, show_sys=False)
-        sv.add(text(x, y + CH + 32, "Never played", 17, 500, fill=C["muted"]))
+        x, y = M + c * (GW + GAP), top + r * pitch
+        cover(sv, x, y, GW, GH, g, show_sys=False)
+        sv.add(text(x, y + GH + 32, "Never played", 17, 500, fill=C["muted"]))
     sv.add(rect(0, 900, W, 110, sv.lin([(0, C["bg"], 0), (1, C["bg"], 1)])))
     hintbar(sv, [(["A"], "Copy command"), (["B"], "Back")])
     sv.save()
@@ -1404,6 +1418,9 @@ def screen_settings_display():
     y += h + 12
     r = settings_row(sv, y, h, "Motion", sub="Reduced turns off fades, slides and gliding")
     choice_value(sv, r, y, h, "Full")
+    y += h + 12
+    r = settings_row(sv, y, h, "Games per row", sub="Covers in each row of Console Pages, See all and Search")
+    choice_value(sv, r, y, h, "8")
     y = settings_group(sv, y + h + 12, "Screens")
     for label, layout, focused in [("DS layout", "Side by side", True), ("3DS layout", "Large and small", False)]:
         r = settings_row(sv, y, h, label, sub=SCREEN_LAYOUTS[layout], focused=focused)
@@ -1478,14 +1495,15 @@ SEARCH_TOTAL = 23  # all Games that aren't hidden
 def search_results(sv, focus=None):
     """The count line and the results grid, sized like the Console Page's."""
     sv.add(text(M, 160, f"{len(SEARCH_RESULTS)} Games", 20, 500, fill=C["muted"]))
-    cols, top, pitch = 8, 196, CH + 72
+    cols, top, pitch = GRID_COLS, 196, GH + 72
     for i, g in enumerate(SEARCH_RESULTS):
         r, c = divmod(i, cols)
-        x, y = M + c * (CW + GAP), top + r * pitch
-        cover(sv, x, y, CW, CH, g, focused=(i == focus), show_sys=True)
+        x, y = M + c * (GW + GAP), top + r * pitch
+        cover(sv, x, y, GW, GH, g, focused=(i == focus), show_sys=True)
         if i == focus:
-            sv.add(text(x, y + CH + 40, g["title"], 22, 700),
-                   text(x, y + CH + 68, SYS[g["sys"]][1], 17, 400, fill=C["muted"]))
+            # Each cut to the cover's width.
+            sv.add(text(x, y + GH + 40, fit(g["title"], GW, 22, 700), 22, 700),
+                   text(x, y + GH + 68, fit(SYS[g["sys"]][1], GW, 17, 400), 17, 400, fill=C["muted"]))
 
 
 def screen_search():

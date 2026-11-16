@@ -28,6 +28,7 @@ use crate::session::sdl;
 use crate::ui::chrome::{self, TopBar};
 use crate::ui::controls::{ControlEvent, Controls, StickAxis};
 use crate::ui::gfx::{Gfx, Layer, WindowMode};
+use crate::ui::grid;
 use crate::ui::hit;
 use crate::ui::input::{Action, ButtonStyle, Input, InputKind, Pointer, TextInput, button_action};
 use crate::ui::nav::{Flow, Hits, Nav};
@@ -100,6 +101,10 @@ fn open_library(ctx: &mut Ctx, config: &Config) -> Result<(), String> {
     ctx.window_mode = ctx.library.window_mode().unwrap_or_else(|e| {
         eprintln!("game37: can't read the window mode: {e}");
         WindowMode::default()
+    });
+    ctx.games_per_row = ctx.library.games_per_row().unwrap_or_else(|e| {
+        eprintln!("game37: can't read the Games per row: {e}");
+        grid::DEFAULT_PER_ROW
     });
     ctx.load_screen_layouts();
     Ok(())

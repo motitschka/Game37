@@ -12,7 +12,7 @@ use crate::artwork::Art;
 use crate::library::db::GameRow;
 use crate::systems;
 
-/// Cover size on Shelves and grids.
+/// Cover size on Shelves; a grid's follows its Games per row (`ui::grid`).
 pub const COVER_W: f32 = 176.0;
 pub const COVER_H: f32 = 264.0;
 /// Space between neighbouring covers.

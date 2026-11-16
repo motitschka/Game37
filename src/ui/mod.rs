@@ -9,6 +9,7 @@ pub mod chrome;
 pub mod controls;
 pub mod cover;
 pub mod gfx;
+pub mod grid;
 pub mod input;
 pub mod nav;
 pub mod scroll;

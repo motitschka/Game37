@@ -12,6 +12,7 @@ use crate::library::scan;
 use crate::session::input::PadState;
 use crate::systems::{SYSTEMS, System};
 use crate::ui::gfx::WindowMode;
+use crate::ui::grid;
 use crate::ui::input::{ButtonStyle, InputKind};
 
 /// A request to play a Game of an Embedded System from `start`.
@@ -82,6 +83,9 @@ pub struct Ctx {
     /// Whether the window opens fullscreen; `app.rs` loads it from the library at start, and a
     /// change takes effect at the next start.
     pub window_mode: WindowMode,
+    /// How many Games each row of every grid of covers shows (FR-UI-7); `app.rs` loads it from the
+    /// library at start, and an open grid follows a change from its next frame.
+    pub games_per_row: usize,
     /// How each two-screen System shows its screens, by System id; `app.rs` loads them from the
     /// library at start ([`Ctx::load_screen_layouts`]), and a change is saved as it is made. A
     /// System not in it has Large and small.
@@ -143,6 +147,7 @@ impl Ctx {
             input_kind: InputKind::Controller,
             button_style: ButtonStyle::default(),
             window_mode: WindowMode::default(),
+            games_per_row: grid::DEFAULT_PER_ROW,
             screen_layouts: HashMap::new(),
             emulators: Emulators::all_installed(),
             detect_emulators: Box::new(Emulators::detect),
@@ -181,6 +186,14 @@ impl Ctx {
         self.button_style = style;
         if let Err(e) = self.library.set_button_style(style) {
             eprintln!("game37: can't save the button style: {e}");
+        }
+    }
+
+    /// Switches how many Games each grid row shows (FR-UI-7) and saves it.
+    pub fn set_games_per_row(&mut self, per_row: usize) {
+        self.games_per_row = per_row;
+        if let Err(e) = self.library.set_games_per_row(per_row) {
+            eprintln!("game37: can't save the Games per row: {e}");
         }
     }
 
@@ -270,6 +283,9 @@ mod tests {
         ctx.set_window_mode(WindowMode::AlwaysWindowed);
         assert_eq!(ctx.window_mode, WindowMode::AlwaysWindowed);
         assert_eq!(ctx.library.window_mode().unwrap(), WindowMode::AlwaysWindowed);
+        ctx.set_games_per_row(10);
+        assert_eq!(ctx.games_per_row, 10);
+        assert_eq!(ctx.library.games_per_row().unwrap(), 10);
         ctx.remember_fullscreen(true);
         assert!(ctx.library.last_fullscreen().unwrap());
     }
