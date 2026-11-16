@@ -104,6 +104,20 @@ pub fn name(shelf: Shelf) -> &'static str {
     }
 }
 
+/// "See all" of `shelf` (FR-HOME-3): every Game, starting in the Shelf's order and sortable for this
+/// open grid only; on Favorites only the Favorites, in the Shelf's order.
+fn see_all(shelf: Shelf) -> GameGrid {
+    match shelf.see_all_order() {
+        Some(order) => {
+            GameGrid::new("All games", Box::new(|library, order| library.all_games(order))).own_sort(order)
+        }
+        None => GameGrid::new(
+            name(shelf),
+            Box::new(move |library, _| library.shelf(shelf, None)),
+        ),
+    }
+}
+
 /// What a position on a Shelf holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Item {
@@ -182,7 +196,7 @@ pub fn tilde(path: &Path, home: Option<&Path>) -> String {
 struct ShelfRow {
     shelf: Shelf,
     games: Vec<GameRow>,
-    /// Games matching the Shelf's rule, beyond the ones shown.
+    /// How many Games its "See all" grid shows, beyond the ones on the Shelf.
     total: usize,
 }
 
@@ -303,10 +317,13 @@ impl Home {
         }
         self.hits.clear();
         for (i, row) in self.shelves.iter_mut().enumerate() {
-            let loaded = ctx
-                .library
-                .shelf(row.shelf, Some(SHELF_SIZE))
-                .and_then(|games| Ok((games, ctx.library.shelf_count(row.shelf)?)));
+            let loaded = ctx.library.shelf(row.shelf, Some(SHELF_SIZE)).and_then(|games| {
+                let total = match row.shelf.see_all_order() {
+                    Some(_) => ctx.library.game_count()?,
+                    None => ctx.library.shelf_count(row.shelf)?,
+                };
+                Ok((games, total))
+            });
             let (games, total) = loaded.unwrap_or_else(|e| {
                 eprintln!("game37: {e}");
                 (Vec::new(), 0)
@@ -392,13 +409,7 @@ impl Home {
         let row = &self.shelves[self.focus.shelf];
         match item_at(row.games.len(), self.focus.col()) {
             Item::Game(i) => Transition::Push(Box::new(DetailsPage::new(row.games[i].clone(), ctx))),
-            Item::SeeAll => {
-                let shelf = row.shelf;
-                Transition::Push(Box::new(GameGrid::new(
-                    name(shelf),
-                    Box::new(move |library| library.shelf(shelf, None)),
-                )))
-            }
+            Item::SeeAll => Transition::Push(Box::new(see_all(row.shelf))),
             Item::Hint => Transition::None,
         }
     }
@@ -686,7 +697,7 @@ impl Screen for Home {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::library::db::HomeShelves;
+    use crate::library::db::{HomeShelves, SortOrder};
     use crate::ui;
 
     fn row(id: i64) -> GameRow {
@@ -966,6 +977,124 @@ mod tests {
             "on no Shelf, Favorites included"
         );
         assert_eq!(home.shelves[recently_added].games.len(), 2);
+    }
+
+    /// Four Games on two Systems, so that every order "See all" can show differs from the next one
+    /// in the cycle: Alpha and Beta added first, Mega played most, Beta last, Kid never.
+    fn library_for_see_all(ctx: &mut Ctx) {
+        let game = |system: &'static str, title: &str| FoundGame {
+            system,
+            rel_path: format!("{system}/{title}.zip"),
+            title: title.into(),
+        };
+        let lib = &mut ctx.library;
+        lib.sync_system("snes", &[game("snes", "Alpha"), game("snes", "Beta")], 100)
+            .unwrap();
+        lib.sync_system("nes", &[game("nes", "Kid"), game("nes", "Mega")], 200)
+            .unwrap();
+        let id = |lib: &crate::library::db::Library, title: &str| {
+            let rows = lib.all_games(SortOrder::AZ).unwrap();
+            rows.iter().find(|r| r.title == title).unwrap().id
+        };
+        lib.record_play(id(lib, "Alpha"), 300, 10).unwrap();
+        lib.record_play(id(lib, "Mega"), 400, 90).unwrap();
+        lib.record_play(id(lib, "Beta"), 500, 5).unwrap();
+    }
+
+    fn ids(ctx: &Ctx, order: SortOrder) -> Vec<i64> {
+        ctx.library
+            .all_games(order)
+            .unwrap()
+            .iter()
+            .map(|g| g.id)
+            .collect()
+    }
+
+    #[test]
+    fn see_all_opens_every_game_in_its_shelfs_order_and_sorts_it_without_storing_the_order() {
+        let mut ctx = Ctx::empty();
+        library_for_see_all(&mut ctx);
+        ctx.library.set_sort_order(SortOrder::ZA).unwrap(); // as a Console Page left it
+        for (shelf, order) in [
+            (Shelf::ContinuePlaying, SortOrder::LastPlayed),
+            (Shelf::RecentlyAdded, SortOrder::RecentlyAdded),
+            (Shelf::MostPlayed, SortOrder::MostPlayed),
+        ] {
+            let mut grid = see_all(shelf);
+            assert_eq!(grid.title(), "All games");
+            grid.handle(Input::Action(Action::Left), &mut ctx); // initial load
+            assert_eq!(grid.shown_order(), (Some(order), ids(&ctx, order)), "{shelf:?}");
+            assert!(grid.hints().contains(&Hint::new(&[Action::Sort], "Sort")));
+
+            grid.handle(Input::Action(Action::Sort), &mut ctx);
+            let next = order.next();
+            assert_ne!(ids(&ctx, next), ids(&ctx, order), "the orders differ");
+            assert_eq!(grid.shown_order(), (Some(next), ids(&ctx, next)), "{shelf:?}");
+            assert_eq!(
+                ctx.library.sort_order().unwrap(),
+                SortOrder::ZA,
+                "the stored order is untouched"
+            );
+
+            let mut again = see_all(shelf);
+            again.handle(Input::Action(Action::Left), &mut ctx);
+            assert_eq!(
+                again.shown_order().0,
+                Some(order),
+                "starts in {shelf:?}'s order again"
+            );
+        }
+    }
+
+    #[test]
+    fn see_all_on_favorites_shows_only_the_favorites_and_ignores_sort() {
+        let mut ctx = Ctx::empty();
+        library_for_see_all(&mut ctx);
+        let favorites = [ids(&ctx, SortOrder::AZ)[3], ids(&ctx, SortOrder::AZ)[0]]; // Mega, then Alpha
+        for (at, id) in favorites.into_iter().enumerate() {
+            ctx.library.set_favorite(id, true, at as i64).unwrap();
+        }
+        let mut grid = see_all(Shelf::Favorites);
+        assert_eq!(grid.title(), "Favorites");
+        grid.handle(Input::Action(Action::Left), &mut ctx); // initial load
+        let shown = grid.shown_order();
+        assert_eq!(shown.1, [favorites[1], favorites[0]], "latest Favorite first");
+        assert_eq!(shown.0, None);
+
+        grid.handle(Input::Action(Action::Sort), &mut ctx);
+        assert_eq!(grid.shown_order(), shown);
+        assert!(!grid.hints().contains(&Hint::new(&[Action::Sort], "Sort")));
+        assert_eq!(ctx.library.sort_order().unwrap(), SortOrder::AZ);
+    }
+
+    #[test]
+    fn see_all_counts_the_games_its_grid_shows() {
+        let mut ctx = Ctx::empty();
+        library_for_see_all(&mut ctx);
+        let alpha = ids(&ctx, SortOrder::AZ)[0];
+        ctx.library.set_favorite(alpha, true, 0).unwrap();
+        let mut home = Home::new();
+        home.handle(Input::Action(Action::Left), &mut ctx); // initial load
+        let totals: Vec<_> = home.shelves.iter().map(|r| (r.shelf, r.total)).collect();
+        assert_eq!(
+            totals,
+            [
+                (Shelf::Favorites, 1),
+                (Shelf::ContinuePlaying, 4),
+                (Shelf::RecentlyAdded, 4),
+                (Shelf::MostPlayed, 4)
+            ]
+        );
+
+        let continue_playing = 1; // Shelf::ALL's index for Shelf::ContinuePlaying
+        home.focus.shelf = continue_playing;
+        home.focus.cols[continue_playing] = 3; // See all, after the 3 Games played
+        let Transition::Push(mut grid) = home.handle(Input::Action(Action::Confirm), &mut ctx) else {
+            panic!("See all should open a grid");
+        };
+        assert_eq!(grid.title(), "All games");
+        grid.handle(Input::Action(Action::Sort), &mut ctx);
+        assert_eq!(ctx.library.sort_order().unwrap(), SortOrder::AZ, "not stored");
     }
 
     #[test]

@@ -1,5 +1,6 @@
-//! A titled grid of tall covers for a list of Games: "See all" on Home, and a System's Console
-//! Page (FR-CAR-3), after `screen_console_page` in `design/generate_mockups.py`.
+//! A titled grid of tall covers for a list of Games: "See all" on Home (FR-HOME-3), and a System's
+//! Console Page (FR-CAR-3), after `screen_console_page` and `screen_see_all` in
+//! `design/generate_mockups.py`.
 
 use std::time::{Duration, Instant};
 
@@ -20,12 +21,25 @@ use crate::ui::text::Weight;
 use crate::ui::theme::{BG, Colour, LINE, MUTED, SURFACE, TEXT, WARN};
 use crate::ui::{self, M, Rect, W, hit, scroll};
 
-/// Where a grid's Games come from; called again whenever the library changes.
-pub type Source = Box<dyn Fn(&Library) -> Result<Vec<GameRow>, DbError>>;
+/// Where a grid's Games come from, in the grid's sort order (ignored by a grid that can't be
+/// sorted); called again whenever the library or the order changes.
+pub type Source = Box<dyn Fn(&Library, SortOrder) -> Result<Vec<GameRow>, DbError>>;
 
-/// A Console Page's extras, absent on Home's "See all": the colour tint, the sort chip, the
-/// empty-state hint pointing at the System's folder (FR-CAR-4), and the System itself, to check
-/// for a missing Standalone Emulator (FR-CAR-9).
+/// Whether and how a grid's Sort action changes its order (FR-CAR-5, FR-HOME-3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sorting {
+    /// No sort chip, no Sort action: Favorites' "See all", in the Shelf's own order.
+    Fixed,
+    /// The stored global order, which Sort steps for every Console Page: a Console Page.
+    Global,
+    /// An order of this open grid's own, which Sort steps without reading or writing the stored
+    /// one: "See all" of every Game.
+    Own,
+}
+
+/// A Console Page's extras, absent on Home's "See all": the colour tint, the empty-state hint
+/// pointing at the System's folder (FR-CAR-4), and the System itself, to check for a missing
+/// Standalone Emulator (FR-CAR-9).
 struct Extra {
     tint: Colour,
     empty_hint: String,
@@ -109,7 +123,7 @@ pub fn refocus(old: &[GameRow], focus: usize, new: &[GameRow]) -> usize {
 }
 
 /// The header line under the title: "<n> games", singular when one, with the sort order appended
-/// for a Console Page (FR-CAR-5).
+/// for a sortable grid (FR-CAR-5).
 fn header(count: usize, order: Option<SortOrder>) -> String {
     let games = match count {
         1 => "1 game".to_owned(),
@@ -150,10 +164,11 @@ pub struct GameGrid {
     ringed: Option<usize>,
     hits: Vec<(Rect, usize)>,
     extra: Option<Extra>,
+    sorting: Sorting,
     /// Where the sort chip was last drawn, for the mouse.
     sort_hit: Option<Rect>,
-    /// The global sort order, cached from `reload()` so `draw()` never queries the database
-    /// (NFR-3). Meaningless when `extra` is `None`.
+    /// The order shown: for a Console Page the global one, cached from `reload()` so `draw()` never
+    /// queries the database (NFR-3). Meaningless when `sorting` is `Fixed`.
     sort_order: SortOrder,
     /// Whether the missing-emulator notice is shown, last computed from `ctx.emulators`
     /// (FR-CAR-9).
@@ -182,6 +197,7 @@ impl GameGrid {
             ringed: None,
             hits: Vec::new(),
             extra: None,
+            sorting: Sorting::Fixed,
             sort_hit: None,
             sort_order: SortOrder::default(),
             notice_shown: false,
@@ -207,20 +223,44 @@ impl GameGrid {
         }
     }
 
-    /// Turns this into a Console Page: a `tint` from the System's colour, a sort chip,
-    /// `empty_hint` shown in place of the grid when the System has no Games (FR-CAR-4, FR-CAR-5),
-    /// and the System itself, so a missing Standalone Emulator can show its notice (FR-CAR-9).
+    /// Turns this into a Console Page: a `tint` from the System's colour, a sort chip for the stored
+    /// global order, `empty_hint` shown in place of the grid when the System has no Games
+    /// (FR-CAR-4, FR-CAR-5), and the System itself, so a missing Standalone Emulator can show its
+    /// notice (FR-CAR-9).
     pub fn sortable(mut self, tint: Colour, empty_hint: String, system: &'static System) -> GameGrid {
         self.extra = Some(Extra {
             tint,
             empty_hint,
             system,
         });
+        self.sorting = Sorting::Global;
         self
     }
 
+    /// Gives this grid a sort chip of its own, starting at `order`: Sort steps the order for this
+    /// open grid only, never reading or writing the stored global one (FR-HOME-3).
+    pub fn own_sort(mut self, order: SortOrder) -> GameGrid {
+        self.sorting = Sorting::Own;
+        self.sort_order = order;
+        self
+    }
+
+    fn is_sortable(&self) -> bool {
+        self.sorting != Sorting::Fixed
+    }
+
+    /// The order shown, `None` for a grid that can't be sorted, and the Games in it.
+    #[cfg(test)]
+    pub fn shown_order(&self) -> (Option<SortOrder>, Vec<i64>) {
+        let order = self.is_sortable().then_some(self.sort_order);
+        (order, self.games.iter().map(|g| g.id).collect())
+    }
+
     fn reload(&mut self, ctx: &Ctx) {
-        let games = (self.source)(&ctx.library).unwrap_or_else(|e| {
+        if self.sorting == Sorting::Global {
+            self.sort_order = ctx.library.sort_order().unwrap_or_default();
+        }
+        let games = (self.source)(&ctx.library, self.sort_order).unwrap_or_else(|e| {
             eprintln!("game37: {e}");
             Vec::new()
         });
@@ -231,9 +271,6 @@ impl GameGrid {
         // next draw.
         self.hits.clear();
         self.sort_hit = None;
-        if self.extra.is_some() {
-            self.sort_order = ctx.library.sort_order().unwrap_or_default();
-        }
         self.scroll = scroll::clamp(self.scroll, self.content_h(), bottom() - self.top_y());
         self.reveal_focus();
     }
@@ -333,14 +370,17 @@ impl GameGrid {
         }
     }
 
-    /// Cycles the global sort order and reloads (FR-CAR-5); a no-op on an empty Console Page, where
-    /// it would change the order with no visible effect.
+    /// Steps the sort order and reloads (FR-CAR-5): a Console Page stores the new global order, "See
+    /// all" of every Game keeps it to itself (FR-HOME-3). A no-op on an empty grid, where it would
+    /// change the order with no visible effect.
     fn cycle_sort(&mut self, ctx: &mut Ctx) {
-        if self.extra.is_none() || self.games.is_empty() {
+        if !self.is_sortable() || self.games.is_empty() {
             return;
         }
         let next = self.sort_order.next();
-        if let Err(e) = ctx.library.set_sort_order(next) {
+        if self.sorting == Sorting::Global
+            && let Err(e) = ctx.library.set_sort_order(next)
+        {
             eprintln!("game37: can't save the sort order: {e}");
         }
         self.sort_order = next;
@@ -514,7 +554,7 @@ impl Screen for GameGrid {
         match input {
             Input::Action(Action::Back) => return Transition::Pop,
             Input::Action(Action::Confirm) if self.notice_focus.is_some() => self.activate_notice(ctx),
-            Input::Action(Action::Sort) if self.extra.is_some() && self.notice_focus.is_none() => {
+            Input::Action(Action::Sort) if self.is_sortable() && self.notice_focus.is_none() => {
                 self.cycle_sort(ctx)
             }
             Input::Action(dir) if dir.is_direction() => {
@@ -608,7 +648,7 @@ impl Screen for GameGrid {
         // the global order with no visible effect.
         let empty_console_page = self.extra.is_some() && self.games.is_empty();
         if !empty_console_page {
-            let order = self.extra.is_some().then_some(self.sort_order);
+            let order = (self.is_sortable() && !self.games.is_empty()).then_some(self.sort_order);
             gfx.text(
                 title_x + 2.0,
                 236.0,
@@ -699,7 +739,7 @@ impl Screen for GameGrid {
                     hints.push(Hint::new(&[Action::Confirm], "Details"));
                     hints.push(Hint::new(&[Action::Options], "Options"));
                 }
-                if self.extra.is_some() && !self.games.is_empty() {
+                if self.is_sortable() && !self.games.is_empty() {
                     hints.push(Hint::new(&[Action::Sort], "Sort"));
                 }
                 hints.push(Hint::new(&[Action::Back], "Back"));
@@ -801,7 +841,7 @@ mod tests {
     }
 
     fn console_source() -> Source {
-        Box::new(|library| library.system_games("snes", SortOrder::AZ))
+        Box::new(|library, _| library.system_games("snes", SortOrder::AZ))
     }
 
     #[test]
@@ -934,8 +974,8 @@ mod tests {
 
         grid.handle(Input::Action(Action::Sort), &mut ctx);
 
-        assert_eq!(grid.sort_order, SortOrder::LastPlayed);
-        assert_eq!(ctx.library.sort_order().unwrap(), SortOrder::LastPlayed);
+        assert_eq!(grid.sort_order, SortOrder::ZA);
+        assert_eq!(ctx.library.sort_order().unwrap(), SortOrder::ZA);
     }
 
     #[test]
@@ -1116,7 +1156,7 @@ mod tests {
     }
 
     fn wii_u_source() -> Source {
-        Box::new(|library| library.system_games("wiiu", SortOrder::AZ))
+        Box::new(|library, _| library.system_games("wiiu", SortOrder::AZ))
     }
 
     fn found_wii_u(n: usize) -> FoundGame {

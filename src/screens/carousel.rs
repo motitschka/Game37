@@ -187,8 +187,7 @@ fn empty_hint(system: &System, games_root: &Path, home: Option<&Path>) -> String
 /// A System's Console Page: its Games in the global sort order (FR-CAR-3, FR-CAR-5).
 fn console_page(system: &'static System, ctx: &Ctx) -> Box<dyn Screen> {
     let id = system.id;
-    let source =
-        Box::new(move |library: &Library| library.system_games(id, library.sort_order().unwrap_or_default()));
+    let source = Box::new(move |library: &Library, order| library.system_games(id, order));
     let hint = empty_hint(system, &ctx.games_root, dirs::home_dir().as_deref());
     Box::new(GameGrid::new(system.name, source).sortable(Colour::hex(system.colour), hint, system))
 }

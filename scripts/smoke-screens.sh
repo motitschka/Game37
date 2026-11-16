@@ -200,6 +200,9 @@ shot d1-home-lower "$root/cfg.toml" "down,down"
 shot d1-settings-home "$root/cfg.toml" "settings$(printf ',down%.0s' {1..5}),right,down"
 shot d1-home-two-shelves "$root/cfg.toml" \
     "settings$(printf ',down%.0s' {1..5}),right,left,left,left,down,left,left,left,back,back"
+# D1: "See all" of Recently added (every Game, as m1-see-all opens it) after one press of Sort:
+# sorted A–Z (the cycle wraps after Recently added), for this grid only
+shot d1-see-all-sorted "$root/cfg.toml" "down,down,$(printf 'right,%.0s' {1..25})confirm,sort"
 
 # M6: Settings Artwork: the key row with no key set (screenshot mode runs Artwork off, so it shows
 # "Not set"), and the key entry modal with a typed key

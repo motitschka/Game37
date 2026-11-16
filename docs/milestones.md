@@ -189,7 +189,7 @@ checks so that they are made once, on the final look. The speedrun timer (M7) fo
 |---|---|
 | 1 Grids | Done |
 | 2 Home | Done |
-| 3 Sorting and See all | Not started |
+| 3 Sorting and See all | Done (the two release orders come with step 5) |
 | 4 Playtime | Not started |
 | 5 Release dates | Not started |
 | 6 Logos | Not started |

@@ -461,6 +461,33 @@ def screen_console_page():
     sv.save()
 
 
+def screen_see_all():
+    """"See all" on Recently added (FR-HOME-3): every Game in the library, sortable like a Console Page
+    but without a System's tint bar, each cover keeping its System badge."""
+    sv = Svg("46-see-all", "See all: All games")
+    background(sv)
+    topbar(sv, active="home")
+    sv.add(text(M, 202, "All games", 52, 800),
+           text(M + 2, 236, "35 games  ·  Sorted by Recently added", 20, 500, fill=C["muted"]))
+    label = "Recently added"
+    chip_w = 330 + tw(label, 19, 700) - tw("Most played", 19, 700)
+    cx = W - M - chip_w
+    sv.add(rect(cx, 168, chip_w, 52, C["surface"], rx=26, stroke=C["line"], sw=1))
+    glyph(sv, cx + 14, 194, "X")
+    sv.add(text(cx + 60, 201, "Sort:", 19, 500, fill=C["muted"]), text(cx + 112, 201, label, 19, 700),
+           text(cx + chip_w - 22, 201, "▾", 18, 700, fill=C["muted"], anchor="end"))
+    cols, top, pitch = GRID_COLS, 288, GH + 72
+    for i, g in enumerate((RECENT + CONTINUE + FAVS + GAMECUBE)[:24]):
+        r, c = divmod(i, cols)
+        x, y = M + c * (GW + GAP), top + r * pitch
+        cover(sv, x, y, GW, GH, g, focused=(i == 0))
+        if g["hours"]:
+            sv.add(text(x, y + GH + 32, g["hours"], 17, 500, fill=C["muted"]))
+    sv.add(rect(0, 900, W, 110, sv.lin([(0, C["bg"], 0), (1, C["bg"], 1)])))
+    hintbar(sv, [(["A"], "Details"), (["B"], "Back"), (["Y"], "Options"), (["X"], "Sort")])
+    sv.save()
+
+
 WIIU = [game(t, "wiiu") for t in [
     "Xenoblade Chronicles X", "Breath of the Wild", "Mario Kart 8", "Splatoon", "Pikmin 3", "Bayonetta 2",
     "Super Mario 3D World", "Wind Waker HD", "Tropical Freeze", "Twilight Princess HD"]]
@@ -1873,6 +1900,6 @@ if __name__ == "__main__":
                screen_setup_key, screen_settings_controls, screen_settings_about,
                screen_pause_restart_confirm, screen_3ds_layout_large, screen_3ds_layout_large_3,
                screen_3ds_layout_side, screen_3ds_layout_single, screen_settings_display,
-               screen_settings_home]:
+               screen_settings_home, screen_see_all]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))

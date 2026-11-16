@@ -125,6 +125,17 @@ impl Shelf {
         }
     }
 
+    /// The order its "See all" grid of every Game starts in (FR-HOME-3); `None` for Favorites, whose
+    /// "See all" shows only the Favorites, in the Shelf's own order.
+    pub fn see_all_order(self) -> Option<SortOrder> {
+        match self {
+            Shelf::Favorites => None,
+            Shelf::ContinuePlaying => Some(SortOrder::LastPlayed),
+            Shelf::RecentlyAdded => Some(SortOrder::RecentlyAdded),
+            Shelf::MostPlayed => Some(SortOrder::MostPlayed),
+        }
+    }
+
     /// Primary sort key, ascending; ties fall back to Display Title and id.
     fn key(self, game: &Fetched) -> Reverse<Option<i64>> {
         match self {
@@ -191,20 +202,32 @@ impl Default for HomeShelves {
     }
 }
 
-/// The global Console Page sort order (FR-CAR-5).
+/// An order a sortable grid shows its Games in (FR-CAR-5): a Console Page in the stored global one,
+/// "See all" of every Game in one of its own (FR-HOME-3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SortOrder {
     #[default]
     AZ,
+    ZA,
     LastPlayed,
     MostPlayed,
     RecentlyAdded,
 }
 
 impl SortOrder {
+    /// Every order, in the Sort action's cycle (FR-CAR-5).
+    pub const ALL: [SortOrder; 5] = [
+        SortOrder::AZ,
+        SortOrder::ZA,
+        SortOrder::LastPlayed,
+        SortOrder::MostPlayed,
+        SortOrder::RecentlyAdded,
+    ];
+
     fn as_str(self) -> &'static str {
         match self {
             SortOrder::AZ => "az",
+            SortOrder::ZA => "za",
             SortOrder::LastPlayed => "last_played",
             SortOrder::MostPlayed => "most_played",
             SortOrder::RecentlyAdded => "recently_added",
@@ -212,30 +235,20 @@ impl SortOrder {
     }
 
     fn from_str(s: &str) -> Option<SortOrder> {
-        [
-            SortOrder::AZ,
-            SortOrder::LastPlayed,
-            SortOrder::MostPlayed,
-            SortOrder::RecentlyAdded,
-        ]
-        .into_iter()
-        .find(|o| o.as_str() == s)
+        SortOrder::ALL.into_iter().find(|o| o.as_str() == s)
     }
 
     /// The next order in the Sort action's cycle (FR-CAR-5), wrapping back to A–Z.
     pub fn next(self) -> SortOrder {
-        match self {
-            SortOrder::AZ => SortOrder::LastPlayed,
-            SortOrder::LastPlayed => SortOrder::MostPlayed,
-            SortOrder::MostPlayed => SortOrder::RecentlyAdded,
-            SortOrder::RecentlyAdded => SortOrder::AZ,
-        }
+        let i = SortOrder::ALL.iter().position(|&o| o == self).unwrap_or(0);
+        SortOrder::ALL[(i + 1) % SortOrder::ALL.len()]
     }
 
-    /// The label shown in a Console Page's header and sort chip.
+    /// The label shown in a sortable grid's header and sort chip.
     pub fn label(self) -> &'static str {
         match self {
             SortOrder::AZ => "A–Z",
+            SortOrder::ZA => "Z–A",
             SortOrder::LastPlayed => "Last played",
             SortOrder::MostPlayed => "Most played",
             SortOrder::RecentlyAdded => "Recently added",
@@ -243,13 +256,23 @@ impl SortOrder {
     }
 
     /// Primary sort key, ascending; ties fall back to Display Title and id. `Reverse` puts the largest
-    /// value first and `None` (never played) last.
+    /// value first and `None` (never played) last. Z–A has none: [`SortOrder::sort`] orders it by
+    /// Display Title alone.
     fn key(self, game: &Fetched) -> Reverse<Option<i64>> {
         match self {
-            SortOrder::AZ => Reverse(None),
+            SortOrder::AZ | SortOrder::ZA => Reverse(None),
             SortOrder::LastPlayed => Reverse(game.row.last_played),
             SortOrder::MostPlayed => Reverse(Some(game.playtime_secs)),
             SortOrder::RecentlyAdded => Reverse(Some(game.row.date_added)),
+        }
+    }
+
+    /// `games` in this order.
+    fn sort(self, games: Vec<Fetched>) -> Vec<GameRow> {
+        match self {
+            // Display Title descending, case-insensitively, like A–Z; ties by id.
+            SortOrder::ZA => sorted_by(games, |g| (Reverse(g.row.title.to_lowercase()), g.row.id), None),
+            order => sorted(games, |g| order.key(g), None),
         }
     }
 }
@@ -305,11 +328,20 @@ impl Fetched {
 
 /// Sorts by `key`, then Display Title case-insensitively, then id, and keeps at most `limit`.
 fn sorted(
-    mut games: Vec<Fetched>,
+    games: Vec<Fetched>,
     key: impl Fn(&Fetched) -> Reverse<Option<i64>>,
     limit: Option<usize>,
 ) -> Vec<GameRow> {
-    games.sort_by_cached_key(|g| (key(g), g.row.title.to_lowercase(), g.row.id));
+    sorted_by(games, |g| (key(g), g.row.title.to_lowercase(), g.row.id), limit)
+}
+
+/// Sorts by `key` alone and keeps at most `limit`.
+fn sorted_by<K: Ord>(
+    mut games: Vec<Fetched>,
+    key: impl Fn(&Fetched) -> K,
+    limit: Option<usize>,
+) -> Vec<GameRow> {
+    games.sort_by_cached_key(key);
     let rows = games.into_iter().map(|g| g.row);
     match limit {
         Some(n) => rows.take(n).collect(),
@@ -448,7 +480,20 @@ impl Library {
     /// A Console Page: one System's Games in the given order.
     pub fn system_games(&self, system: &str, order: SortOrder) -> Result<Vec<GameRow>, DbError> {
         let games = self.fetch("system = ?1", [system])?;
-        Ok(sorted(games, |g| order.key(g), None))
+        Ok(order.sort(games))
+    }
+
+    /// "See all" of every Game (FR-HOME-3): the Games of every System, leaving out Hidden Games, in
+    /// the given order.
+    pub fn all_games(&self, order: SortOrder) -> Result<Vec<GameRow>, DbError> {
+        Ok(order.sort(self.fetch("1", [])?))
+    }
+
+    /// How many Games [`Library::all_games`] lists.
+    pub fn game_count(&self) -> Result<usize, DbError> {
+        let sql = format!("SELECT COUNT(*) FROM games WHERE {VISIBLE}");
+        let n: i64 = self.conn.query_row(&sql, [], |r| r.get(0))?;
+        Ok(n as usize)
     }
 
     /// One visible Game by id, e.g. for its Details Page to re-read; `None` once it is hidden or
@@ -1198,12 +1243,7 @@ mod tests {
             assert_eq!(titles(&lib.shelf(shelf, None).unwrap()), ["Shown"], "{shelf:?}");
             assert_eq!(lib.shelf_count(shelf).unwrap(), 1, "{shelf:?}");
         }
-        for order in [
-            SortOrder::AZ,
-            SortOrder::LastPlayed,
-            SortOrder::MostPlayed,
-            SortOrder::RecentlyAdded,
-        ] {
+        for order in SortOrder::ALL {
             assert_eq!(
                 titles(&lib.system_games("snes", order).unwrap()),
                 ["Shown"],
@@ -1240,7 +1280,8 @@ mod tests {
 
     #[test]
     fn sort_order_cycles_and_wraps() {
-        assert_eq!(SortOrder::AZ.next(), SortOrder::LastPlayed);
+        assert_eq!(SortOrder::AZ.next(), SortOrder::ZA);
+        assert_eq!(SortOrder::ZA.next(), SortOrder::LastPlayed);
         assert_eq!(SortOrder::LastPlayed.next(), SortOrder::MostPlayed);
         assert_eq!(SortOrder::MostPlayed.next(), SortOrder::RecentlyAdded);
         assert_eq!(
@@ -1248,6 +1289,58 @@ mod tests {
             SortOrder::AZ,
             "wraps back to A–Z"
         );
+    }
+
+    #[test]
+    fn every_sort_order_is_stored_and_read_back_by_its_id() {
+        for order in SortOrder::ALL {
+            assert_eq!(SortOrder::from_str(order.as_str()), Some(order), "{order:?}");
+        }
+        assert_eq!(SortOrder::ZA.as_str(), "za");
+        assert_eq!(SortOrder::from_str("newest"), None);
+    }
+
+    #[test]
+    fn z_to_a_is_a_to_z_reversed_ignoring_case() {
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_system("snes", &games("snes", &["beta", "Alpha", "Gamma", "delta"]), 100)
+            .unwrap();
+        let (az, za) = (
+            lib.system_games("snes", SortOrder::AZ).unwrap(),
+            lib.system_games("snes", SortOrder::ZA).unwrap(),
+        );
+        let mut za = titles(&za);
+        assert_eq!(za, ["Gamma", "delta", "beta", "Alpha"]);
+        za.reverse();
+        assert_eq!(za, titles(&az));
+    }
+
+    #[test]
+    fn all_games_spans_systems_leaves_out_hidden_games_and_puts_never_played_last() {
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_system("snes", &games("snes", &["Alpha", "Hidden", "Zulu"]), 100)
+            .unwrap();
+        lib.sync_system("nes", &games("nes", &["Kid", "Mega"]), 200)
+            .unwrap();
+        lib.set_hidden(id_of(&lib, "snes", "Hidden"), true).unwrap();
+        lib.record_play(id_of(&lib, "nes", "Mega"), 500, 30).unwrap();
+        lib.record_play(id_of(&lib, "snes", "Zulu"), 400, 90).unwrap();
+
+        let order = |o| titles(&lib.all_games(o).unwrap()).join(",");
+        assert_eq!(order(SortOrder::AZ), "Alpha,Kid,Mega,Zulu");
+        assert_eq!(order(SortOrder::ZA), "Zulu,Mega,Kid,Alpha");
+        assert_eq!(
+            order(SortOrder::LastPlayed),
+            "Mega,Zulu,Alpha,Kid",
+            "never played last"
+        );
+        assert_eq!(
+            order(SortOrder::MostPlayed),
+            "Zulu,Mega,Alpha,Kid",
+            "no Playtime last"
+        );
+        assert_eq!(order(SortOrder::RecentlyAdded), "Kid,Mega,Alpha,Zulu");
+        assert_eq!(lib.game_count().unwrap(), 4);
     }
 
     #[test]
