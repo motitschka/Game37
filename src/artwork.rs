@@ -14,9 +14,9 @@
 //! scrolled past are never fetched, and at most [`MAX_QUEUED_NET`] network jobs wait at once.
 //!
 //! Only Games a screen asks about have their Artwork looked up, never the whole library: SteamGridDB's
-//! terms forbid bulk loading. The one exception is each Game's Release Date (FR-ART-5), which
-//! [`Artwork::ask_release_dates`] asks for once per Game, one paced request each and no images, only
-//! while nothing a screen asks for waits. Only SteamGridDB hosts are contacted (NFR-5), and the API
+//! terms forbid bulk loading. [`Artwork::ask_release_dates`] can ask for each Game's Release Date
+//! (FR-ART-5) once per Game, one paced request each and no images, only while nothing a screen asks
+//! for waits; nothing calls it yet, until the owner has decided whether those terms allow it. Only SteamGridDB hosts are contacted (NFR-5), and the API
 //! key only goes to the API.
 
 use std::cell::{Cell, OnceCell, RefCell};

@@ -135,7 +135,6 @@ fn start_shot_library(ctx: &mut Ctx, with_artwork: bool) -> Result<(), String> {
 fn start_live_library(ctx: &mut Ctx) -> LibraryWatcher {
     ctx.emulators = Emulators::detect();
     ctx.artwork = artwork(&ctx.config_path, &ctx.data_dir);
-    ctx.artwork.ask_release_dates(&ctx.library);
     watch(ctx)
 }
 
@@ -423,8 +422,6 @@ fn background(
                 *sync_failing = false;
                 if changed {
                     ctx.revision += 1;
-                    // New or renamed Games need their Release Dates (FR-ART-5).
-                    ctx.artwork.ask_release_dates(&ctx.library);
                 }
             }
             // The watcher retries the failed sync every frame: log it and reload the views

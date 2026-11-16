@@ -191,7 +191,7 @@ checks so that they are made once, on the final look. The speedrun timer (M7) fo
 | 2 Home | Done |
 | 3 Sorting and See all | Done (the two release orders come with step 5) |
 | 4 Playtime | Done |
-| 5 Release dates | Dates fetched and stored; sort orders and Details Page not started |
+| 5 Release dates | Dates stored, and recorded whenever a cover is looked up. The background pass over the whole library is built but switched off until the owner decides whether SteamGridDB's terms allow it. Sort orders and Details Page not started |
 | 6 Logos | Not started |
 
 **Done when**
