@@ -207,7 +207,7 @@ pub static SYSTEMS: [System; 19] = [
         year: 2025,
         kind: Kind::Upcoming,
         colour: 0xE8590C,
-        extensions: &["nsp", "xci"],
+        extensions: &["nsp", "xci", "nup"],
         folder_markers: &[],
     },
     System {

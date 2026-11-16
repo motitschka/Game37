@@ -102,7 +102,7 @@ Listed in System Order: Nintendo first, then Sony, each by European release date
 | 3DS | `3ds` | Azahar Core | `.3ds` `.cci` `.cxi` `.3dsx` `.app` `.elf` `.axf` `.zcci` `.zcxi` `.z3dsx` `.bcci` `.bcxi` |
 | Wii U | `wiiu` | Cemu | `.wua` `.wud` `.wux`, or a game folder with `code/`, `content/` and `meta/` |
 | Switch | `switch` | suyu Core (built once, see below) | `.nsp` `.xci` `.nro` |
-| Switch 2 | `switch2` | not playable yet | `.nsp` `.xci` |
+| Switch 2 | `switch2` | not playable yet | `.nsp` `.xci` `.nup` |
 | PlayStation | `ps1` | Beetle PSX HW Core | `.cue` (with its `.bin`) `.chd` `.pbp` `.m3u` |
 | PlayStation 2 | `ps2` | LRPS2 Core | `.iso` `.chd` `.cso` `.zso` `.ciso` `.cue` (with its `.bin`) `.elf` |
 | PSP | `psp` | PPSSPP Core | `.iso` `.cso` `.pbp` `.chd` |

@@ -227,6 +227,20 @@ mod tests {
     }
 
     #[test]
+    fn a_nup_file_is_a_switch_2_game_but_not_a_switch_game() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        touch(root, "switch2/Mario Kart World (World).nup");
+        touch(root, "switch/Mario Kart World (World).nup");
+
+        assert_eq!(
+            rel_paths(&scan(root, "switch2")),
+            ["switch2/Mario Kart World (World).nup"]
+        );
+        assert!(scan(root, "switch").is_empty());
+    }
+
+    #[test]
     fn every_listed_extension_is_recognised() {
         let tmp = TempDir::new().unwrap();
         for system in SYSTEMS.iter() {
