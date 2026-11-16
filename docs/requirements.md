@@ -38,26 +38,27 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 - **FR-LIB-4** In `ps3`, `ps4`, `ps5` and `wiiu`, each subfolder that contains the System's expected game structure counts as one Game. In `wiiu`, a single `.wua`, `.wud` or `.wux` file is also one Game. Elsewhere, each file with a recognised extension is one Game.
 - **FR-LIB-5** Games installed inside a Standalone Emulator's own storage (e.g. RPCS3 `.pkg` installs, Azahar `.cia` installs) are not listed.
 - **FR-LIB-6** The Display Title is derived from the file or folder name with region, revision and dump tags removed. For example, `Super Mario World (USA) [!].sfc` becomes "Super Mario World". A release year in parentheses stays, so `The Legend of Zelda - Ocarina of Time (2026).nup` keeps its "(2026)", and the `.nkit` of a `.nkit.iso` is dropped.
-- **FR-LIB-7** Game37 records, per Game: date added, last played, Playtime, Favorite flag, Hidden flag, renamed title, chosen Artwork, and for a Wii Game its controller.
+- **FR-LIB-7** Game37 records, per Game: date added, last played, Playtime, Favorite flag, Hidden flag, renamed title, chosen Artwork, release date, and for a Wii Game its controller.
 - **FR-LIB-8** Playtime for External Systems is measured as the Standalone Emulator process's running time.
 - **FR-LIB-9** BIOS files live in `<Games Root>/bios/`, In-game Saves in `<Games Root>/saves/<system>/`, and Save States and Resume States in `<Games Root>/states/<system>/`.
 
 ### Home and Shelves
 
 - **FR-HOME-1** Game37 opens on Home.
-- **FR-HOME-2** Home shows the Shelves in this order: Favorites, Continue playing, Recently added, Most played.
-- **FR-HOME-3** Each Shelf shows at most 20 Games. A "See all" item opens a grid of every Game matching that Shelf's rule.
+- **FR-HOME-2** Home shows the Shelves the player has switched on, in the order the player gave them (Settings → Home). The four Shelves are Favorites, Continue playing, Recently added and Most played; by default all four are on, in that order. At least one Shelf is always on.
+- **FR-HOME-3** Each Shelf shows at most 20 Games. A "See all" item opens a grid of every Game in the library in that Shelf's order (Last played, Recently added or Most played), with Games never played last; on Favorites it opens a grid of the Favorites only. That grid can be sorted like a Console Page (FR-CAR-5), but the order chosen there is not remembered: it opens in its Shelf's order every time.
 - **FR-HOME-4** Recently added holds the 20 most recently found Games. Continue playing is ordered by last played. Most played is ordered by Playtime.
-- **FR-HOME-5** An empty Shelf stays visible and shows a hint explaining how to fill it.
+- **FR-HOME-5** An empty Shelf stays visible, as tall as any other, and shows a hint explaining how to fill it.
 - **FR-HOME-6** At most 5 Favorites exist. Favoriting a 6th Game opens a picker to choose which Favorite to replace.
+- **FR-HOME-7** One screen of Home shows exactly two Shelves, whatever the screen's height: the covers on Home are sized from the height, so they are larger on a taller screen. Moving up or down, with a controller, the keyboard or the mouse wheel, moves by one whole Shelf with a short snap animation (a jump when Motion is Reduced); Home never rests on half a Shelf.
 
 ### Carousel and Console Pages
 
 - **FR-CAR-1** L1/R1, or clicking a tab, switches between Home and Carousel.
-- **FR-CAR-2** The Carousel always lists all 19 Systems in System Order, whatever was picked in First-run Setup. Each card shows the maker and European release year (e.g. "Nintendo · 2002"). There are no maker labels or dividers. The background colour changes with the highlighted System.
-- **FR-CAR-3** Selecting a System opens its Console Page, a grid of tall covers.
+- **FR-CAR-2** The Carousel always lists all 19 Systems in System Order, whatever was picked in First-run Setup. Each card shows the System's logo in its official colours (its name where Game37 has no logo for it) and the maker and European release year (e.g. "Nintendo · 2002"). There are no maker labels or dividers. The background colour changes with the highlighted System.
+- **FR-CAR-3** Selecting a System opens its Console Page, a grid of tall covers, headed by the System's logo in place of its name.
 - **FR-CAR-4** A System with no Games keeps its place in the Carousel but its card is slightly dimmed. Its Console Page explains which folder to put files in.
-- **FR-CAR-5** Console Pages can be sorted A–Z, by Last played, by Most played, or by Recently added. The sort order is global: changing it on one Console Page applies to all of them until it is changed again. It persists across restarts.
+- **FR-CAR-5** Console Pages can be sorted A–Z, Z–A, by Last played, by Most played, by Recently added, by Newest release or by Oldest release; one button steps through them in that order. The two release orders use the Game's release date (FR-ART-5): a Game without one comes last in both, A–Z among themselves. The sort order is global: changing it on one Console Page applies to all of them until it is changed again. It persists across restarts.
 - **FR-CAR-6** The Carousel opens on the System last viewed, across restarts. On the very first launch it opens on NES.
 - **FR-CAR-7** The Carousel wraps around in both directions. Holding left or right speeds up scrolling. There is no shortcut to jump between makers.
 - **FR-CAR-8** System Order is defined once and used everywhere Systems are listed: the Carousel, the First-run Setup checklist, Settings → BIOS status, and the README.
@@ -72,7 +73,7 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 ### Details and Options
 
 - **FR-DET-1** Selecting a Game opens its Details Page. Pressing confirm on Play launches it; for an Upcoming System (Switch 2, PS5) it shows a "Not playable yet" message instead and starts nothing.
-- **FR-DET-2** The Details Page shows the hero Artwork as background, plus System, Playtime, last played, date added, Favorite status, number of Save States (embedded only), file name and size.
+- **FR-DET-2** The Details Page shows the hero Artwork as background, plus System, Playtime, last played, date added, release year (when known), Favorite status, number of Save States (embedded only), file name and size.
 - **FR-DET-3** The Options Menu opens with Y or right-click on any highlighted Game (Shelves, grids, search results) and from the Details Page.
 - **FR-DET-4** Options Menu actions: add or remove Favorite, load Save State (with slot picker, embedded only), start from power-on (embedded only), delete save data: Resume State, Save States, In-game Save, or everything (embedded only), choose different Artwork, rename Display Title, hide Game, show file in the file manager; for a Wii Game, its Controller: Wii Remote and Nunchuk (the default) or Classic Controller (FR-NEW-3).
 - **FR-DET-5** Renaming never changes the file on disk.
@@ -84,6 +85,7 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 - **FR-ART-2** "Choose different Artwork" lets the player browse other SteamGridDB results for that Game.
 - **FR-ART-3** Without an API key, or without a match, Game37 shows the Display Title and a System icon.
 - **FR-ART-4** Fetched Artwork is cached locally and not re-downloaded on every start.
+- **FR-ART-5** A Game's release date is the one SteamGridDB gives for the game its title matched (FR-ART-1). A Game matched before release dates were recorded gets its date fetched once, in the background. Without an API key or without a match, a Game has no release date.
 
 ### Search
 
@@ -145,10 +147,17 @@ Built in milestone 8 (ADR 0016, research in [research/m8-newer-cores.md](researc
   stays at the bottom. A Game's picture, the Pause Menu and anything else shown over a running Game
   keep their 16:9 frame, with the Game in its own aspect ratio inside it. A screen wider than 16:9
   shows bars at the sides.
+- **FR-UI-7** Every grid of covers (Console Pages, "See all", Search results) shows the same number of
+  Games per row, which the player sets from 6 to 10 (default 8) in Settings → Display. The grid is
+  centred and runs from margin to margin: the gaps between covers stay the same, and the covers grow
+  or shrink to fit.
+- **FR-UI-8** Playtime is shown under the focused cover only, without the Display Title, and not for
+  a Game played for less than a minute. A setting in Settings → Display chooses where: Off, Grids
+  (default), or Grids and Home.
 
 ### Settings
 
-- **FR-SET-1** Settings contains: SteamGridDB API key, Hidden games, Games Root location, Rescan library, Update/redownload Cores, Controller test, Reset Playtime and stats, BIOS status per System, Startup window mode, DS and 3DS screen layout, Menu button style, About.
+- **FR-SET-1** Settings contains: SteamGridDB API key, Hidden games, Games Root location, Rescan library, Update/redownload Cores, Controller test, Reset Playtime and stats, BIOS status per System, Startup window mode, DS and 3DS screen layout, Menu button style, Home Shelves (which are shown, and their order), Games per row, Show Playtime, About.
 
 ### Setup and configuration
 

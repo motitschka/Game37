@@ -62,6 +62,10 @@ _Avoid_: Starred, pinned
 A Game the player has removed from all views without touching its file.
 _Avoid_: Deleted, ignored
 
+**Release Date**:
+The day a Game first came out, as SteamGridDB gives it for the Game's match; unknown for a Game without a match.
+_Avoid_: Year, launch date
+
 **Playtime**:
 Total time a Game has been running, measured from launch until the Core or Standalone Emulator stops.
 _Avoid_: Hours played, play duration
@@ -73,7 +77,7 @@ The view of Shelves that Game37 opens on.
 _Avoid_: Dashboard, main screen
 
 **Shelf**:
-A horizontal row of up to 20 Games on Home, built by a fixed rule (Favorites, Continue playing, Recently added, Most played).
+A horizontal row of up to 20 Games on Home, built by a fixed rule (Favorites, Continue playing, Recently added, Most played). The player chooses which Shelves Home shows and in what order.
 _Avoid_: Row, rail, category
 
 **Carousel**:

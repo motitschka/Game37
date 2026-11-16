@@ -144,7 +144,8 @@ Testing uses free, legal homebrew games and test ROMs, never commercial game fil
 ## Road to 1.0
 
 v1 (M1–M6) shipped as 0.1.0-beta.1 on 2026-10-26. Version 1.0 is the same scope, made solid and
-checked by hand: it adds no features. The speedrun timer (M7) follows as 1.1.
+checked by hand. The one addition is the Home and grid design (D1), which comes before the owner's
+checks so that they are made once, on the final look. The speedrun timer (M7) follows as 1.1.
 
 ### B1 — Beta hardening (0.1.0-beta.2)
 
@@ -161,6 +162,43 @@ checked by hand: it adds no features. The speedrun timer (M7) follows as 1.1.
 **Done when**
 - Every open bug issue is fixed or labelled as deferred past 1.0.
 - 0.1.0-beta.2 is released with the same checks as beta.1.
+
+### D1 — Home and grid design
+
+**Goal:** Home and the grids make the most of the screen, and the player decides what they show.
+
+**Branch:** `design-home-grids`, cut from `b1-hardening`. A commit per verified step.
+
+**Scope** (in build order)
+1. Grids: 6 to 10 Games per row (default 8, Settings → Display), centred, margin to margin, covers
+   sized to fit (FR-UI-7).
+2. Home: exactly two Shelves per screen with covers sized from the screen height, whole-Shelf
+   snapping, full-height empty Shelves, and Settings → Home to switch Shelves on or off and reorder
+   them (FR-HOME-2, 5, 7).
+3. Sorting: Z–A added, the cycle order of FR-CAR-5, and "See all" opening every Game in its Shelf's
+   order (FR-HOME-3).
+4. Playtime under the focused cover only, with its setting (FR-UI-8).
+5. Release dates from SteamGridDB, the Newest release and Oldest release orders, and the release year
+   on the Details Page (FR-ART-5, FR-CAR-5, FR-DET-2). The first step is one real request with the
+   owner's key to confirm the field.
+6. System logos in official colours on the Carousel card and the Console Page header, as PNG files
+   built into Game37, each with its source recorded; a trademark note in the README (FR-CAR-2, 3).
+   The owner approves the exact list of files before any is downloaded.
+
+| Step | Status |
+|---|---|
+| 1 Grids | Not started |
+| 2 Home | Not started |
+| 3 Sorting and See all | Not started |
+| 4 Playtime | Not started |
+| 5 Release dates | Not started |
+| 6 Logos | Not started |
+
+**Done when**
+- Every grid is centred with the chosen number of Games per row, at 1080 and at 1200 high.
+- Home shows exactly two Shelves at 1080 and at 1200 high, and never rests on half a Shelf.
+- The mockups and the smoke shots show the new Home, grids, Settings pages and logos.
+- Tests, clippy and fmt pass, and the real-Core tests still pass.
 
 ### B2 — Owner verification
 

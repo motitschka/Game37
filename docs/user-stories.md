@@ -48,7 +48,8 @@ Two people use Game37:
 - *Covers FR-HOME-4*
 
 **US-8 See everything on a Shelf.** As a player, I want to open a full grid from any Shelf, so the 20-game limit never hides anything.
-- Each Shelf ends with "See all", which opens a grid of every matching Game.
+- Each Shelf ends with "See all", which opens a grid of every Game I have, in that Shelf's order; on Favorites, a grid of my Favorites.
+- I can change the order in that grid with the sort button.
 - *Covers FR-HOME-3*
 
 **US-9 Understand empty Shelves.** As a new player, I want empty Shelves to tell me how to fill them, so the screen isn't confusing on day one.
@@ -73,6 +74,7 @@ Two people use Game37:
 **US-12 One sort order everywhere.** As a player, I want my chosen sort order to apply to every console, so I don't have to set it again each time.
 - I change the sort to Most played on Wii, open PS2, and it's sorted by Most played too.
 - The choice survives a restart.
+- The sort button steps through A–Z, Z–A, Last played, Most played, Recently added, Newest release and Oldest release.
 - *Covers FR-CAR-5*
 
 **US-38 Get around the carousel fast.** As a player, I want the carousel to remember where I was and loop around, so reaching any console takes only a few presses.
