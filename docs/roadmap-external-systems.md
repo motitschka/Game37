@@ -6,6 +6,9 @@ until the owner accepts a phase and it gets its own ADR. Gathered 2026-11-11 fro
 buildbot, the libretro core-info files and docs, and a read of Game37's frontend. "UNVERIFIED" marks
 what nobody has run with Game37 yet.
 
+The phases still open are now milestones in [core-milestones.md](core-milestones.md), which is where their
+work is tracked: PS3 is M10, PS4 M11 and Wii U M12.
+
 ## Where each System stands
 
 | System | Standalone Emulator today | Core on the buildbot | Renders with | Save States | Verdict |

@@ -1,6 +1,6 @@
 # Game37 Milestones
 
-The build order for v1 (M1–M6), PS2, 3DS, GameCube and Wii inside Game37 (M8, a 0.2.0 beta), the road from the first beta to version 1.0 (B1–B3), and then the speedrun timer (M7, version 1.1). Each milestone leaves Game37 runnable and builds on the one before it. Story and requirement IDs refer to [user-stories.md](user-stories.md) and [requirements.md](requirements.md).
+The build order for v1 (M1–M6), PS2, 3DS, GameCube and Wii inside Game37 (M8, a 0.2.0 beta), the road from the first beta to version 1.0 (B1–B3), and then the speedrun timer (M7, version 1.1). The milestones that bring more Systems inside Game37, or give their Cores more features (M9 onwards), are in [core-milestones.md](core-milestones.md). Each milestone leaves Game37 runnable and builds on the one before it. Story and requirement IDs refer to [user-stories.md](user-stories.md) and [requirements.md](requirements.md).
 
 Testing uses free, legal homebrew games and test ROMs, never commercial game files. Nothing from `~/Games/` is ever committed.
 
@@ -220,3 +220,4 @@ A release candidate (1.0.0-rc.1) once B1–B3 are done, then 1.0.0 if nothing ne
 - An embedded Run shows the timer both in the game and in the Timer Window, and the game still takes keyboard input while the Timer Window has focus.
 - In-game Saves from normal play are unchanged after a Run.
 - An External Run opens the Timer Window, and the controller Split button works while the emulator has focus.
+
