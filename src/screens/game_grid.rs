@@ -201,6 +201,9 @@ pub struct GameGrid {
     /// When the Games were last re-sorted for Release Dates that arrived, to do it at most once
     /// every [`RESORT_GAP`].
     resorted: Option<Instant>,
+    /// The `Artwork::release_order_shown` round in which this grid last asked for its Games'
+    /// Release Dates: in another, it asks again.
+    dating_round: Option<u64>,
 }
 
 impl GameGrid {
@@ -228,6 +231,7 @@ impl GameGrid {
             feedback: None,
             dates_seen: 0,
             resorted: None,
+            dating_round: None,
         }
     }
 
@@ -284,8 +288,22 @@ impl GameGrid {
     /// Release Date is missing (FR-ART-5), which the player's choice of that order allows.
     fn reload(&mut self, ctx: &Ctx) {
         self.load(ctx);
-        if self.is_sortable() && is_release(self.sort_order) {
+        self.dating_round = None;
+        self.keep_dating(ctx, Instant::now());
+    }
+
+    /// In a release order, keeps this grid's Release Dates coming while it is drawn (FR-ART-5):
+    /// tells Artwork every frame (`now` is the current time), and asks for them again once Artwork
+    /// dropped them unasked (no grid in a release order showed for a while, or another grid asked)
+    /// or was replaced (an API key entered in Settings).
+    fn keep_dating(&mut self, ctx: &Ctx, now: Instant) {
+        if !self.is_sortable() || !is_release(self.sort_order) {
+            return;
+        }
+        if self.dating_round != Some(ctx.artwork.release_order_shown(now)) {
             ctx.artwork.ask_release_dates(&ctx.library, &self.games);
+            // Asking may have dropped another grid's Release Dates, which starts a new round.
+            self.dating_round = Some(ctx.artwork.release_order_shown(now));
         }
     }
 
@@ -317,7 +335,8 @@ impl GameGrid {
     }
 
     /// In a release order, sorts the Games again once Release Dates arrived, at most once every
-    /// [`RESORT_GAP`] (`now` is the current time), keeping focus on the same Game.
+    /// [`RESORT_GAP`] (`now` is the current time), keeping focus on the same Game, and keeping it in
+    /// view only if it was: the player may have scrolled away from it.
     fn resort_if_dated(&mut self, ctx: &Ctx, now: Instant) {
         let due = self.resorted.is_none_or(|at| now >= at + RESORT_GAP);
         if self.is_sortable()
@@ -325,9 +344,19 @@ impl GameGrid {
             && ctx.artwork.dates_stored() != self.dates_seen
             && due
         {
+            let (in_view, before) = (self.focus_in_view(), self.scroll);
             self.load(ctx);
+            if !in_view {
+                self.scroll = scroll::clamp(before, self.content_h(), bottom() - self.top_y());
+            }
             self.resorted = Some(now);
         }
+    }
+
+    /// Whether any of the focused Game's cover is in the grid's view.
+    fn focus_in_view(&self) -> bool {
+        let top = (self.focus / self.grid.cols) as f32 * self.grid.pitch_y;
+        top < self.scroll + bottom() - self.top_y() && top + self.grid.cover_h > self.scroll
     }
 
     /// Follows a change to the Games per row, made in Settings while this grid was open below it:
@@ -670,6 +699,7 @@ impl Screen for GameGrid {
         self.sync_grid(ctx);
         self.reload_if_changed(ctx);
         self.resort_if_dated(ctx, Instant::now());
+        self.keep_dating(ctx, Instant::now());
         self.sync_notice(ctx);
         self.refit();
         let mut title_x = M;
@@ -1453,6 +1483,12 @@ mod tests {
             assert_eq!(ctx.artwork.queued_dates(), ids(&grid.games));
         }
 
+        /// `Artwork::dates_stored`, a grid in a release order having been drawn now.
+        fn shown_dates_stored(ctx: &Ctx) -> u64 {
+            ctx.artwork.release_order_shown(Instant::now());
+            ctx.artwork.dates_stored()
+        }
+
         #[test]
         fn arriving_release_dates_re_sort_the_grid_at_most_once_a_second_keeping_the_focus() {
             let dir = tempfile::tempdir().unwrap();
@@ -1472,7 +1508,7 @@ mod tests {
             settle(
                 &ctx.artwork,
                 &ctx.library,
-                || ctx.artwork.dates_stored(),
+                || shown_dates_stored(&ctx),
                 |n| *n < 1,
             );
             let before = Instant::now() - RESORT_GAP;
@@ -1483,7 +1519,7 @@ mod tests {
             settle(
                 &ctx.artwork,
                 &ctx.library,
-                || ctx.artwork.dates_stored(),
+                || shown_dates_stored(&ctx),
                 |n| *n < 2,
             );
             grid.resort_if_dated(&ctx, before + RESORT_GAP - Duration::from_millis(1));
@@ -1493,6 +1529,162 @@ mod tests {
             grid.handle(Input::Action(Action::Back), &mut ctx);
             assert_eq!(titles(&grid), ["Gamma", "Beta", "Alpha"]);
             assert_eq!(grid.focus, 2, "Alpha keeps the focus");
+        }
+
+        /// Polls at `now` until no Release Date is queued or on its way.
+        fn settle_dates_at(ctx: &Ctx, now: Instant) {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while ctx.artwork.dating() {
+                ctx.artwork.poll_at(&ctx.library, now);
+                assert!(Instant::now() < deadline, "never settled");
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+
+        #[test]
+        fn stepping_through_the_release_orders_asks_for_no_more_dates_once_they_are_left() {
+            let dir = tempfile::tempdir().unwrap();
+            let fake = Fake::new();
+            let mut ctx = world(dir.path(), &fake);
+            ctx.library.set_sort_order(SortOrder::RecentlyAdded).unwrap();
+            let mut grid = console_page();
+            grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+
+            grid.handle(Input::Action(Action::Sort), &mut ctx);
+            assert_eq!(grid.sort_order, SortOrder::NewestRelease);
+            // A frame: the first Release Date's request goes.
+            let now = Instant::now();
+            grid.keep_dating(&ctx, now);
+            ctx.artwork.poll_at(&ctx.library, now);
+            grid.handle(Input::Action(Action::Sort), &mut ctx);
+            grid.handle(Input::Action(Action::Sort), &mut ctx);
+            assert_eq!(grid.sort_order, SortOrder::AZ);
+
+            // Frames go on in A–Z for more than a second.
+            settle_dates_at(&ctx, now + Duration::from_secs(2));
+            assert_eq!(fake.calls(), 1, "only the request already on its way");
+            assert!(ctx.artwork.queued_dates().is_empty());
+        }
+
+        #[test]
+        fn a_grid_that_stays_in_newest_release_keeps_getting_its_dates() {
+            let dir = tempfile::tempdir().unwrap();
+            let fake = Fake::new();
+            fake.api("/search/autocomplete/Alpha", "[{\"id\":1}]")
+                .api("/search/autocomplete/Beta", "[{\"id\":2,\"release_date\":100}]")
+                .api("/search/autocomplete/Gamma", "[{\"id\":3,\"release_date\":200}]");
+            let mut ctx = world(dir.path(), &fake);
+            ctx.library.set_sort_order(SortOrder::NewestRelease).unwrap();
+            let mut grid = console_page();
+            grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+
+            // Frames half a second apart, each drawing the grid.
+            let mut now = Instant::now();
+            let deadline = now + Duration::from_secs(10);
+            while ctx.artwork.dating() {
+                now += Duration::from_millis(500);
+                grid.keep_dating(&ctx, now);
+                ctx.artwork.poll_at(&ctx.library, now);
+                assert!(Instant::now() < deadline, "never settled");
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            assert_eq!(fake.calls(), 3);
+            assert_eq!(ctx.artwork.dates_stored(), 2);
+        }
+
+        #[test]
+        fn closing_a_grid_in_newest_release_stops_its_date_requests() {
+            let dir = tempfile::tempdir().unwrap();
+            let fake = Fake::new();
+            let mut ctx = world(dir.path(), &fake);
+            ctx.library.set_sort_order(SortOrder::NewestRelease).unwrap();
+            let mut grid = console_page();
+            grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+            let now = Instant::now();
+            grid.keep_dating(&ctx, now);
+            ctx.artwork.poll_at(&ctx.library, now);
+            drop(grid);
+
+            settle_dates_at(&ctx, now + Duration::from_secs(2));
+            assert_eq!(fake.calls(), 1, "only the request already on its way");
+            assert!(ctx.artwork.queued_dates().is_empty());
+        }
+
+        #[test]
+        fn a_grid_shown_again_asks_again_for_the_dates_dropped_meanwhile() {
+            let dir = tempfile::tempdir().unwrap();
+            let mut ctx = world(dir.path(), &Fake::new());
+            ctx.library.set_sort_order(SortOrder::NewestRelease).unwrap();
+            let mut grid = console_page();
+            grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+            assert_eq!(ctx.artwork.queued_dates(), ids(&grid.games));
+
+            // Covered by another screen for two seconds: dropped unasked.
+            let later = Instant::now() + Duration::from_secs(2);
+            ctx.artwork.poll_at(&ctx.library, later);
+            assert!(ctx.artwork.queued_dates().is_empty());
+
+            grid.keep_dating(&ctx, later);
+            assert_eq!(ctx.artwork.queued_dates(), ids(&grid.games));
+        }
+
+        #[test]
+        fn a_release_order_grid_asks_once_an_api_key_is_entered() {
+            let dir = tempfile::tempdir().unwrap();
+            let fake = Fake::new();
+            let mut ctx = world(dir.path(), &fake);
+            ctx.library.set_sort_order(SortOrder::OldestRelease).unwrap();
+            ctx.artwork = Artwork::off();
+            let mut grid = console_page();
+            grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+            assert!(ctx.artwork.queued_dates().is_empty());
+
+            // Settings replaces Artwork with one that has the key; the grid is drawn again.
+            ctx.artwork = online(dir.path(), &fake);
+            grid.keep_dating(&ctx, Instant::now());
+            assert_eq!(ctx.artwork.queued_dates(), ids(&grid.games));
+        }
+
+        /// SNES's Console Page of 50 Games in Newest release, none with a Release Date, the first
+        /// focused.
+        fn fifty_in_newest_release(ctx: &mut Ctx) -> GameGrid {
+            let games: Vec<_> = (0..50).map(found).collect();
+            ctx.library.sync_system("snes", &games, 0).unwrap();
+            ctx.library.set_sort_order(SortOrder::NewestRelease).unwrap();
+            let mut grid = console_page();
+            grid.handle(Input::Action(Action::Back), ctx); // initial load
+            assert_eq!(grid.focus, 0);
+            grid
+        }
+
+        #[test]
+        fn a_re_sort_leaves_the_scroll_alone_when_the_focused_game_was_scrolled_away_from() {
+            let mut ctx = Ctx::empty();
+            let mut grid = fifty_in_newest_release(&mut ctx);
+            grid.handle(Input::Pointer(Pointer::Wheel { dy: -100.0 }), &mut ctx);
+            let scrolled = grid.scroll;
+            assert!(scrolled > 0.0 && !grid.focus_in_view());
+
+            grid.dates_seen += 1; // as if a Release Date arrived
+            grid.resort_if_dated(&ctx, Instant::now());
+            assert!(grid.resorted.is_some(), "re-sorted");
+            assert_eq!(grid.scroll, scrolled);
+        }
+
+        #[test]
+        fn a_re_sort_keeps_a_focused_game_in_view_that_was() {
+            let mut ctx = Ctx::empty();
+            let mut grid = fifty_in_newest_release(&mut ctx);
+            assert!(grid.focus_in_view());
+            // Every other Game gets a Release Date: the focused one moves to the end.
+            for (i, game) in grid.games.iter().enumerate().skip(1) {
+                ctx.library.set_release_date(game.id, Some(i as i64)).unwrap();
+            }
+
+            grid.dates_seen += 1; // as if a Release Date arrived
+            grid.resort_if_dated(&ctx, Instant::now());
+            assert_eq!(grid.focus, 49);
+            assert!(grid.focus_in_view());
         }
     }
 }
