@@ -219,6 +219,8 @@ pub struct Home {
     hscroll: [f32; SHELVES],
     /// The first Shelf showing: Home rests on whole Shelves, `top` and the one below it.
     top: usize,
+    /// The wheel's `dy` not yet turned into whole Shelves: a touchpad sends many small ones.
+    wheel_dy: f32,
     /// The canvas height `hscroll` was last fitted to; a resize refits it in `draw`.
     fitted_h: f32,
     /// What is drawn: `hscroll` and `top`'s offset eased, so the Shelves glide to the focus.
@@ -253,6 +255,7 @@ impl Home {
             focus: Focus::default(),
             hscroll: [0.0; SHELVES],
             top: 0,
+            wheel_dy: 0.0,
             fitted_h: crate::ui::h(),
             shown_h: std::array::from_fn(|_| Eased::new(0.0)),
             shown_v: Eased::new(0.0),
@@ -375,6 +378,33 @@ impl Home {
     /// Moves Home by a whole Shelf when the focus left the Shelves showing.
     fn reveal_shelf(&mut self) {
         self.top = follow(self.top, self.focus.shelf, self.shelves.len());
+    }
+
+    /// Adds a wheel event's `dy` to what came before in the same direction, and moves Home a whole
+    /// Shelf for each notch (1.0) of it, keeping the rest: a mouse notch moves one Shelf, and a
+    /// touchpad swipe moves by how far it went.
+    fn turn_wheel(&mut self, dy: f32) {
+        // A little short of 1.0, so ten touchpad steps of 0.1 make a notch whatever their rounding.
+        const NOTCH: f32 = 1.0 - 1e-4;
+        if dy * self.wheel_dy < 0.0 {
+            self.wheel_dy = 0.0;
+        }
+        self.wheel_dy += dy;
+        while self.wheel_dy >= NOTCH {
+            self.wheel_dy -= 1.0;
+            self.wheel(-1);
+        }
+        while self.wheel_dy <= -NOTCH {
+            self.wheel_dy += 1.0;
+            self.wheel(1);
+        }
+    }
+
+    /// The target under (`x`, `y`) in the last frame's hit rects, on a Shelf showing at rest (`top`
+    /// and the one below it): a Shelf sliding out during the snap takes no hover or click.
+    fn hit_at_rest(&self, x: f32, y: f32) -> Option<Target> {
+        hit(&self.hits, x, y)
+            .filter(|&(Target::Item(s, _) | Target::Page(s, _))| (self.top..self.top + SHOWN).contains(&s))
     }
 
     /// The mouse wheel moves Home by `by` whole Shelves and pulls the focus onto a Shelf showing,
@@ -621,12 +651,12 @@ impl Screen for Home {
                 }
             }
             Input::Pointer(Pointer::Move { x, y }) => {
-                if let Some(Target::Item(s, c)) = hit(&self.hits, x, y) {
+                if let Some(Target::Item(s, c)) = self.hit_at_rest(x, y) {
                     self.focus.shelf = s;
                     self.focus.cols[s] = c.min(self.counts()[s].saturating_sub(1));
                 }
             }
-            Input::Pointer(Pointer::Click { x, y }) => match hit(&self.hits, x, y) {
+            Input::Pointer(Pointer::Click { x, y }) => match self.hit_at_rest(x, y) {
                 Some(Target::Item(s, c)) => {
                     self.focus.shelf = s;
                     self.focus.cols[s] = c.min(self.counts()[s].saturating_sub(1));
@@ -639,14 +669,13 @@ impl Screen for Home {
                 None => {}
             },
             Input::Pointer(Pointer::RightClick { x, y }) => {
-                if let Some(Target::Item(s, c)) = hit(&self.hits, x, y) {
+                if let Some(Target::Item(s, c)) = self.hit_at_rest(x, y) {
                     self.focus.shelf = s;
                     self.focus.cols[s] = c.min(self.counts()[s].saturating_sub(1));
                     return self.options(ctx);
                 }
             }
-            Input::Pointer(Pointer::Wheel { dy }) if dy > 0.0 => self.wheel(-1),
-            Input::Pointer(Pointer::Wheel { dy }) if dy < 0.0 => self.wheel(1),
+            Input::Pointer(Pointer::Wheel { dy }) => self.turn_wheel(dy),
             _ => {}
         }
         Transition::None
@@ -906,6 +935,7 @@ mod tests {
         home.handle(Input::Action(Action::Down), &mut ctx); // initial load
         let recently_added = 2; // Shelf::ALL's index for Shelf::RecentlyAdded
         home.focus.shelf = recently_added;
+        home.reveal_shelf(); // Home at rest on it, so its covers take clicks
         assert_eq!(home.hints()[0], Hint::new(&[Action::Confirm], "Details"));
 
         home.hits = vec![(Rect::new(0.0, 0.0, 50.0, 50.0), Target::Item(recently_added, 0))];
@@ -934,6 +964,7 @@ mod tests {
         home.handle(Input::Action(Action::Down), &mut ctx); // initial load
         let recently_added = 2; // Shelf::ALL's index for Shelf::RecentlyAdded
         home.focus.shelf = recently_added;
+        home.reveal_shelf(); // Home at rest on it, so its covers take clicks
         let title = |home: &Home, col: usize| home.shelves[recently_added].games[col].title.clone();
         assert!(home.hints().contains(&Hint::new(&[Action::Options], "Options")));
 
@@ -1256,6 +1287,76 @@ mod tests {
             (home.top, home.focus.shelf),
             (0, 1),
             "the first Shelf shows: no further"
+        );
+    }
+
+    /// Home loaded from an empty library, then given 20 Games on each of its four Shelves.
+    fn wheel_home(ctx: &mut Ctx) -> Home {
+        let mut home = Home::new();
+        home.handle(Input::Action(Action::Left), ctx); // initial load
+        for row in &mut home.shelves {
+            row.games = rows(1..=20);
+        }
+        assert_eq!(home.shelves.len(), 4);
+        home
+    }
+
+    /// A touchpad sends many small `dy`: Home moves a whole Shelf for each notch's worth (1.0) of
+    /// them, a mouse notch still moves one, and a turn the other way starts afresh.
+    #[test]
+    fn a_touchpad_swipe_moves_one_shelf_per_notch_of_small_wheel_steps() {
+        let mut ctx = Ctx::empty();
+        let swipe_down = Input::Pointer(Pointer::Wheel { dy: -0.1 });
+        let swipe_up = Input::Pointer(Pointer::Wheel { dy: 0.1 });
+        let mut home = wheel_home(&mut ctx);
+        for i in 1..=20 {
+            home.handle(swipe_down, &mut ctx);
+            assert_eq!(home.top, i / 10, "after {i} steps of 0.1");
+        }
+        assert_eq!(home.top, 2, "twenty steps of 0.1 move two Shelves");
+
+        let mut home = wheel_home(&mut ctx);
+        home.handle(Input::Pointer(Pointer::Wheel { dy: -1.0 }), &mut ctx);
+        assert_eq!(home.top, 1, "a mouse notch moves one Shelf");
+        for _ in 0..5 {
+            home.handle(swipe_down, &mut ctx);
+        }
+        assert_eq!(home.top, 1, "half a notch down doesn't move");
+        for i in 1..=10 {
+            home.handle(swipe_up, &mut ctx);
+            let top = if i < 10 { 1 } else { 0 };
+            assert_eq!(
+                home.top, top,
+                "after {i} steps up: the half notch down isn't carried"
+            );
+        }
+    }
+
+    /// The hit rects are the last frame's, drawn mid-snap: a Shelf sliding out of view doesn't take
+    /// the focus from under the pointer, a Shelf showing at rest does.
+    #[test]
+    fn hovering_a_shelf_sliding_out_after_a_wheel_move_leaves_the_focus() {
+        let mut ctx = Ctx::empty();
+        let mut home = wheel_home(&mut ctx);
+        home.handle(Input::Pointer(Pointer::Wheel { dy: -1.0 }), &mut ctx);
+        assert_eq!((home.top, home.focus.shelf), (1, 1));
+        home.focus.cols[1] = 4;
+        home.hits = vec![
+            (Rect::new(0.0, 0.0, 50.0, 50.0), Target::Item(0, 3)),
+            (Rect::new(0.0, 100.0, 50.0, 50.0), Target::Item(2, 6)),
+        ];
+
+        home.handle(Input::Pointer(Pointer::Move { x: 10.0, y: 10.0 }), &mut ctx);
+        assert_eq!(
+            (home.focus.shelf, home.focus.col()),
+            (1, 4),
+            "Shelf 0 is not showing at rest: the focus stays"
+        );
+        home.handle(Input::Pointer(Pointer::Move { x: 10.0, y: 110.0 }), &mut ctx);
+        assert_eq!(
+            (home.focus.shelf, home.focus.col()),
+            (2, 6),
+            "Shelf 2 shows at rest"
         );
     }
 

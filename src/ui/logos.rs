@@ -71,14 +71,18 @@ pub fn fit(w: f32, h: f32, bounds: Rect, align: Align) -> Rect {
 }
 
 /// Draws the logo of the System `id` fitted into `bounds` (see [`fit`]) at the layer's opacity.
-/// Returns false, drawing nothing, when there is no logo to draw.
+/// Returns false, drawing nothing, when there is no logo to draw or it couldn't be drawn: the
+/// caller then draws the System's name.
 pub fn draw(gfx: &mut Gfx<'_>, id: &str, bounds: Rect, align: Align) -> bool {
-    let Some(picture) = logo(id) else {
-        return false;
-    };
-    let r = fit(picture.width as f32, picture.height as f32, bounds, align);
-    gfx.draw_builtin_picture(picture, r);
-    true
+    drawn(logo(id), |picture| {
+        let r = fit(picture.width as f32, picture.height as f32, bounds, align);
+        gfx.draw_builtin_picture(picture, r)
+    })
+}
+
+/// Whether a logo was drawn: `draw_logo` draws `logo`, if there is one, and says whether it could.
+fn drawn(logo: Option<&Picture>, draw_logo: impl FnOnce(&Picture) -> bool) -> bool {
+    logo.is_some_and(draw_logo)
 }
 
 #[cfg(test)]
@@ -111,6 +115,15 @@ mod tests {
     #[test]
     fn an_unknown_system_has_no_logo() {
         assert!(logo("dreamcast").is_none());
+    }
+
+    /// A logo whose texture can't be made counts as not drawn, so the caller draws the name.
+    #[test]
+    fn a_logo_that_could_not_be_drawn_falls_back_to_the_name() {
+        let snes = logo("snes");
+        assert!(drawn(snes, |_| true), "drawn");
+        assert!(!drawn(snes, |_| false), "the texture couldn't be made");
+        assert!(!drawn(None, |_| panic!("no logo to draw")), "no logo");
     }
 
     #[test]

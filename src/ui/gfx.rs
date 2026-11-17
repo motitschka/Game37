@@ -624,13 +624,15 @@ impl<'tc> Gfx<'tc> {
     }
 
     /// Draws a picture built into Game37 (a System logo) like [`Gfx::draw_picture`] with square
-    /// corners, but shown at once: it doesn't arrive, so it doesn't fade in like Artwork.
-    pub fn draw_builtin_picture(&mut self, picture: &Picture, r: Rect) {
-        self.draw_picture_at(picture, r, 0.0, 1.0);
+    /// corners, but shown at once: it doesn't arrive, so it doesn't fade in like Artwork. Returns
+    /// false, drawing nothing, when its texture can't be made.
+    pub fn draw_builtin_picture(&mut self, picture: &Picture, r: Rect) -> bool {
+        self.draw_picture_at(picture, r, 0.0, 1.0)
     }
 
-    /// [`Gfx::draw_picture`] at `fade` (0 to 1) times the layer's opacity.
-    fn draw_picture_at(&mut self, picture: &Picture, r: Rect, radius: f32, fade: f32) {
+    /// [`Gfx::draw_picture`] at `fade` (0 to 1) times the layer's opacity. Returns false, drawing
+    /// nothing, when the picture's texture can't be made.
+    fn draw_picture_at(&mut self, picture: &Picture, r: Rect, radius: f32, fade: f32) -> bool {
         let creator = self.creator;
         let texture = self
             .pictures
@@ -655,7 +657,7 @@ impl<'tc> Gfx<'tc> {
                     }
                 }
             });
-        let Some(texture) = texture else { return };
+        let Some(texture) = texture else { return false };
         let (pw, ph) = (picture.width as f32, picture.height as f32);
         let (cx, cy, cw, ch) = crop_to_fill(pw, ph, r.w, r.h);
         // Each point's place in the texture, from its place in `r`; the soft edge just outside
@@ -701,6 +703,7 @@ impl<'tc> Gfx<'tc> {
         let _ = self
             .canvas
             .render_geometry(&vertices, Some(&*texture), VertexIndices::from(&indices[..]));
+        true
     }
 
     /// The window's display refresh rate in Hz, if SDL knows it.

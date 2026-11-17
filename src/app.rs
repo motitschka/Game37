@@ -130,8 +130,8 @@ fn start_shot_library(ctx: &mut Ctx, with_artwork: bool) -> Result<(), String> {
 }
 
 /// The interactive start with a library: the emulators detected, Artwork with the key in
-/// `secrets.toml` and the Release Dates it doesn't know yet asked for (FR-ART-5), and the watcher,
-/// which scans every System in the background and then follows the Games Root.
+/// `secrets.toml`, and the watcher, which scans every System in the background and then follows the
+/// Games Root.
 fn start_live_library(ctx: &mut Ctx) -> LibraryWatcher {
     ctx.emulators = Emulators::detect();
     ctx.artwork = artwork(&ctx.config_path, &ctx.data_dir);
