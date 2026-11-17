@@ -24,10 +24,16 @@ pub enum Action {
     Settings,
     /// Pastes the system clipboard into the active text field: Ctrl+V while typing.
     Paste,
+    /// Page Up and Page Down: a grid moves by one screen of rows (FR-UI-1).
+    PageUp,
+    PageDown,
+    /// Home and End: a grid's first and last Game (FR-UI-1).
+    First,
+    Last,
 }
 
 impl Action {
-    pub const ALL: [Action; 14] = [
+    pub const ALL: [Action; 18] = [
         Action::Up,
         Action::Down,
         Action::Left,
@@ -42,6 +48,10 @@ impl Action {
         Action::Search,
         Action::Settings,
         Action::Paste,
+        Action::PageUp,
+        Action::PageDown,
+        Action::First,
+        Action::Last,
     ];
 
     pub fn is_direction(self) -> bool {
@@ -65,6 +75,10 @@ impl Action {
             Action::Search => "search",
             Action::Settings => "settings",
             Action::Paste => "paste",
+            Action::PageUp => "pageup",
+            Action::PageDown => "pagedown",
+            Action::First => "first",
+            Action::Last => "last",
         }
     }
 
@@ -201,7 +215,9 @@ pub fn button_action(style: ButtonStyle, button: Button) -> Option<Action> {
     Some(action)
 }
 
-pub fn key_action(key: Keycode) -> Option<Action> {
+/// What a key does outside a text field; `shift` is whether Shift is held, which turns Tab back
+/// (FR-UI-1).
+pub fn key_action(key: Keycode, shift: bool) -> Option<Action> {
     let action = match key {
         Keycode::Up => Action::Up,
         Keycode::Down => Action::Down,
@@ -209,10 +225,15 @@ pub fn key_action(key: Keycode) -> Option<Action> {
         Keycode::Right => Action::Right,
         Keycode::Return | Keycode::KpEnter | Keycode::Space => Action::Confirm,
         Keycode::Escape | Keycode::Backspace => Action::Back,
+        Keycode::Tab if shift => Action::PrevTab,
         Keycode::Q => Action::PrevTab,
         Keycode::E | Keycode::Tab => Action::NextTab,
         Keycode::F => Action::Options,
         Keycode::S => Action::Sort,
+        Keycode::PageUp => Action::PageUp,
+        Keycode::PageDown => Action::PageDown,
+        Keycode::Home => Action::First,
+        Keycode::End => Action::Last,
         _ => return None,
     };
     Some(action)
@@ -301,6 +322,10 @@ pub fn glyph_label(action: Action, kind: InputKind, style: ButtonStyle) -> &'sta
         (InputKind::Keyboard, _, Action::Search) => "Ctrl F",
         (InputKind::Keyboard, _, Action::Settings) => "Ctrl ,",
         (_, _, Action::Paste) => "Ctrl V",
+        (_, _, Action::PageUp) => "PgUp",
+        (_, _, Action::PageDown) => "PgDn",
+        (_, _, Action::First) => "Home",
+        (_, _, Action::Last) => "End",
     }
 }
 
@@ -558,23 +583,38 @@ mod tests {
             (Keycode::Tab, Action::NextTab),
             (Keycode::F, Action::Options),
             (Keycode::S, Action::Sort),
+            (Keycode::PageUp, Action::PageUp),
+            (Keycode::PageDown, Action::PageDown),
+            (Keycode::Home, Action::First),
+            (Keycode::End, Action::Last),
         ];
         for (key, action) in cases {
-            assert_eq!(key_action(key), Some(action), "{key:?}");
+            assert_eq!(key_action(key, false), Some(action), "{key:?}");
         }
-        assert_eq!(key_action(Keycode::F11), None);
+        assert_eq!(key_action(Keycode::F11, false), None);
+    }
+
+    #[test]
+    fn shift_tab_switches_to_the_previous_view_and_tab_to_the_next() {
+        assert_eq!(key_action(Keycode::Tab, true), Some(Action::PrevTab));
+        assert_eq!(key_action(Keycode::Tab, false), Some(Action::NextTab));
+        assert_eq!(
+            key_action(Keycode::E, true),
+            Some(Action::NextTab),
+            "only Tab turns back"
+        );
     }
 
     #[test]
     fn ctrl_f_searches_and_ctrl_comma_opens_settings() {
         assert_eq!(ctrl_key_action(Keycode::F, false), Some(Action::Search));
         assert_eq!(
-            key_action(Keycode::F),
+            key_action(Keycode::F, false),
             Some(Action::Options),
             "plain F stays Options"
         );
         assert_eq!(ctrl_key_action(Keycode::Comma, false), Some(Action::Settings));
-        assert_eq!(key_action(Keycode::Comma), None);
+        assert_eq!(key_action(Keycode::Comma, false), None);
         assert_eq!(
             ctrl_key_action(Keycode::Q, false),
             None,

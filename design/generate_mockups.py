@@ -445,30 +445,68 @@ def screen_carousel(focus="3ds", missing={"wiiu": "Cemu"}, games=12):
     sv.save()
 
 
-def screen_console_page():
-    sv = Svg("04-console-page", "Console Page")
+def console_page(name, title, order="Most played", list_focus=None, note=None):
+    """A GameCube Console Page sorted by `order`; with `list_focus` the sort list is open under the chip,
+    that row focused and the current order ticked (FR-CAR-5); with `note` the release-order note line."""
+    sv = Svg(name, title)
     color = SYS["gc"][3]
     background(sv, glow=color, glow_opacity=0.35)
     topbar(sv, active="consoles")
     sv.add(rect(M, 152, 8, 76, color, rx=4),
            system_logo("gc", M + 30, 183 - 32, 420, 64, align="xMin"),
            text(M + 32, 236, "38 games  ·  Plays in Game37", 20, 500, fill=C["muted"]))
-    chip_w = 330
+    chip_w = 330 + tw(order, 19, 700) - tw("Most played", 19, 700)
     cx = W - M - chip_w
     sv.add(rect(cx, 168, chip_w, 52, C["surface"], rx=26, stroke=C["line"], sw=1))
     glyph(sv, cx + 14, 194, "X")
-    sv.add(text(cx + 60, 201, "Sort:", 19, 500, fill=C["muted"]), text(cx + 112, 201, "Most played", 19, 700),
+    sv.add(text(cx + 60, 201, "Sort:", 19, 500, fill=C["muted"]), text(cx + 112, 201, order, 19, 700),
            text(cx + chip_w - 22, 201, "▾", 18, 700, fill=C["muted"], anchor="end"))
+    if note:
+        sv.add(text(M + 32, 262, note, 17, 500, fill=C["muted"]))
     cols, top, pitch = GRID_COLS, 288, GH + 72
     for i, g in enumerate(GAMECUBE[:24]):
         r, c = divmod(i, cols)
         x, y = M + c * (GW + GAP), top + r * pitch
-        cover(sv, x, y, GW, GH, g, focused=(i == 2), show_sys=False)
+        cover(sv, x, y, GW, GH, g, focused=(i == 2 and list_focus is None), show_sys=False)
         if i == 2:
             sv.add(text(x, y + GH + 32, g["hours"], 17, 500, fill=C["muted"]))
     sv.add(rect(0, 900, W, 110, sv.lin([(0, C["bg"], 0), (1, C["bg"], 1)])))
-    hintbar(sv, [(["A"], "Details"), (["B"], "Back"), (["Y"], "Options"), (["X"], "Sort")])
+    if list_focus is None:
+        hintbar(sv, [(["A"], "Details"), (["B"], "Back"), (["Y"], "Options"), (["X"], "Sort")])
+    else:
+        orders = ["A–Z", "Z–A", "Last played", "Most played", "Recently added", "Newest release",
+                  "Oldest release"]
+        px, py, pad, row_h = W - M - 360, 168 + 52 + 12, 12, 72
+        sv.add(rect(px, py, 360, len(orders) * row_h + 2 * pad, C["surface"], rx=20, stroke=C["line"], sw=1))
+        for i, label in enumerate(orders):
+            y = py + pad + i * row_h
+            on = i == list_focus
+            if on:
+                sv.add(rect(px + pad, y, 360 - 2 * pad, row_h, C["surface2"], rx=14),
+                       rect(px + pad, y + 16, 5, 40, C["accent"], rx=2))
+            sv.add(text(px + pad + 32, y + 45, label, 22, 600 if on else 500))
+            if label == order:
+                tx, ty = px + 360 - pad - 24 - 18, y + 30
+                sv.add(f'<path d="M{tx},{ty + 7} l6,6 l12,-13" fill="none" stroke="{C["accent"]}"'
+                       f' stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>')
+        hintbar(sv, [(["A"], "Sort"), (["B"], "Cancel")])
     sv.save()
+
+
+def screen_console_page():
+    console_page("04-console-page", "Console Page")
+
+
+def screen_sort_list():
+    """The sort list (FR-CAR-5): the Sort button opens the seven orders under the chip, the current one
+    ticked and focused first; Confirm sorts and puts the focus on the first Game."""
+    console_page("47-sort-list", "Console Page: sort list", list_focus=3)
+
+
+def screen_release_note():
+    """Release orders without a SteamGridDB API key explain themselves (FR-ART-5)."""
+    console_page("48-release-note", "Console Page: release order without a key", order="Newest release",
+                 note="Release dates need a SteamGridDB API key (Settings → Artwork)")
 
 
 def screen_see_all():
@@ -1916,6 +1954,6 @@ if __name__ == "__main__":
                screen_setup_key, screen_settings_controls, screen_settings_about,
                screen_pause_restart_confirm, screen_3ds_layout_large, screen_3ds_layout_large_3,
                screen_3ds_layout_side, screen_3ds_layout_single, screen_settings_display,
-               screen_settings_home, screen_see_all]:
+               screen_settings_home, screen_see_all, screen_sort_list, screen_release_note]:
         fn()
     print("\n".join(sorted(p.name for p in OUT.glob("*.svg"))))

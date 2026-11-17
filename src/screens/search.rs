@@ -3,7 +3,7 @@
 //! `search_topbar`, `search_results` and `screen_search*` in `design/generate_mockups.py`.
 
 use super::details::DetailsPage;
-use super::game_grid::{refocus, step};
+use super::game_grid::{is_page_key, page, refocus, rows_shown, step};
 use super::options::OptionsMenu;
 use crate::ctx::Ctx;
 use crate::library::db::GameRow;
@@ -268,6 +268,11 @@ impl Search {
             Input::Action(Action::Up) if self.grid_focus < self.grid.cols => self.focus = Focus::Field,
             Input::Action(dir) if dir.is_direction() => {
                 self.grid_focus = step(self.grid_focus, self.games.len(), self.grid.cols, dir);
+                self.reveal_focus();
+            }
+            Input::Action(key) if is_page_key(key) => {
+                let rows = rows_shown(self.bottom() - TOP, &self.grid);
+                self.grid_focus = page(self.grid_focus, self.games.len(), self.grid.cols, rows, key);
                 self.reveal_focus();
             }
             Input::Action(Action::Confirm) => return self.confirm(ctx),

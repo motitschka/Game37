@@ -2,6 +2,7 @@
 //! Console Page (FR-CAR-3), after `screen_console_page` and `screen_see_all` in
 //! `design/generate_mockups.py`.
 
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use super::details::DetailsPage;
@@ -19,12 +20,23 @@ use crate::ui::input::{Action, Input, Pointer, glyph_label};
 use crate::ui::logos;
 use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
-use crate::ui::theme::{BG, Colour, LINE, MUTED, SURFACE, TEXT, WARN};
+use crate::ui::theme::{ACCENT, BG, Colour, LINE, MUTED, SURFACE, SURFACE2, TEXT, WARN};
 use crate::ui::{self, M, Rect, W, hit, scroll};
 
 /// Where a grid's Games come from, in the grid's sort order (ignored by a grid that can't be
 /// sorted); called again whenever the library or the order changes.
 pub type Source = Box<dyn Fn(&Library, SortOrder) -> Result<Vec<GameRow>, DbError>>;
+
+/// The list of orders the Sort action opens (FR-CAR-5), anchored under the sort chip and
+/// right-aligned with it, drawn like the Options Menu's rows.
+const LIST_GAP: f32 = 12.0;
+const LIST_W: f32 = 360.0;
+const LIST_PAD: f32 = 12.0;
+const LIST_ROW_H: f32 = 72.0;
+
+/// The muted line under the header line of a grid in a release order (FR-ART-5).
+const NOTE_Y: f32 = 262.0;
+const NO_KEY_NOTE: &str = "Release dates need a SteamGridDB API key (Settings → Artwork)";
 
 /// Whether and how a grid's Sort action changes its order (FR-CAR-5, FR-HOME-3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,6 +142,39 @@ pub fn step(focus: usize, len: usize, cols: usize, dir: Action) -> usize {
     }
 }
 
+/// The focus after a page key in a grid of `len` items, `cols` per row, `rows` of them on a screen
+/// (FR-UI-1): Page Up and Page Down move by `rows` rows in the same column, stopping at the first
+/// or last row (on a shorter last row, its last item); Home and End go to the first and last item.
+pub fn page(focus: usize, len: usize, cols: usize, rows: usize, key: Action) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let by = rows.max(1) * cols;
+    match key {
+        Action::PageUp if focus >= by => focus - by,
+        Action::PageUp => focus % cols,
+        Action::PageDown if focus + by < len => focus + by,
+        Action::PageDown => ((len - 1) / cols * cols + focus % cols).min(len - 1),
+        Action::First => 0,
+        Action::Last => len - 1,
+        _ => focus,
+    }
+}
+
+/// How many rows of a grid show in full in a view `view` tall: what a page key moves by, at
+/// least 1.
+pub fn rows_shown(view: f32, grid: &Grid) -> usize {
+    ((view / grid.pitch_y).floor() as usize).max(1)
+}
+
+/// Whether `action` is a page key (FR-UI-1).
+pub fn is_page_key(action: Action) -> bool {
+    matches!(
+        action,
+        Action::PageUp | Action::PageDown | Action::First | Action::Last
+    )
+}
+
 /// Where focus goes after the Games were reloaded: the same Game if it is still there, else the
 /// same position, clamped.
 pub fn refocus(old: &[GameRow], focus: usize, new: &[GameRow]) -> usize {
@@ -204,6 +249,14 @@ pub struct GameGrid {
     /// The `Artwork::release_order_shown` round in which this grid last asked for its Games'
     /// Release Dates: in another, it asks again.
     dating_round: Option<u64>,
+    /// This grid's Games whose Release Dates were not stored when it last asked for them, by
+    /// library id, for "Getting release dates… n of N" (FR-ART-5); N is `dating_total`.
+    dating_ids: HashSet<i64>,
+    dating_total: usize,
+    /// The list of orders, while open: which row has focus (an index into `SortOrder::ALL`).
+    sort_list: Option<usize>,
+    /// Where the list's rows were last drawn, for the mouse.
+    list_hits: Vec<(Rect, usize)>,
 }
 
 impl GameGrid {
@@ -232,6 +285,10 @@ impl GameGrid {
             dates_seen: 0,
             resorted: None,
             dating_round: None,
+            dating_ids: HashSet::new(),
+            dating_total: 0,
+            sort_list: None,
+            list_hits: Vec::new(),
         }
     }
 
@@ -302,6 +359,8 @@ impl GameGrid {
         }
         if self.dating_round != Some(ctx.artwork.release_order_shown(now)) {
             ctx.artwork.ask_release_dates(&ctx.library, &self.games);
+            self.dating_ids = self.games.iter().map(|g| g.id).collect();
+            self.dating_total = ctx.artwork.dates_waiting(&self.dating_ids);
             // Asking may have dropped another grid's Release Dates, which starts a new round.
             self.dating_round = Some(ctx.artwork.release_order_shown(now));
         }
@@ -448,21 +507,85 @@ impl GameGrid {
         }
     }
 
-    /// Steps the sort order and reloads (FR-CAR-5): a Console Page stores the new global order, "See
-    /// all" of every Game keeps it to itself (FR-HOME-3). A no-op on an empty grid, where it would
-    /// change the order with no visible effect.
-    fn cycle_sort(&mut self, ctx: &mut Ctx) {
-        if !self.is_sortable() || self.games.is_empty() {
+    /// Opens the list of orders with the current one focused (FR-CAR-5). A no-op on an empty grid,
+    /// where sorting would change the order with no visible effect.
+    fn open_sort_list(&mut self) {
+        if self.is_sortable() && !self.games.is_empty() {
+            self.sort_list = SortOrder::ALL.iter().position(|&o| o == self.sort_order);
+        }
+    }
+
+    /// Picks `order` from the list and closes it (FR-CAR-5): a Console Page stores it as the
+    /// global order, "See all" of every Game keeps it to itself (FR-HOME-3); the grid is sorted
+    /// and the focus goes to its first Game, scrolled to the top. Picking the current order only
+    /// closes the list.
+    fn pick_sort(&mut self, order: SortOrder, ctx: &mut Ctx) {
+        self.sort_list = None;
+        self.list_hits.clear();
+        if order == self.sort_order {
             return;
         }
-        let next = self.sort_order.next();
         if self.sorting == Sorting::Global
-            && let Err(e) = ctx.library.set_sort_order(next)
+            && let Err(e) = ctx.library.set_sort_order(order)
         {
             eprintln!("game37: can't save the sort order: {e}");
         }
-        self.sort_order = next;
+        self.sort_order = order;
         self.reload(ctx);
+        self.focus = 0;
+        self.scroll = 0.0;
+    }
+
+    /// Input while the list of orders is open, which takes all of it: Up and Down move, Confirm
+    /// or a click on a row picks, Back or a click outside closes it unchanged, and the mouse over
+    /// a row focuses it.
+    fn handle_sort_list(&mut self, input: Input, ctx: &mut Ctx) {
+        let Some(row) = self.sort_list else { return };
+        let last = SortOrder::ALL.len() - 1;
+        match input {
+            Input::Action(Action::Up) => self.sort_list = Some(row.saturating_sub(1)),
+            Input::Action(Action::Down) => self.sort_list = Some((row + 1).min(last)),
+            Input::Action(Action::Confirm) => self.pick_sort(SortOrder::ALL[row], ctx),
+            Input::Action(Action::Back) => {
+                self.sort_list = None;
+                self.list_hits.clear();
+            }
+            Input::Pointer(Pointer::Click { x, y }) => match hit(&self.list_hits, x, y) {
+                Some(i) => self.pick_sort(SortOrder::ALL[i], ctx),
+                None => {
+                    self.sort_list = None;
+                    self.list_hits.clear();
+                }
+            },
+            Input::Pointer(Pointer::Move { x, y }) => {
+                if let Some(i) = hit(&self.list_hits, x, y) {
+                    self.sort_list = Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The muted line under the header line of a grid in a release order, saying why its Games
+    /// are not in date order yet (FR-ART-5): without an API key, that one is needed; while this
+    /// grid's Release Dates are being asked for, how many of them are in.
+    fn release_note(&self, ctx: &Ctx) -> Option<String> {
+        if !self.is_sortable() || !is_release(self.sort_order) || self.games.is_empty() {
+            return None;
+        }
+        if !ctx.artwork.online() {
+            return Some(NO_KEY_NOTE.to_owned());
+        }
+        let waiting = ctx.artwork.dates_waiting(&self.dating_ids);
+        (waiting > 0).then(|| {
+            let total = self.dating_total.max(waiting);
+            format!("Getting release dates… {} of {total}", total - waiting)
+        })
+    }
+
+    /// How many rows show in full: what Page Up and Page Down move by (FR-UI-1).
+    fn page_rows(&self) -> usize {
+        rows_shown(bottom() - self.top_y(), &self.grid)
     }
 
     fn content_h(&self) -> f32 {
@@ -514,6 +637,44 @@ impl GameGrid {
         gfx.line(ax - 5.0, cy - 3.0, ax, cy + 3.0, 2.0, MUTED);
         gfx.line(ax, cy + 3.0, ax + 5.0, cy - 3.0, 2.0, MUTED);
         r
+    }
+
+    /// The open list of orders under the sort chip `chip`, right-aligned with it: one row per
+    /// order, the focused one highlighted as in the Options Menu, the current one ticked.
+    fn draw_sort_list(&mut self, gfx: &mut Gfx<'_>, chip: Rect, focused: usize) {
+        self.list_hits.clear();
+        let h = SortOrder::ALL.len() as f32 * LIST_ROW_H + 2.0 * LIST_PAD;
+        let panel = Rect::new(chip.x + chip.w - LIST_W, chip.y + chip.h + LIST_GAP, LIST_W, h);
+        gfx.fill_round_rect(panel, 20.0, SURFACE);
+        gfx.stroke_round_rect(panel, 20.0, 1.0, LINE);
+        for (i, &order) in SortOrder::ALL.iter().enumerate() {
+            let r = Rect::new(
+                panel.x + LIST_PAD,
+                panel.y + LIST_PAD + i as f32 * LIST_ROW_H,
+                panel.w - 2.0 * LIST_PAD,
+                LIST_ROW_H,
+            );
+            let on = i == focused;
+            if on {
+                gfx.fill_round_rect(r, 14.0, SURFACE2);
+                gfx.fill_round_rect(Rect::new(r.x, r.y + 16.0, 5.0, 40.0), 2.0, ACCENT);
+            }
+            let weight = if on { Weight::SemiBold } else { Weight::Medium };
+            gfx.text(
+                r.x + 32.0,
+                r.y + 45.0,
+                order.label(),
+                TextStyle::new(22, weight, TEXT),
+                Align::Left,
+            );
+            if order == self.sort_order {
+                // A tick, drawn rather than a text glyph, as the chip's chevron is.
+                let (tx, ty) = (r.x + r.w - 24.0 - 18.0, r.y + 30.0);
+                gfx.line(tx, ty + 7.0, tx + 6.0, ty + 13.0, 3.0, ACCENT);
+                gfx.line(tx + 6.0, ty + 13.0, tx + 18.0, ty, 3.0, ACCENT);
+            }
+            self.list_hits.push((r, i));
+        }
     }
 
     /// The empty-state message in place of the grid, below the notice when it's shown (FR-CAR-4,
@@ -630,11 +791,25 @@ impl Screen for GameGrid {
         self.reload_if_changed(ctx);
         self.resort_if_dated(ctx, Instant::now());
         self.sync_notice(ctx);
+        if self.sort_list.is_some() {
+            self.handle_sort_list(input, ctx);
+            return Transition::None;
+        }
         match input {
             Input::Action(Action::Back) => return Transition::Pop,
             Input::Action(Action::Confirm) if self.notice_focus.is_some() => self.activate_notice(ctx),
             Input::Action(Action::Sort) if self.is_sortable() && self.notice_focus.is_none() => {
-                self.cycle_sort(ctx)
+                self.open_sort_list()
+            }
+            Input::Action(key) if is_page_key(key) && self.notice_focus.is_none() => {
+                self.focus = page(
+                    self.focus,
+                    self.games.len(),
+                    self.grid.cols,
+                    self.page_rows(),
+                    key,
+                );
+                self.reveal_focus();
             }
             Input::Action(dir) if dir.is_direction() => {
                 self.feedback = None;
@@ -651,7 +826,7 @@ impl Screen for GameGrid {
                 }
             }
             Input::Pointer(Pointer::Click { x, y }) if self.sort_hit.is_some_and(|r| r.contains(x, y)) => {
-                self.cycle_sort(ctx);
+                self.open_sort_list();
             }
             Input::Pointer(Pointer::Click { x, y }) if self.notice_button_at(x, y).is_some() => {
                 self.notice_focus = self.notice_button_at(x, y);
@@ -748,6 +923,10 @@ impl Screen for GameGrid {
             if let Some(order) = order {
                 self.sort_hit = Some(self.draw_sort_chip(gfx, order, ctx));
             }
+            if let Some(note) = self.release_note(ctx) {
+                let style = TextStyle::new(17, Weight::Medium, MUTED);
+                gfx.text(title_x + 2.0, NOTE_Y, &note, style, Align::Left);
+            }
         }
 
         self.hits.clear();
@@ -811,9 +990,18 @@ impl Screen for GameGrid {
                 Align::Left,
             );
         }
+        if let (Some(focused), Some(chip)) = (self.sort_list, self.sort_hit) {
+            self.draw_sort_list(gfx, chip, focused);
+        }
     }
 
     fn hints(&self) -> Vec<Hint> {
+        if self.sort_list.is_some() {
+            return vec![
+                Hint::new(&[Action::Confirm], "Sort"),
+                Hint::new(&[Action::Back], "Cancel"),
+            ];
+        }
         match self.notice_focus {
             Some(NoticeFocus::Copy) => vec![
                 Hint::new(&[Action::Confirm], "Copy command"),
@@ -933,6 +1121,172 @@ mod tests {
 
     fn console_source() -> Source {
         Box::new(|library, _| library.system_games("snes", SortOrder::AZ))
+    }
+
+    /// Opens the list of orders with the Sort action and picks `order` from it with Up or Down
+    /// and Confirm.
+    fn pick(grid: &mut GameGrid, ctx: &mut Ctx, order: SortOrder) {
+        grid.handle(Input::Action(Action::Sort), ctx);
+        let target = SortOrder::ALL.iter().position(|&o| o == order).unwrap();
+        while let Some(row) = grid.sort_list
+            && row != target
+        {
+            let dir = if row < target { Action::Down } else { Action::Up };
+            grid.handle(Input::Action(dir), ctx);
+        }
+        grid.handle(Input::Action(Action::Confirm), ctx);
+    }
+
+    /// SNES's Console Page of 50 Games (7 rows at 8 per row), sorted by the stored global order,
+    /// loaded, the first Game focused.
+    fn fifty_sorted(ctx: &mut Ctx) -> GameGrid {
+        let games: Vec<_> = (0..50).map(found).collect();
+        ctx.library.sync_system("snes", &games, 0).unwrap();
+        let source: Source = Box::new(|library, order| library.system_games("snes", order));
+        let mut grid = GameGrid::new("SNES", source).sortable(Colour::hex(0), "hint".into(), snes());
+        grid.handle(Input::Action(Action::Back), ctx); // initial load
+        grid
+    }
+
+    #[test]
+    fn sort_opens_the_list_on_the_current_order_and_back_closes_it_unchanged() {
+        let mut ctx = Ctx::empty();
+        ctx.library.set_sort_order(SortOrder::MostPlayed).unwrap();
+        let mut grid = fifty_sorted(&mut ctx);
+        grid.handle(Input::Action(Action::Sort), &mut ctx);
+        assert_eq!(grid.sort_list, Some(3), "Most played, the fourth order");
+        assert_eq!(
+            grid.hints(),
+            [
+                Hint::new(&[Action::Confirm], "Sort"),
+                Hint::new(&[Action::Back], "Cancel")
+            ]
+        );
+        grid.handle(Input::Action(Action::Down), &mut ctx);
+        assert!(
+            matches!(
+                grid.handle(Input::Action(Action::Back), &mut ctx),
+                Transition::None
+            ),
+            "Back closes the list, not the grid"
+        );
+        assert_eq!(grid.sort_list, None);
+        assert_eq!(grid.sort_order, SortOrder::MostPlayed);
+        assert_eq!(ctx.library.sort_order().unwrap(), SortOrder::MostPlayed);
+    }
+
+    #[test]
+    fn picking_an_order_sorts_stores_it_and_focuses_the_first_game_at_the_top() {
+        let mut ctx = Ctx::empty();
+        let mut grid = fifty_sorted(&mut ctx);
+        grid.handle(Input::Action(Action::Last), &mut ctx);
+        grid.handle(Input::Action(Action::PageUp), &mut ctx); // Game 33, far from the first
+        assert!(grid.focus == 33 && grid.scroll > 0.0);
+        let last = grid.games[49].id;
+
+        grid.handle(Input::Action(Action::Sort), &mut ctx);
+        grid.handle(Input::Action(Action::Down), &mut ctx);
+        grid.handle(Input::Action(Action::Confirm), &mut ctx);
+
+        assert_eq!(grid.sort_list, None);
+        assert_eq!(grid.sort_order, SortOrder::ZA);
+        assert_eq!(ctx.library.sort_order().unwrap(), SortOrder::ZA);
+        assert_eq!(grid.games[0].id, last, "Z–A puts the last Game first");
+        assert_eq!((grid.focus, grid.scroll), (0, 0.0), "the first Game, at the top");
+    }
+
+    #[test]
+    fn picking_on_all_games_leaves_the_stored_order_untouched() {
+        let mut ctx = Ctx::empty();
+        ctx.library.sync_system("snes", &[found(0), found(1)], 0).unwrap();
+        let source: Source = Box::new(|library, order| library.all_games(order));
+        let mut grid = GameGrid::new("All games", source).own_sort(SortOrder::RecentlyAdded);
+        grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+        pick(&mut grid, &mut ctx, SortOrder::ZA);
+        assert_eq!(grid.sort_order, SortOrder::ZA);
+        assert_eq!(
+            ctx.library.sort_order().unwrap(),
+            SortOrder::AZ,
+            "the default, still"
+        );
+    }
+
+    #[test]
+    fn a_click_on_the_chip_opens_the_list_a_click_on_a_row_picks_and_one_outside_closes() {
+        let mut ctx = Ctx::empty();
+        let mut grid = fifty_sorted(&mut ctx);
+        let chip = Rect::new(1500.0, CHIP_Y, 300.0, CHIP_H);
+        grid.sort_hit = Some(chip); // as last drawn
+        grid.handle(Input::Pointer(Pointer::Click { x: 1600.0, y: 190.0 }), &mut ctx);
+        assert_eq!(grid.sort_list, Some(0));
+
+        // As drawn: one row per order.
+        let row = |i: usize| Rect::new(1450.0, 240.0 + i as f32 * LIST_ROW_H, 336.0, LIST_ROW_H);
+        grid.list_hits = (0..SortOrder::ALL.len()).map(|i| (row(i), i)).collect();
+        grid.handle(
+            Input::Pointer(Pointer::Move {
+                x: 1500.0,
+                y: 240.0 + 2.5 * LIST_ROW_H,
+            }),
+            &mut ctx,
+        );
+        assert_eq!(grid.sort_list, Some(2), "hovering a row focuses it");
+        grid.handle(
+            Input::Pointer(Pointer::Click {
+                x: 1500.0,
+                y: 240.0 + 4.5 * LIST_ROW_H,
+            }),
+            &mut ctx,
+        );
+        assert_eq!(grid.sort_list, None);
+        assert_eq!(grid.sort_order, SortOrder::RecentlyAdded);
+
+        grid.sort_hit = Some(chip); // drawn again after the re-sort
+        grid.handle(Input::Pointer(Pointer::Click { x: 1600.0, y: 190.0 }), &mut ctx);
+        assert_eq!(grid.sort_list, Some(4));
+        grid.list_hits = (0..SortOrder::ALL.len()).map(|i| (row(i), i)).collect();
+        grid.handle(Input::Pointer(Pointer::Click { x: 200.0, y: 600.0 }), &mut ctx);
+        assert_eq!(grid.sort_list, None, "a click outside closes it");
+        assert_eq!(grid.sort_order, SortOrder::RecentlyAdded, "unchanged");
+        assert_eq!(grid.focus, 0, "and opens no Game");
+    }
+
+    #[test]
+    fn page_keys_move_by_the_rows_that_show_and_home_and_end_to_the_ends() {
+        let mut ctx = Ctx::empty();
+        let mut grid = fifty_sorted(&mut ctx);
+        assert_eq!(grid.page_rows(), 2, "two whole rows show at 8 per row");
+        let press = |grid: &mut GameGrid, ctx: &mut Ctx, key| {
+            grid.handle(Input::Action(key), ctx);
+            grid.focus
+        };
+        assert_eq!(press(&mut grid, &mut ctx, Action::Right), 1);
+        let downs: Vec<_> = (0..4)
+            .map(|_| press(&mut grid, &mut ctx, Action::PageDown))
+            .collect();
+        assert_eq!(downs, [17, 33, 49, 49], "the shorter last row ends on its last");
+        let ups: Vec<_> = (0..4)
+            .map(|_| press(&mut grid, &mut ctx, Action::PageUp))
+            .collect();
+        assert_eq!(ups, [33, 17, 1, 1], "stops on the first row, same column");
+        assert_eq!(press(&mut grid, &mut ctx, Action::Last), 49);
+        assert!(grid.focus_in_view(), "scrolled with the focus");
+        assert_eq!(press(&mut grid, &mut ctx, Action::First), 0);
+        assert_eq!(grid.scroll, 0.0);
+    }
+
+    #[test]
+    fn page_moves_stay_in_the_grid() {
+        assert_eq!(page(3, 50, 8, 2, Action::PageDown), 19);
+        assert_eq!(page(35, 50, 8, 2, Action::PageDown), 49);
+        assert_eq!(
+            page(40, 50, 8, 2, Action::PageDown),
+            48,
+            "same column on the last row"
+        );
+        assert_eq!(page(20, 50, 8, 2, Action::PageUp), 4);
+        assert_eq!(page(5, 50, 8, 0, Action::PageDown), 13, "at least one row");
+        assert_eq!(page(0, 0, 8, 2, Action::Last), 0);
     }
 
     #[test]
@@ -1063,7 +1417,7 @@ mod tests {
         grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
         assert_eq!(grid.sort_order, SortOrder::AZ);
 
-        grid.handle(Input::Action(Action::Sort), &mut ctx);
+        pick(&mut grid, &mut ctx, SortOrder::ZA);
 
         assert_eq!(grid.sort_order, SortOrder::ZA);
         assert_eq!(ctx.library.sort_order().unwrap(), SortOrder::ZA);
@@ -1077,6 +1431,7 @@ mod tests {
         assert!(grid.games.is_empty());
 
         grid.handle(Input::Action(Action::Sort), &mut ctx);
+        assert_eq!(grid.sort_list, None, "no list opens");
 
         assert_eq!(
             ctx.library.sort_order().unwrap(),
@@ -1434,7 +1789,7 @@ mod tests {
                 "Recently added asks for none"
             );
 
-            grid.handle(Input::Action(Action::Sort), &mut ctx);
+            pick(&mut grid, &mut ctx, SortOrder::NewestRelease);
 
             assert_eq!(grid.sort_order, SortOrder::NewestRelease);
             let snes = ctx.library.system_games("snes", SortOrder::AZ).unwrap();
@@ -1453,7 +1808,7 @@ mod tests {
             grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
             ctx.artwork = online(dir.path(), &fake);
 
-            grid.handle(Input::Action(Action::Sort), &mut ctx);
+            pick(&mut grid, &mut ctx, SortOrder::AZ);
 
             assert_eq!(grid.sort_order, SortOrder::AZ);
             assert!(ctx.artwork.queued_dates().is_empty());
@@ -1550,14 +1905,14 @@ mod tests {
             let mut grid = console_page();
             grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
 
-            grid.handle(Input::Action(Action::Sort), &mut ctx);
+            pick(&mut grid, &mut ctx, SortOrder::NewestRelease);
             assert_eq!(grid.sort_order, SortOrder::NewestRelease);
             // A frame: the first Release Date's request goes.
             let now = Instant::now();
             grid.keep_dating(&ctx, now);
             ctx.artwork.poll_at(&ctx.library, now);
-            grid.handle(Input::Action(Action::Sort), &mut ctx);
-            grid.handle(Input::Action(Action::Sort), &mut ctx);
+            pick(&mut grid, &mut ctx, SortOrder::OldestRelease);
+            pick(&mut grid, &mut ctx, SortOrder::AZ);
             assert_eq!(grid.sort_order, SortOrder::AZ);
 
             // Frames go on in A–Z for more than a second.
@@ -1685,6 +2040,48 @@ mod tests {
             grid.resort_if_dated(&ctx, Instant::now());
             assert_eq!(grid.focus, 49);
             assert!(grid.focus_in_view());
+        }
+
+        #[test]
+        fn without_an_api_key_a_release_order_says_one_is_needed() {
+            let mut ctx = Ctx::empty();
+            let mut grid = fifty_in_newest_release(&mut ctx);
+            assert!(!ctx.artwork.online());
+            assert_eq!(grid.release_note(&ctx).as_deref(), Some(NO_KEY_NOTE));
+            assert_eq!(
+                NO_KEY_NOTE,
+                "Release dates need a SteamGridDB API key (Settings → Artwork)"
+            );
+            pick(&mut grid, &mut ctx, SortOrder::MostPlayed);
+            assert_eq!(grid.release_note(&ctx), None, "nothing for other orders");
+        }
+
+        #[test]
+        fn while_dates_are_asked_for_the_note_counts_this_grids_games_done() {
+            let dir = tempfile::tempdir().unwrap();
+            let fake = Fake::new();
+            fake.api("/search/autocomplete/Alpha", "[{\"id\":1}]")
+                .api("/search/autocomplete/Beta", "[{\"id\":2,\"release_date\":100}]")
+                .api("/search/autocomplete/Gamma", "[{\"id\":3,\"release_date\":200}]");
+            let mut ctx = world(dir.path(), &fake);
+            ctx.library.set_sort_order(SortOrder::NewestRelease).unwrap();
+            let mut grid = console_page();
+            grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+            let note = |grid: &GameGrid| grid.release_note(&ctx);
+            assert_eq!(note(&grid).as_deref(), Some("Getting release dates… 0 of 3"));
+
+            // Frames until the first answer is in and the second request is on its way.
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while ctx.artwork.queued_dates().len() > 1 {
+                grid.keep_dating(&ctx, Instant::now());
+                ctx.artwork.poll(&ctx.library);
+                assert!(Instant::now() < deadline, "never asked");
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            assert_eq!(note(&grid).as_deref(), Some("Getting release dates… 1 of 3"));
+
+            settle_dates_at(&ctx, Instant::now());
+            assert_eq!(note(&grid), None, "all in: nothing");
         }
     }
 }

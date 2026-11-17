@@ -1072,7 +1072,10 @@ mod tests {
             assert_eq!(grid.shown_order(), (Some(order), ids(&ctx, order)), "{shelf:?}");
             assert!(grid.hints().contains(&Hint::new(&[Action::Sort], "Sort")));
 
-            grid.handle(Input::Action(Action::Sort), &mut ctx);
+            // The list of orders opens on the current one: the next is one row down.
+            for action in [Action::Sort, Action::Down, Action::Confirm] {
+                grid.handle(Input::Action(action), &mut ctx);
+            }
             let next = order.next();
             assert_ne!(ids(&ctx, next), ids(&ctx, order), "the orders differ");
             assert_eq!(grid.shown_order(), (Some(next), ids(&ctx, next)), "{shelf:?}");
@@ -1139,7 +1142,9 @@ mod tests {
             panic!("See all should open a grid");
         };
         assert_eq!(grid.title(), "All games");
-        grid.handle(Input::Action(Action::Sort), &mut ctx);
+        for action in [Action::Sort, Action::Down, Action::Confirm] {
+            grid.handle(Input::Action(action), &mut ctx);
+        }
         assert_eq!(ctx.library.sort_order().unwrap(), SortOrder::AZ, "not stored");
     }
 

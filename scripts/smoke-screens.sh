@@ -57,7 +57,11 @@ shot m1-home-empty "$root/empty.toml" ""
 shot m1-home "$root/cfg.toml" ""
 shot m1-see-all "$root/cfg.toml" "down,down,$(printf 'right,%.0s' {1..25})confirm"
 shot m1-carousel "$root/cfg.toml" "nexttab,right,right"
-shot m1-console-page "$root/cfg.toml" "nexttab,right,right,confirm,sort"
+shot m1-console-page "$root/cfg.toml" "nexttab,right,right,confirm,sort,down,confirm"
+# D2: the sort list open on a Console Page (on A–Z, Down to Z–A), and Newest release picked through it
+# with no SteamGridDB API key (the note under the header)
+shot d2-sort-list "$root/cfg.toml" "nexttab,right,right,confirm,sort,down"
+shot d2-release-no-key "$root/cfg.toml" "nexttab,right,right,confirm,sort,down,down,down,down,down,confirm"
 shot m1-console-empty "$root/cfg.toml" "nexttab,left,left,left,confirm"
 # M2: missing-emulator badge and notice, launching, messages
 shot m2-carousel-missing "$root/cfg.toml" "nexttab,left,left,left,left,left,left,left,left,left" --missing-emulators wiiu
@@ -201,9 +205,9 @@ shot d1-home-lower "$root/cfg.toml" "down,down"
 shot d1-settings-home "$root/cfg.toml" "settings$(printf ',down%.0s' {1..5}),right,down"
 shot d1-home-two-shelves "$root/cfg.toml" \
     "settings$(printf ',down%.0s' {1..5}),right,left,left,left,down,left,left,left,back,back"
-# D1: "See all" of Recently added (every Game, as m1-see-all opens it) after one press of Sort:
-# sorted A–Z (the cycle wraps after Recently added), for this grid only
-shot d1-see-all-sorted "$root/cfg.toml" "down,down,$(printf 'right,%.0s' {1..25})confirm,sort"
+# D1: "See all" of Recently added (every Game, as m1-see-all opens it) sorted A–Z: Sort opens the list
+# on Recently added, four Ups reach A–Z, Confirm picks it (for this grid only)
+shot d1-see-all-sorted "$root/cfg.toml" "down,down,$(printf 'right,%.0s' {1..25})confirm,sort,up,up,up,up,confirm"
 
 # M6: Settings Artwork: the key row with no key set (screenshot mode runs Artwork off, so it shows
 # "Not set"), and the key entry modal with a typed key
@@ -220,7 +224,7 @@ tall=(--size 1920x1200)
 shot tall-home "$root/cfg.toml" "" "${tall[@]}"                                         # m1-home
 shot tall-home-lower "$root/cfg.toml" "down,down" "${tall[@]}"                         # d1-home-lower
 shot tall-carousel "$root/cfg.toml" "nexttab,right,right" "${tall[@]}"                  # m1-carousel
-shot tall-console-page "$root/cfg.toml" "nexttab,right,right,confirm,sort" "${tall[@]}" # m1-console-page
+shot tall-console-page "$root/cfg.toml" "nexttab,right,right,confirm,sort,down,confirm" "${tall[@]}" # m1-console-page
 shot tall-details "$root/cfg.toml" "nexttab,right,right,confirm,confirm" "${tall[@]}"   # m5-details
 shot tall-options "$root/cfg.toml" "down,down,options" "${tall[@]}"                    # m5-options
 shot tall-choose-artwork "$root/cfg.toml" "down,down,options,down,down,down,confirm" \

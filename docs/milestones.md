@@ -216,7 +216,7 @@ Reviewed by two fresh reviewers (screens, data) on 2026-11-17; their findings ar
 | Step | Status |
 |---|---|
 | 1 Home | Not started |
-| 2 Sorting and keyboard | Not started |
+| 2 Sorting and keyboard | Done |
 | 3 Logos, Carousel, Settings arrows | Not started |
 
 **Done when**

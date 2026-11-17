@@ -292,6 +292,8 @@ struct State {
     /// Jobs given to a worker whose results haven't been collected.
     disk_running: usize,
     net_running: bool,
+    /// The Game whose Release Date the request on its way asks for, if it does.
+    date_running: Option<i64>,
     /// Decoded bytes held by `Slot::Ready`.
     bytes: usize,
 }
@@ -749,7 +751,9 @@ impl Artwork {
         self.rejected.load(Ordering::Relaxed)
     }
 
-    fn online(&self) -> bool {
+    /// Whether Artwork may ask SteamGridDB for anything: it has a key, and requests haven't
+    /// stopped this run.
+    pub fn online(&self) -> bool {
         self.key.is_some() && !self.stopped.load(Ordering::Relaxed)
     }
 
@@ -992,6 +996,19 @@ impl Artwork {
         self.dates_stored.get()
     }
 
+    /// How many of the Games `ids` have their Release Date queued or being asked for now: a grid in
+    /// a release order shows how far it got (FR-ART-5). No database work.
+    pub fn dates_waiting(&self, ids: &HashSet<i64>) -> usize {
+        let state = self.state.borrow();
+        let running = state.date_running.is_some_and(|id| ids.contains(&id));
+        state
+            .dates
+            .iter()
+            .filter(|job| ids.contains(&job.game_id))
+            .count()
+            + usize::from(running)
+    }
+
     /// The Games whose Release Date is queued and not asked for yet, in order.
     #[cfg(test)]
     pub(crate) fn queued_dates(&self) -> Vec<i64> {
@@ -1038,6 +1055,7 @@ impl Artwork {
             while let Ok(done) = workers.net_done.try_recv() {
                 arrived = true;
                 state.net_running = false;
+                state.date_running = None;
                 self.finish(&mut state, library, done);
             }
         }
@@ -1069,6 +1087,10 @@ impl Artwork {
             && let Some(job) = state.next_net().or(date.map(NetJob::Date))
         {
             state.net_running = true;
+            state.date_running = match &job {
+                NetJob::Date(date) => Some(date.game_id),
+                _ => None,
+            };
             workers.net(job);
         }
         arrived

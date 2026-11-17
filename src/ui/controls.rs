@@ -136,6 +136,8 @@ pub struct Controls {
     /// Whether the last key went down with Ctrl held: text typed after it is dropped, so Ctrl+F
     /// or Ctrl+comma never types an "f" or a ",", whatever the system's input method sends.
     ctrl: bool,
+    /// Whether a Shift key is held, which turns Tab back (FR-UI-1).
+    shift: bool,
     /// Held directions, oldest press first; the last one drives the repeat.
     held: Vec<(Source, Action)>,
     sticks: HashMap<JoystickId, Stick>,
@@ -152,6 +154,7 @@ impl Controls {
             text: false,
             raw: false,
             ctrl: false,
+            shift: false,
             held: Vec::new(),
             sticks: HashMap::new(),
             repeat: Repeat::default(),
@@ -179,6 +182,17 @@ impl Controls {
     /// Handles an event that happened at `at` milliseconds, pushing the inputs it makes to `out`.
     pub fn handle(&mut self, at: u64, event: ControlEvent, out: &mut Vec<Input>) {
         self.sync_raw(at);
+        match event {
+            ControlEvent::KeyDown {
+                key: Keycode::LShift | Keycode::RShift,
+                ..
+            } => self.shift = true,
+            ControlEvent::KeyUp {
+                key: Keycode::LShift | Keycode::RShift,
+            }
+            | ControlEvent::FocusLost => self.shift = false,
+            _ => {}
+        }
         if let ControlEvent::KeyDown {
             key,
             repeat: false,
@@ -226,12 +240,12 @@ impl Controls {
             } => {
                 self.kind = InputKind::Keyboard;
                 self.ctrl = ctrl;
-                if let Some(action) = key_action(key) {
+                if let Some(action) = key_action(key, self.shift) {
                     self.press(Source::Keyboard, action, at, out);
                 }
             }
             ControlEvent::KeyUp { key } => {
-                if let Some(action) = key_action(key) {
+                if let Some(action) = key_action(key, self.shift) {
                     self.release(Source::Keyboard, action, at);
                 }
             }
@@ -794,5 +808,20 @@ mod tests {
         );
         assert_eq!(controls.kind, InputKind::Controller);
         assert_eq!(out, []);
+    }
+
+    #[test]
+    fn tab_with_shift_held_goes_to_the_previous_view() {
+        let mut controls = Controls::new(InputKind::Keyboard);
+        let mut out = Vec::new();
+        controls.handle(0, key_down(Keycode::LShift), &mut out);
+        controls.handle(1, key_down(Keycode::Tab), &mut out);
+        controls.handle(2, key_up(Keycode::Tab), &mut out);
+        controls.handle(3, key_up(Keycode::LShift), &mut out);
+        controls.handle(4, key_down(Keycode::Tab), &mut out);
+        assert_eq!(
+            out,
+            [Input::Action(Action::PrevTab), Input::Action(Action::NextTab)]
+        );
     }
 }
