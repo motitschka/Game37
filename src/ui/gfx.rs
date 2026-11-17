@@ -620,6 +620,17 @@ impl<'tc> Gfx<'tc> {
     /// centred, never stretched. Its texture is made on first draw and kept while it is drawn.
     pub fn draw_picture(&mut self, picture: &Picture, r: Rect, radius: f32) {
         let fade = self.picture_opacity(picture.id);
+        self.draw_picture_at(picture, r, radius, fade);
+    }
+
+    /// Draws a picture built into Game37 (a System logo) like [`Gfx::draw_picture`] with square
+    /// corners, but shown at once: it doesn't arrive, so it doesn't fade in like Artwork.
+    pub fn draw_builtin_picture(&mut self, picture: &Picture, r: Rect) {
+        self.draw_picture_at(picture, r, 0.0, 1.0);
+    }
+
+    /// [`Gfx::draw_picture`] at `fade` (0 to 1) times the layer's opacity.
+    fn draw_picture_at(&mut self, picture: &Picture, r: Rect, radius: f32, fade: f32) {
         let creator = self.creator;
         let texture = self
             .pictures

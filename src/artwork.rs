@@ -115,6 +115,18 @@ pub struct Picture {
     pub rgba: Vec<u8>,
 }
 
+impl Picture {
+    /// A picture of `width`×`height` RGBA8 pixels, with an id no other `Picture` this run has.
+    pub fn new(width: u32, height: u32, rgba: Vec<u8>) -> Picture {
+        Picture {
+            id: NEXT_PICTURE.fetch_add(1, Ordering::Relaxed),
+            width,
+            height,
+            rgba,
+        }
+    }
+}
+
 impl fmt::Debug for Picture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Picture {} ({}×{})", self.id, self.width, self.height)
@@ -1194,12 +1206,7 @@ fn decode(bytes: &[u8], kind: Kind) -> Option<Picture> {
         image
     };
     let rgba = image.into_rgba8();
-    Some(Picture {
-        id: NEXT_PICTURE.fetch_add(1, Ordering::Relaxed),
-        width: rgba.width(),
-        height: rgba.height(),
-        rgba: rgba.into_raw(),
-    })
+    Some(Picture::new(rgba.width(), rgba.height(), rgba.into_raw()))
 }
 
 /// Writes `bytes` to `path` whole or not at all. A failure only costs a download next run.
