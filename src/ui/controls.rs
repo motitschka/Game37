@@ -31,11 +31,14 @@ pub enum StickAxis {
 /// The key and gamepad events the UI reacts to.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ControlEvent {
-    /// `repeat` marks the operating system's own key repeat; `ctrl`, a Ctrl key held with it.
+    /// `repeat` marks the operating system's own key repeat; `ctrl` and `shift`, a Ctrl or Shift
+    /// key held with it, as the key event itself says (a Shift held as the window gains focus
+    /// sends no key event of its own).
     KeyDown {
         key: Keycode,
         repeat: bool,
         ctrl: bool,
+        shift: bool,
     },
     KeyUp {
         key: Keycode,
@@ -136,8 +139,6 @@ pub struct Controls {
     /// Whether the last key went down with Ctrl held: text typed after it is dropped, so Ctrl+F
     /// or Ctrl+comma never types an "f" or a ",", whatever the system's input method sends.
     ctrl: bool,
-    /// Whether a Shift key is held, which turns Tab back (FR-UI-1).
-    shift: bool,
     /// Held directions, oldest press first; the last one drives the repeat.
     held: Vec<(Source, Action)>,
     sticks: HashMap<JoystickId, Stick>,
@@ -154,7 +155,6 @@ impl Controls {
             text: false,
             raw: false,
             ctrl: false,
-            shift: false,
             held: Vec::new(),
             sticks: HashMap::new(),
             repeat: Repeat::default(),
@@ -182,21 +182,11 @@ impl Controls {
     /// Handles an event that happened at `at` milliseconds, pushing the inputs it makes to `out`.
     pub fn handle(&mut self, at: u64, event: ControlEvent, out: &mut Vec<Input>) {
         self.sync_raw(at);
-        match event {
-            ControlEvent::KeyDown {
-                key: Keycode::LShift | Keycode::RShift,
-                ..
-            } => self.shift = true,
-            ControlEvent::KeyUp {
-                key: Keycode::LShift | Keycode::RShift,
-            }
-            | ControlEvent::FocusLost => self.shift = false,
-            _ => {}
-        }
         if let ControlEvent::KeyDown {
             key,
             repeat: false,
             ctrl: true,
+            ..
         } = event
             && let Some(action) = ctrl_key_action(key, self.text)
         {
@@ -211,6 +201,7 @@ impl Controls {
                 key,
                 repeat: true,
                 ctrl,
+                ..
             } if self.text => {
                 self.ctrl = ctrl;
                 if !ctrl && let Some(erase @ Input::Text(_)) = text_key(key) {
@@ -224,6 +215,7 @@ impl Controls {
                 key,
                 repeat: false,
                 ctrl,
+                ..
             } if self.text => {
                 self.kind = InputKind::Keyboard;
                 self.ctrl = ctrl;
@@ -237,15 +229,17 @@ impl Controls {
                 key,
                 repeat: false,
                 ctrl,
+                shift,
             } => {
                 self.kind = InputKind::Keyboard;
                 self.ctrl = ctrl;
-                if let Some(action) = key_action(key, self.shift) {
+                if let Some(action) = key_action(key, shift) {
                     self.press(Source::Keyboard, action, at, out);
                 }
             }
             ControlEvent::KeyUp { key } => {
-                if let Some(action) = key_action(key, self.shift) {
+                // Shift only turns Tab back, which is never held: the release needs no Shift.
+                if let Some(action) = key_action(key, false) {
                     self.release(Source::Keyboard, action, at);
                 }
             }
@@ -371,6 +365,7 @@ mod tests {
             key,
             repeat: false,
             ctrl: false,
+            shift: false,
         }
     }
 
@@ -484,6 +479,7 @@ mod tests {
             key: Keycode::Backspace,
             repeat: true,
             ctrl: false,
+            shift: false,
         };
         controls.handle(3, repeat, &mut out);
         controls.handle(4, key_down(Keycode::Return), &mut out);
@@ -510,6 +506,7 @@ mod tests {
             key,
             repeat: false,
             ctrl: true,
+            shift: false,
         }
     }
 
@@ -713,6 +710,7 @@ mod tests {
                     key: Keycode::Right,
                     repeat: true,
                     ctrl: false,
+                    shift: false,
                 },
             ),
             (
@@ -721,6 +719,7 @@ mod tests {
                     key: Keycode::Right,
                     repeat: true,
                     ctrl: false,
+                    shift: false,
                 },
             ),
         ];
@@ -810,14 +809,20 @@ mod tests {
         assert_eq!(out, []);
     }
 
+    /// The Tab key event carries the Shift held with it, also a Shift pressed before the window
+    /// had focus, whose own key event never came.
     #[test]
     fn tab_with_shift_held_goes_to_the_previous_view() {
         let mut controls = Controls::new(InputKind::Keyboard);
         let mut out = Vec::new();
-        controls.handle(0, key_down(Keycode::LShift), &mut out);
-        controls.handle(1, key_down(Keycode::Tab), &mut out);
+        let shift_tab = ControlEvent::KeyDown {
+            key: Keycode::Tab,
+            repeat: false,
+            ctrl: false,
+            shift: true,
+        };
+        controls.handle(1, shift_tab, &mut out);
         controls.handle(2, key_up(Keycode::Tab), &mut out);
-        controls.handle(3, key_up(Keycode::LShift), &mut out);
         controls.handle(4, key_down(Keycode::Tab), &mut out);
         assert_eq!(
             out,

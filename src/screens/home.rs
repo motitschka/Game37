@@ -217,7 +217,9 @@ pub struct Home {
     shelves: Vec<ShelfRow>,
     /// The `Ctx::revision` the Shelves were loaded at.
     revision: Option<u64>,
-    /// Whether the Shelves have loaded once, and Home picked the Shelf it opens on.
+    /// Whether Home's choice of the Shelf it opens on is made or dropped: it waits until a Shelf
+    /// shown has Games (a first scan may still be running), and is dropped for good once the player
+    /// moves the focus or the view (FR-HOME-8).
     opened: bool,
     focus: Focus,
     hscroll: [f32; SHELVES],
@@ -344,7 +346,7 @@ impl Home {
             row.total = total;
         }
         self.revision = Some(ctx.revision);
-        if !self.opened {
+        if !self.opened && self.shelves.iter().any(|row| !row.games.is_empty()) {
             self.opened = true;
             self.open_on_games();
         }
@@ -354,7 +356,7 @@ impl Home {
         self.reveal_shelf();
     }
 
-    /// On the first load, while Favorites and Continue playing are empty or not shown, Home opens
+    /// On the first load with Games, while Favorites and Continue playing are empty or not shown, Home opens
     /// on the first Shelf shown that has Games, at the top of the view, so a new player sees their
     /// Games at once (FR-HOME-8). Otherwise, or with no Games at all, it stays on the first Shelf.
     fn open_on_games(&mut self) {
@@ -368,6 +370,14 @@ impl Home {
             self.focus.shelf = i;
             self.top = i.min(max_top(self.shelves.len()));
             self.shown_v.jump(self.rest_offset());
+        }
+    }
+
+    /// Drops the choice of the Shelf Home opens on once the player moved the focus or the view
+    /// from `before` (`focus` and `top`), so Games arriving later never move them (FR-HOME-8).
+    fn drop_opening_if_moved(&mut self, before: (Focus, usize)) {
+        if self.focus != before.0 || self.top != before.1 {
+            self.opened = true;
         }
     }
 
@@ -703,43 +713,52 @@ impl Screen for Home {
 
     fn handle(&mut self, input: Input, ctx: &mut Ctx) -> Transition {
         self.sync(ctx);
-        match input {
-            Input::Action(Action::Confirm) => return self.confirm(ctx),
-            Input::Action(Action::Options) => return self.options(ctx),
+        let before = (self.focus.clone(), self.top);
+        let transition = match input {
+            Input::Action(Action::Confirm) => self.confirm(ctx),
+            Input::Action(Action::Options) => self.options(ctx),
             Input::Action(dir) if dir.is_direction() => {
                 if self.focus.step(dir, &self.counts()) {
                     self.reveal(self.focus.shelf);
                     self.reveal_shelf();
                 }
+                Transition::None
             }
             Input::Pointer(Pointer::Move { x, y }) => {
                 if let Some(Target::Item(s, c)) = self.hit_at_rest(x, y) {
                     self.focus.shelf = s;
                     self.focus.cols[s] = c.min(self.counts()[s].saturating_sub(1));
                 }
+                Transition::None
             }
             Input::Pointer(Pointer::Click { x, y }) => match self.hit_at_rest(x, y) {
                 Some(Target::Item(s, c)) => {
                     self.focus.shelf = s;
                     self.focus.cols[s] = c.min(self.counts()[s].saturating_sub(1));
-                    return self.confirm(ctx);
+                    self.confirm(ctx)
                 }
                 Some(Target::Page(s, dir)) => {
                     self.scroll_shelf(s, self.hscroll[s] + dir * (VIEW_W - Layout::now().pitch));
+                    Transition::None
                 }
-                None => {}
+                None => Transition::None,
             },
-            Input::Pointer(Pointer::RightClick { x, y }) => {
-                if let Some(Target::Item(s, c)) = self.hit_at_rest(x, y) {
+            Input::Pointer(Pointer::RightClick { x, y }) => match self.hit_at_rest(x, y) {
+                Some(Target::Item(s, c)) => {
                     self.focus.shelf = s;
                     self.focus.cols[s] = c.min(self.counts()[s].saturating_sub(1));
-                    return self.options(ctx);
+                    self.options(ctx)
                 }
+                _ => Transition::None,
+            },
+            Input::Pointer(Pointer::Wheel { dy }) => {
+                self.turn_wheel(dy);
+                Transition::None
             }
-            Input::Pointer(Pointer::Wheel { dy }) => self.turn_wheel(dy),
-            _ => {}
-        }
-        Transition::None
+            _ => Transition::None,
+        };
+        self.drop_opening_if_moved(before);
+        transition
     }
 
     fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
@@ -784,9 +803,11 @@ impl Screen for Home {
     /// half a row, keeping its focus in view (FR-HOME-8).
     fn side_wheel(&mut self, dx: f32, _x: f32, y: f32, ctx: &mut Ctx) {
         self.sync(ctx);
+        let before = (self.focus.clone(), self.top);
         if let Some(s) = self.shelf_at(y) {
             self.scroll_shelf(s, self.hscroll[s] + dx * Layout::now().pitch / 2.0);
         }
+        self.drop_opening_if_moved(before);
     }
 
     fn hints(&self) -> Vec<Hint> {
@@ -1649,6 +1670,38 @@ mod tests {
             (1, 0),
             "Recently added, below Most played"
         );
+    }
+
+    /// FR-HOME-8 after First-run Setup: the library scans in the background, so Home first loads
+    /// with no Games; when they arrive it still opens on them, unless the player moved meanwhile.
+    #[test]
+    fn home_opens_on_games_that_arrive_after_it_loaded_empty_unless_the_player_moved() {
+        let games: Vec<_> = (0..3).map(found).collect();
+        let recently_added = 2; // Shelf::ALL's index for Shelf::RecentlyAdded
+        let nothing = Input::Pointer(Pointer::Move { x: -1.0, y: -1.0 });
+
+        let mut ctx = Ctx::empty();
+        let mut home = opened(&mut ctx);
+        assert_eq!(
+            (home.focus.shelf, home.top),
+            (0, 0),
+            "no Games yet: the first Shelf"
+        );
+        ctx.library.sync_system("snes", &games, 0).unwrap();
+        ctx.revision += 1;
+        home.handle(nothing, &mut ctx);
+        assert_eq!((home.focus.shelf, home.top), (recently_added, recently_added));
+        assert_eq!(home.shown_v.value(), home.rest_offset(), "no glide");
+
+        let mut ctx = Ctx::empty();
+        let mut home = opened(&mut ctx);
+        home.handle(Input::Action(Action::Down), &mut ctx);
+        assert_eq!(home.focus.shelf, 1, "the player moved before the Games came");
+        ctx.library.sync_system("snes", &games, 0).unwrap();
+        ctx.revision += 1;
+        home.handle(nothing, &mut ctx);
+        assert_eq!(home.shelves[recently_added].games.len(), 3, "reloaded");
+        assert_eq!(home.focus.shelf, 1, "no jump");
     }
 
     /// A sideways wheel or swipe scrolls the Shelf under the pointer, half a cover a notch, and

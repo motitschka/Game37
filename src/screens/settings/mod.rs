@@ -211,6 +211,8 @@ pub struct Settings {
     /// The ‹ and › of the focused section's choice rows as last drawn, with their row and the
     /// action they stand for (FR-UI-1).
     arrows: Vec<(Rect, (usize, Action))>,
+    /// Where the pointer last moved to, so a move event that didn't move it focuses nothing.
+    pointer: Option<(f32, f32)>,
 }
 
 impl Default for Settings {
@@ -243,6 +245,7 @@ impl Settings {
             section_bar: Eased::new(section_rect(0).y),
             row_bar: None,
             arrows: Vec::new(),
+            pointer: None,
         }
     }
 
@@ -293,6 +296,10 @@ impl Settings {
         self.row = (self.row as isize + dir).clamp(0, last) as usize;
     }
 
+    /// A click on a section focuses it, and one on the focused section enters it. A click on a
+    /// row acts on it once it has the focus: as the pointer over a row focuses it, a mouse's click
+    /// acts on the row it lands on, like a button. A choice row's ‹ and › step it back and forward
+    /// (FR-UI-1).
     fn click(&mut self, x: f32, y: f32, ctx: &mut Ctx) -> Transition {
         let sections: Vec<_> = (0..self.sections.len()).map(|i| (section_rect(i), i)).collect();
         if let Some(i) = hit(&sections, x, y) {
@@ -317,8 +324,12 @@ impl Settings {
         Transition::None
     }
 
-    /// The pointer over a row focuses it, as in lists elsewhere.
+    /// The pointer moved over a row focuses it, as in lists elsewhere. A move to where the pointer
+    /// already was focuses nothing, so the focus the keyboard moved stays until the pointer moves.
     fn hover(&mut self, x: f32, y: f32) {
+        if self.pointer.replace((x, y)) == Some((x, y)) {
+            return;
+        }
         if let Some(i) = hit(&self.sections[self.section].layout(&self.rows), x, y) {
             self.focus = Focus::Rows;
             self.row = i;
@@ -776,8 +787,9 @@ mod tests {
         assert_eq!(*log.borrow(), ["confirm 2"]);
     }
 
-    /// A click on a choice row's ‹ steps it back and one on its › forward, at once, whether or
-    /// not the row had the focus; a click on its title only focuses it (FR-UI-1).
+    /// A mouse moves onto a row before it clicks, which focuses the row: a click on a choice row's
+    /// ‹ then steps it back and one on its › forward, at once, and one on its title acts on it as
+    /// Confirm does, stepping it forward (FR-UI-1).
     #[test]
     fn a_click_on_a_choice_rows_arrows_steps_it_at_once() {
         let ctx = &mut Ctx::empty();
@@ -788,30 +800,61 @@ mod tests {
         assert_eq!(at(&s), (Focus::Sections, "Display", 0));
         // As drawn, with a stand-in for the font's widths.
         s.arrows = arrow_hits(&s.rows, |value| value.len() as f32 * 11.0);
+        // What a mouse sends: a move onto the spot, then the click there.
+        let mouse = |s: &mut Settings, ctx: &mut Ctx, x: f32, y: f32| {
+            s.handle(Input::Pointer(Pointer::Move { x, y }), ctx);
+            s.handle(Input::Pointer(Pointer::Click { x, y }), ctx);
+        };
         let arrow = |s: &Settings, row, action| {
             let &(r, _) = s.arrows.iter().find(|(_, hit)| *hit == (row, action)).unwrap();
-            Input::Pointer(Pointer::Click {
-                x: r.x + r.w / 2.0,
-                y: r.y + r.h / 2.0,
-            })
+            (r.x + r.w / 2.0, r.y + r.h / 2.0)
         };
         assert_eq!(ctx.games_per_row, 8);
 
-        s.handle(arrow(&s, 2, Action::Left), ctx);
-        assert_eq!(ctx.games_per_row, 7, "‹ steps back on the first click");
+        let (x, y) = arrow(&s, 2, Action::Left);
+        mouse(&mut s, ctx, x, y);
+        assert_eq!(ctx.games_per_row, 7, "‹ steps back once");
         assert_eq!(at(&s), (Focus::Rows, "Display", 2), "and focuses the row");
 
         act(&mut s, ctx, Action::Back);
-        s.handle(arrow(&s, 2, Action::Right), ctx);
-        assert_eq!(ctx.games_per_row, 8, "› steps forward on the first click");
-        s.handle(arrow(&s, 2, Action::Right), ctx);
-        assert_eq!(ctx.games_per_row, 9, "and again on the focused row");
+        let (x, y) = arrow(&s, 2, Action::Right);
+        mouse(&mut s, ctx, x, y);
+        assert_eq!(ctx.games_per_row, 8, "› steps forward once");
+        mouse(&mut s, ctx, x, y);
+        assert_eq!(ctx.games_per_row, 9, "and again");
 
         act(&mut s, ctx, Action::Back);
         let title = row_rects(&s.rows)[2].0;
-        click(&mut s, ctx, Rect::new(RX + 32.0, title.y, 100.0, title.h));
+        mouse(&mut s, ctx, RX + 42.0, title.y + 10.0);
         assert_eq!(at(&s), (Focus::Rows, "Display", 2));
-        assert_eq!(ctx.games_per_row, 9, "a click on the title only focuses");
+        assert_eq!(
+            ctx.games_per_row, 10,
+            "a click on the title steps it forward once"
+        );
+    }
+
+    /// The keyboard moves the focus away from the row under a pointer that stays still: a move
+    /// event that didn't move the pointer leaves the focus where the keyboard put it.
+    #[test]
+    fn a_pointer_that_did_not_move_takes_no_focus_from_the_keyboard() {
+        let (mut s, log) = settings();
+        let ctx = &mut Ctx::empty();
+        act(&mut s, ctx, Action::Up);
+        let r = row_rects(&s.rows)[1].0;
+        let over = |x: f32| Input::Pointer(Pointer::Move { x, y: r.y + 10.0 });
+        s.handle(over(r.x + 10.0), ctx);
+        assert_eq!(at(&s), (Focus::Rows, "A", 1));
+        act(&mut s, ctx, Action::Down);
+        assert_eq!(at(&s), (Focus::Rows, "A", 2));
+        s.handle(over(r.x + 10.0), ctx);
+        assert_eq!(
+            at(&s),
+            (Focus::Rows, "A", 2),
+            "the pointer stayed: the keyboard's focus stays"
+        );
+        s.handle(over(r.x + 11.0), ctx);
+        assert_eq!(at(&s), (Focus::Rows, "A", 1), "it moved: the row under it");
+        assert!(log.borrow().is_empty(), "nothing acted");
     }
 
     #[test]

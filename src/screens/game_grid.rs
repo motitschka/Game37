@@ -37,6 +37,7 @@ const LIST_ROW_H: f32 = 72.0;
 /// The muted line under the header line of a grid in a release order (FR-ART-5).
 const NOTE_Y: f32 = 268.0;
 const NO_KEY_NOTE: &str = "Release dates need a SteamGridDB API key (Settings → Artwork)";
+const STOPPED_NOTE: &str = "Release dates can't be fetched right now (SteamGridDB refused the requests)";
 
 /// Whether and how a grid's Sort action changes its order (FR-CAR-5, FR-HOME-3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -400,6 +401,12 @@ impl GameGrid {
         });
         self.focus = refocus(&self.games, self.focus, &games);
         self.games = games;
+        if self.games.is_empty() {
+            // An empty grid draws no sort chip or list: an open list closes rather than keep
+            // taking the input.
+            self.sort_list = None;
+            self.list_hits.clear();
+        }
         self.revision = Some(ctx.revision);
         self.dates_seen = ctx.artwork.dates_stored();
         // The previous frame's hit rects may point at Games that moved or went: drop them until the
@@ -590,14 +597,18 @@ impl GameGrid {
     }
 
     /// The muted line under the header line of a grid in a release order, saying why its Games
-    /// are not in date order yet (FR-ART-5): without an API key, that one is needed; while this
-    /// grid's Release Dates are being asked for, how many of them are in.
+    /// are not in date order yet (FR-ART-5): without an API key, that one is needed; with one but
+    /// SteamGridDB's requests stopped this run, that they can't be fetched; while this grid's
+    /// Release Dates are being asked for, how many of them are in.
     fn release_note(&self, ctx: &Ctx) -> Option<String> {
         if !self.is_sortable() || !is_release(self.sort_order) || self.games.is_empty() {
             return None;
         }
-        if !ctx.artwork.online() {
+        if ctx.artwork.key().is_none() {
             return Some(NO_KEY_NOTE.to_owned());
+        }
+        if !ctx.artwork.online() {
+            return Some(STOPPED_NOTE.to_owned());
         }
         let waiting = ctx.artwork.dates_waiting(&self.dating_ids);
         (waiting > 0).then(|| {
@@ -1219,6 +1230,37 @@ mod tests {
         assert_eq!(grid.sort_list, None);
         assert_eq!(grid.sort_order, SortOrder::MostPlayed);
         assert_eq!(ctx.library.sort_order().unwrap(), SortOrder::MostPlayed);
+    }
+
+    /// A grid has nothing to scroll sideways: Shift and the wheel, or a sideways swipe, scroll it
+    /// as the wheel does, right as down.
+    #[test]
+    fn a_sideways_wheel_scrolls_a_grid_as_the_wheel_does() {
+        let mut ctx = Ctx::empty();
+        let mut grid = fifty_sorted(&mut ctx);
+        grid.side_wheel(2.0, 960.0, 540.0, &mut ctx);
+        assert_eq!(grid.scroll, grid.grid.pitch_y, "two notches: a row down");
+        let mut wheeled = fifty_sorted(&mut ctx);
+        wheeled.handle(Input::Pointer(Pointer::Wheel { dy: -2.0 }), &mut ctx);
+        assert_eq!(grid.scroll, wheeled.scroll);
+        grid.side_wheel(-2.0, 960.0, 540.0, &mut ctx);
+        assert_eq!(grid.scroll, 0.0, "left: back up");
+    }
+
+    /// A background reload that empties the grid while the list is open closes the list: an empty
+    /// grid draws none, so it must not keep taking the input.
+    #[test]
+    fn a_reload_that_empties_the_grid_closes_the_sort_list() {
+        let mut ctx = Ctx::empty();
+        let mut grid = fifty_sorted(&mut ctx);
+        grid.handle(Input::Action(Action::Sort), &mut ctx);
+        assert!(grid.sort_list.is_some());
+        ctx.library.sync_system("snes", &[], 0).unwrap();
+        ctx.revision += 1;
+        let back = grid.handle(Input::Action(Action::Back), &mut ctx);
+        assert!(grid.games.is_empty());
+        assert_eq!(grid.sort_list, None);
+        assert!(matches!(back, Transition::Pop), "Back reaches the grid");
     }
 
     #[test]
@@ -2100,6 +2142,35 @@ mod tests {
             );
             pick(&mut grid, &mut ctx, SortOrder::MostPlayed);
             assert_eq!(grid.release_note(&ctx), None, "nothing for other orders");
+        }
+
+        /// With a key, but SteamGridDB refused the requests this run, the note says the dates
+        /// can't be fetched now, not that a key is needed.
+        #[test]
+        fn once_steamgriddb_stopped_the_requests_the_note_says_dates_cant_be_fetched() {
+            let dir = tempfile::tempdir().unwrap();
+            let fake = Fake::new();
+            fake.route(
+                "https://www.steamgriddb.com/api/v2",
+                Err(crate::artwork::FetchError::Status(401)),
+            );
+            let mut ctx = world(dir.path(), &fake);
+            ctx.library.set_sort_order(SortOrder::NewestRelease).unwrap();
+            let mut grid = console_page();
+            grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while ctx.artwork.online() {
+                grid.keep_dating(&ctx, Instant::now());
+                ctx.artwork.poll(&ctx.library);
+                assert!(Instant::now() < deadline, "never refused");
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            assert!(ctx.artwork.key().is_some());
+            assert_eq!(grid.release_note(&ctx).as_deref(), Some(STOPPED_NOTE));
+            assert_eq!(
+                STOPPED_NOTE,
+                "Release dates can't be fetched right now (SteamGridDB refused the requests)"
+            );
         }
 
         #[test]

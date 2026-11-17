@@ -381,6 +381,13 @@ impl Screen for Carousel {
         "Consoles"
     }
 
+    /// A sideways wheel or swipe moves through the Systems as the wheel does, a System a notch:
+    /// right to the next one.
+    fn side_wheel(&mut self, dx: f32, _x: f32, _y: f32, _ctx: &mut Ctx) {
+        let notches = self.notches.turn(dx);
+        self.step(notches);
+    }
+
     fn handle(&mut self, input: Input, ctx: &mut Ctx) -> Transition {
         match input {
             Input::Action(Action::Left) => self.step(-1),
@@ -685,6 +692,20 @@ mod tests {
             );
         }
         assert_eq!(carousel.system().id, "snes", "two Systems on from NES");
+    }
+
+    /// A sideways wheel or touchpad swipe moves a System per notch, right to the next one.
+    #[test]
+    fn a_sideways_wheel_moves_the_carousel_one_system_per_notch() {
+        let mut ctx = Ctx::empty();
+        let mut carousel = Carousel::new(&ctx.library);
+        assert_eq!(carousel.system().id, "nes");
+        carousel.side_wheel(1.0, 960.0, 540.0, &mut ctx);
+        assert_eq!(carousel.system().id, "gb", "right: the next System");
+        for _ in 0..20 {
+            carousel.side_wheel(-0.1, 960.0, 540.0, &mut ctx);
+        }
+        assert_eq!(carousel.system().id, "ps5", "two Systems back from GB");
     }
 
     #[test]

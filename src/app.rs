@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use sdl3::event::{Event, WindowEvent};
 use sdl3::gamepad::{Axis, Button, Gamepad};
 use sdl3::joystick::JoystickId;
-use sdl3::keyboard::{Keycode, Mod, Scancode};
+use sdl3::keyboard::{KeyboardUtil, Keycode, Mod, Scancode};
 use sdl3::mouse::MouseButton;
 use sdl3::render::{WindowCanvas, create_renderer};
 use sdl3::sys::render::SDL_RendererLogicalPresentation;
@@ -275,7 +275,7 @@ fn interactive(
     }
     let mut events = sdl.event_pump().map_err(|e| e.to_string())?;
 
-    let mut input = InputState::new(gamepads);
+    let mut input = InputState::new(gamepads, sdl.keyboard());
     let mut hits = Hits::default();
     let mut feeds = Vec::new();
     // Whether SDL sends text input events, which follows `input.controls.text`.
@@ -842,13 +842,6 @@ fn wheel_feed(x: f32, y: f32, shift: bool, at: (f32, f32)) -> Option<Feed> {
     }
 }
 
-/// Whether a Shift key is held now.
-fn shift_held() -> bool {
-    // SAFETY: SDL_GetModState only reads SDL's keyboard state, and SDL is running while events come.
-    let state = unsafe { sdl3::sys::keyboard::SDL_GetModState() };
-    Mod::from_bits_truncate(state.0).intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD)
-}
-
 /// Clipboard text turned into one [`Input::Text`] per printable character (FR-UI-1): newlines,
 /// tabs and other control characters are dropped, an empty clipboard becomes no `Input`s.
 pub(crate) fn paste_inputs(text: &str) -> Vec<Input> {
@@ -861,6 +854,8 @@ pub(crate) fn paste_inputs(text: &str) -> Vec<Input> {
 /// Turns SDL events into [`Feed`]s: keys and gamepads for [`Controls`], the mouse directly.
 struct InputState {
     subsystem: GamepadSubsystem,
+    /// Which modifier keys are held now, for Shift and the wheel.
+    keyboard: KeyboardUtil,
     pads: HashMap<JoystickId, Gamepad>,
     /// The connected pads and their names, in connection order.
     connected: Vec<(JoystickId, String)>,
@@ -874,7 +869,7 @@ struct InputState {
 }
 
 impl InputState {
-    fn new(subsystem: GamepadSubsystem) -> InputState {
+    fn new(subsystem: GamepadSubsystem, keyboard: KeyboardUtil) -> InputState {
         let has_pad = subsystem.gamepads().is_ok_and(|pads| !pads.is_empty());
         let kind = if has_pad {
             InputKind::Controller
@@ -883,6 +878,7 @@ impl InputState {
         };
         InputState {
             subsystem,
+            keyboard,
             pads: HashMap::new(),
             connected: Vec::new(),
             last_used: None,
@@ -959,6 +955,7 @@ impl InputState {
                 key,
                 repeat,
                 ctrl: keymod.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD),
+                shift: keymod.intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD),
             },
             Event::KeyUp {
                 keycode: Some(key), ..
@@ -1024,7 +1021,11 @@ impl InputState {
                 ..
             } => {
                 let at = gfx.to_logical(mouse_x, mouse_y);
-                return wheel_feed(x, y, shift_held(), at);
+                let shift = self
+                    .keyboard
+                    .mod_state()
+                    .intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD);
+                return wheel_feed(x, y, shift, at);
             }
             _ => return None,
         };
@@ -1098,6 +1099,7 @@ mod tests {
                         key,
                         repeat: false,
                         ctrl: false,
+                        shift: false,
                     },
                 ),
                 Feed::Control(0, ControlEvent::KeyUp { key }),

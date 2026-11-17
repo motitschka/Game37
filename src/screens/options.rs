@@ -2365,6 +2365,7 @@ mod tests {
                 key,
                 repeat: false,
                 ctrl: false,
+                shift: false,
             };
             controls.handle(0, down, &mut inputs);
             controls.handle(1, ControlEvent::KeyUp { key }, &mut inputs);
@@ -2376,6 +2377,7 @@ mod tests {
                 key: Keycode::Return,
                 repeat: false,
                 ctrl: false,
+                shift: false,
             },
             &mut inputs,
         );

@@ -438,6 +438,7 @@ mod tests {
             key,
             repeat: false,
             ctrl: false,
+            shift: false,
         })
     }
 
@@ -446,6 +447,7 @@ mod tests {
             key,
             repeat: false,
             ctrl: true,
+            shift: false,
         })
     }
 
