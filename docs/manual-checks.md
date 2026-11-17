@@ -113,14 +113,19 @@ The Switch controller in PlayStation Games is checked in section 5.
       swipe moves one Shelf at a time, not straight to the last one.
 - [ ] Moving the mouse over the Shelves while Home snaps never leaves the selection on a Shelf you can't
       see.
-- [ ] Settings → Home: set Shelf 1 to Most played, then back to Home: Most played is first and the
-      Shelf it replaced moved to where Most played was. Set three Shelves Off: Home shows one Shelf in
-      its upper half. After a restart Home is the same.
+- [ ] Settings → Home: move Most played to the top with ← and switch Continue playing off with A, then
+      back to Home: Most played is first and Continue playing is gone. The last Shelf left on can't be
+      switched off. After a restart Home is the same.
+- [ ] A new Games Root with a few Games and nothing played: after First-run Setup, Home opens on
+      Recently added with the Games showing.
 - [ ] Settings → Display → Games per row at 6, 8 and 10: a Console Page, "See all" and Search show that
       many covers per row, with equal gaps left and right; the selected Game stays selected.
-- [ ] The Sort button on a Console Page steps A–Z, Z–A, Last played, Most played, Recently added,
-      Newest release, Oldest release; another System's Console Page uses the same order, also after a
-      restart.
+- [ ] The Sort button on a Console Page opens the list of seven orders; picking one sorts and jumps to
+      the first Game; another System's Console Page uses the same order, also after a restart.
+- [ ] Without a SteamGridDB key, Newest release says release dates need a key.
+- [ ] Keyboard: Page Up/Down, Home and End in a big grid and in Search; Shift+Tab goes back a view.
+      Mouse: ‹ and › in Settings → Display step back and forward with one click; a sideways touchpad
+      swipe moves the Shelf under the pointer and the Carousel one System per notch.
 - [ ] "See all" on Recently added shows every Game you have, newest first; Sort changes it there, and a
       Console Page's order is unchanged afterwards. "See all" on Favorites shows only the Favorites.
 - [ ] With your SteamGridDB key: sort a Console Page by Newest release and wait: Games fill in by date,

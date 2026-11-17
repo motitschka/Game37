@@ -13,16 +13,24 @@
 - **Home shows two Shelves per screen, with bigger covers.** Up, down and the mouse wheel move one whole
   Shelf with a short snap, so Home never stops on half a Shelf; a touchpad swipe moves one Shelf per
   notch. Empty Shelves are as tall as the others.
-- **Settings → Home** chooses which Shelves Home shows and in what order: four rows, Shelf 1 to Shelf
-  4, each set to Favorites, Continue playing, Recently added, Most played or Off.
+- **Settings → Home** lists the four Shelves in Home's order: A switches one on or off, left and right
+  move it up or down. A new player's Home opens on their Games, not on two empty Shelves.
 - **Games per row** in Settings → Display: 6 to 10 (default 8) on Console Pages, "See all" and Search.
   The grid now runs from margin to margin, centred, and the covers grow or shrink to fit.
-- **Seven sort orders** on one Sort button: A–Z, Z–A, Last played, Most played, Recently added, Newest
-  release and Oldest release. Games without a release date come last in both release orders.
+- **Seven sort orders:** the Sort button (or a click on the sort chip) opens a list of A–Z, Z–A, Last
+  played, Most played, Recently added, Newest release and Oldest release; picking one jumps to the first
+  Game. Games without a release date come last in both release orders, and a grid sorted by release
+  says when dates need a key, can't be fetched, or are still arriving.
+- **Getting around:** Left on a Shelf's first Game jumps to its "All games" item; sideways swipes and
+  Shift+wheel move a Shelf, and the Carousel moves one System per touchpad notch. Page Up, Page Down,
+  Home and End move through grids and Search; Shift+Tab switches back a view. In Settings, ‹ and ›
+  step a choice back and forward with one click.
 - **Release dates** come from SteamGridDB with a key. Game37 asks for the dates it is missing only while
   a grid sorted by Newest release or Oldest release is on screen, one request per Game, never for the
   whole library on its own. The Details Page shows the release year.
-- **System logos** on the Carousel cards and the Console Page header, in their official colours. They
+- **System logos** on the Carousel cards and the Console Page header, in their official colours, with
+  dark parts drawn light so each reads on its card, all at about the same size (square ones with the
+  System's name beside them). They
   are trademarks of Nintendo and Sony and are not under Game37's licence (see the README).
 - **Show Playtime** in Settings → Display: Off, Grids (default) or Grids and Home.
 
