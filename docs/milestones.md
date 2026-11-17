@@ -217,7 +217,7 @@ Reviewed by two fresh reviewers (screens, data) on 2026-11-17; their findings ar
 |---|---|
 | 1 Home | Done |
 | 2 Sorting and keyboard | Done |
-| 3 Logos, Carousel, Settings arrows | Not started |
+| 3 Logos, Carousel, Settings arrows | Done |
 
 **Done when**
 - Every change above has a test, the mockups and smoke shots show them, and tests, clippy, fmt and the real-Core tests pass.

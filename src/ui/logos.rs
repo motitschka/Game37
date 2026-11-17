@@ -70,14 +70,32 @@ pub fn fit(w: f32, h: f32, bounds: Rect, align: Align) -> Rect {
     Rect::new(x, bounds.y + (bounds.h - fh) / 2.0, fw, fh)
 }
 
-/// Draws the logo of the System `id` fitted into `bounds` (see [`fit`]) at the layer's opacity.
-/// Returns false, drawing nothing, when there is no logo to draw or it couldn't be drawn: the
-/// caller then draws the System's name.
-pub fn draw(gfx: &mut Gfx<'_>, id: &str, bounds: Rect, align: Align) -> bool {
+/// Where a `w`×`h` logo lands drawn at about `area` px² whatever its shape (FR-CAR-2): scaled so
+/// its area is `area`, but no wider or taller than `bounds` and never larger than its own size, then
+/// placed in `bounds` as [`fit`] does.
+pub fn fit_area(w: f32, h: f32, area: f32, bounds: Rect, align: Align) -> Rect {
+    let scale = (area / (w * h)).sqrt().min(1.0);
+    fit(w * scale, h * scale, bounds, align)
+}
+
+/// Whether a `w`×`h` logo is square enough (Switch's, PlayStation's) to need the System's name
+/// beside it (FR-CAR-3).
+pub fn is_square(w: f32, h: f32) -> bool {
+    w / h < 1.6
+}
+
+/// Draws the logo of the System `id` at about `area` px² inside `bounds` (see [`fit_area`]) at the
+/// layer's opacity, and returns where. Returns `None`, drawing nothing, when there is no logo to
+/// draw or it couldn't be drawn: the caller then draws the System's name.
+pub fn draw(gfx: &mut Gfx<'_>, id: &str, area: f32, bounds: Rect, align: Align) -> Option<Rect> {
+    let mut at = None;
     drawn(logo(id), |picture| {
-        let r = fit(picture.width as f32, picture.height as f32, bounds, align);
+        let r = fit_area(picture.width as f32, picture.height as f32, area, bounds, align);
+        at = Some(r);
         gfx.draw_builtin_picture(picture, r)
     })
+    .then_some(at)
+    .flatten()
 }
 
 /// Whether a logo was drawn: `draw_logo` draws `logo`, if there is one, and says whether it could.
@@ -145,6 +163,52 @@ mod tests {
             assert!(
                 r.y >= bounds.y && r.y + r.h <= bounds.y + bounds.h + 1e-3,
                 "{r:?}"
+            );
+        }
+    }
+
+    /// A long thin logo and a square one come out at about the same area, inside the caps, and
+    /// neither is drawn larger than its own size.
+    #[test]
+    fn fit_area_draws_logos_of_any_shape_at_about_the_same_area() {
+        let bounds = Rect::new(126.0, 135.0, 440.0, 96.0);
+        let area = 6000.0;
+        for (w, h) in [(800.0, 100.0), (340.0, 340.0)] {
+            let r = fit_area(w, h, area, bounds, Align::Left);
+            let drawn = r.w * r.h;
+            assert!((drawn / area - 1.0).abs() <= 0.15, "{w}×{h}: {drawn} px²");
+            assert!((r.w / r.h - w / h).abs() < 1e-4, "{w}×{h} changed shape: {r:?}");
+            assert!(r.w <= bounds.w + 1e-3 && r.h <= bounds.h + 1e-3, "{w}×{h}: {r:?}");
+            assert_eq!(r.x, bounds.x, "aligned left");
+            assert!(
+                (r.y + r.h / 2.0 - (bounds.y + bounds.h / 2.0)).abs() < 1e-3,
+                "centred"
+            );
+        }
+        // A large area is held to the box: the long one by its width, the square one by its height.
+        let r = fit_area(800.0, 100.0, 60_000.0, bounds, Align::Left);
+        assert_eq!((r.w, r.h), (440.0, 55.0));
+        let r = fit_area(340.0, 340.0, 60_000.0, bounds, Align::Left);
+        assert_eq!((r.w, r.h), (96.0, 96.0));
+        // A small logo is never enlarged past its own size.
+        let r = fit_area(80.0, 40.0, 22_000.0, bounds, Align::Left);
+        assert_eq!((r.w, r.h), (80.0, 40.0));
+    }
+
+    #[test]
+    fn a_logo_narrower_than_1_6_times_its_height_is_square() {
+        assert!(is_square(340.0, 340.0), "Switch");
+        assert!(is_square(448.0, 340.0), "PlayStation");
+        assert!(!is_square(800.0, 340.0), "Wii");
+        assert!(!is_square(800.0, 95.0), "Nintendo 3DS");
+        for system in &SYSTEMS {
+            let picture = logo(system.id).unwrap();
+            let square = is_square(picture.width as f32, picture.height as f32);
+            assert_eq!(
+                square,
+                ["switch", "switch2", "ps1"].contains(&system.id),
+                "{}",
+                system.id
             );
         }
     }

@@ -35,7 +35,7 @@ const LIST_PAD: f32 = 12.0;
 const LIST_ROW_H: f32 = 72.0;
 
 /// The muted line under the header line of a grid in a release order (FR-ART-5).
-const NOTE_Y: f32 = 262.0;
+const NOTE_Y: f32 = 268.0;
 const NO_KEY_NOTE: &str = "Release dates need a SteamGridDB API key (Settings → Artwork)";
 
 /// Whether and how a grid's Sort action changes its order (FR-CAR-5, FR-HOME-3).
@@ -71,16 +71,28 @@ const CHIP_Y: f32 = 168.0;
 const CHIP_H: f32 = 52.0;
 const CHIP_PAD: f32 = 20.0;
 const ARROW_W: f32 = 10.0;
-/// The box a Console Page's System logo is fitted into in place of the title, from the title's
-/// left edge: centred where the title's capitals sit (52 px, baseline 202, capitals about 0.73 em
-/// tall), so the line under it and the sort chip keep their places.
-const LOGO_W: f32 = 420.0;
-const LOGO_H: f32 = 64.0;
-const LOGO_MID_Y: f32 = 183.0;
+/// A Console Page's System logo in place of the title (FR-CAR-2, FR-CAR-3): drawn at about
+/// `LOGO_AREA` px² whatever its shape, inside a `LOGO_MAX_W`×`LOGO_MAX_H` box from the title's left
+/// edge, centred at `LOGO_MID_Y`, 12 px above the title's capitals: so the tallest logo, the header
+/// line and the release note all fit above `TOP`, which keeps two whole rows of 8 showing at 1080.
+const LOGO_AREA: f32 = 22_000.0;
+const LOGO_MAX_W: f32 = 440.0;
+const LOGO_MAX_H: f32 = 96.0;
+const LOGO_MID_Y: f32 = 171.0;
+/// The baseline of a grid's text title (52 px).
+const TITLE_Y: f32 = 202.0;
+/// The baseline of the System's name beside a square logo, in the title's style: its capitals
+/// (about 0.73 em) centred on the logo.
+const NAME_Y: f32 = LOGO_MID_Y + 19.0;
+/// Between a square logo and the System's name beside it.
+const NAME_GAP: f32 = 20.0;
+/// The baseline of the line under the title ("n games · Sorted by …"): its capitals (20 px, about
+/// 0.73 em) start 12 px under the tallest logo.
+const HEADER_Y: f32 = 246.0;
 
 /// The missing-emulator notice (FR-CAR-9), after `screen_console_page_missing_emulator` in
 /// `design/generate_mockups.py`.
-const NOTICE_Y: f32 = 268.0;
+const NOTICE_Y: f32 = 278.0;
 const NOTICE_H: f32 = 176.0;
 /// Gap between the notice and the grid or empty-state message below it.
 const NOTICE_GAP: f32 = 40.0;
@@ -185,6 +197,17 @@ pub fn refocus(old: &[GameRow], focus: usize, new: &[GameRow]) -> usize {
 
 /// The header line under the title: "<n> games", singular when one, with the sort order appended
 /// for a sortable grid (FR-CAR-5).
+/// The box a Console Page's logo is drawn in from the title's left edge `x`.
+fn logo_box(x: f32) -> Rect {
+    Rect::new(x, LOGO_MID_Y - LOGO_MAX_H / 2.0, LOGO_MAX_W, LOGO_MAX_H)
+}
+
+/// Where the System's name starts beside a Console Page's drawn `logo`: only a square logo
+/// (FR-CAR-3) has the name beside it.
+fn name_beside(logo: Rect) -> Option<f32> {
+    logos::is_square(logo.w, logo.h).then_some(logo.x + logo.w + NAME_GAP)
+}
+
 fn header(count: usize, order: Option<SortOrder>) -> String {
     let games = match count {
         1 => "1 game".to_owned(),
@@ -883,20 +906,22 @@ impl Screen for GameGrid {
             gfx.fill_round_rect(Rect::new(M, 152.0, 8.0, 76.0), 4.0, extra.tint);
             title_x += 30.0;
         }
-        // A Console Page is headed by its System's logo in place of its name (FR-CAR-3).
-        let logo_box = Rect::new(title_x, LOGO_MID_Y - LOGO_H / 2.0, LOGO_W, LOGO_H);
-        let logo = self
-            .extra
-            .as_ref()
-            .is_some_and(|extra| logos::draw(gfx, extra.system.id, logo_box, Align::Left));
-        if !logo {
-            gfx.text(
-                title_x,
-                202.0,
-                &self.title,
-                TextStyle::new(52, Weight::ExtraBold, TEXT),
-                Align::Left,
-            );
+        // A Console Page is headed by its System's logo in place of its name (FR-CAR-3), with the
+        // name beside a square one.
+        let logo = self.extra.as_ref().and_then(|extra| {
+            let r = logos::draw(gfx, extra.system.id, LOGO_AREA, logo_box(title_x), Align::Left)?;
+            Some((r, extra.system.name))
+        });
+        let title = TextStyle::new(52, Weight::ExtraBold, TEXT);
+        match logo {
+            Some((r, name)) => {
+                if let Some(x) = name_beside(r) {
+                    gfx.text(x, NAME_Y, name, title, Align::Left);
+                }
+            }
+            None => {
+                gfx.text(title_x, TITLE_Y, &self.title, title, Align::Left);
+            }
         }
         self.sort_hit = None;
         self.notice_hits = None;
@@ -915,7 +940,7 @@ impl Screen for GameGrid {
             let order = (self.is_sortable() && !self.games.is_empty()).then_some(self.sort_order);
             gfx.text(
                 title_x + 2.0,
-                236.0,
+                HEADER_Y,
                 &header(self.games.len(), order),
                 TextStyle::new(20, Weight::Medium, MUTED),
                 Align::Left,
@@ -1056,6 +1081,27 @@ mod tests {
             favorite: false,
             release_date: None,
         }
+    }
+
+    /// A square logo (Switch 2's) is held by the box's height and has the System's name 20 px to its
+    /// right, centred on it in the title's style; a wide one (3DS's) has no name beside it. Either
+    /// way the line under the header starts at least 12 px under the logo.
+    #[test]
+    fn a_square_logo_has_the_systems_name_beside_it() {
+        let x = M + 30.0;
+        let square = logos::fit_area(340.0, 340.0, LOGO_AREA, logo_box(x), Align::Left);
+        assert_eq!(square, Rect::new(x, 123.0, 96.0, 96.0));
+        assert_eq!(name_beside(square), Some(x + 96.0 + 20.0));
+        // Capitals 0.73 em of 52 px, centred on the logo.
+        assert!((NAME_Y - 0.73 * 52.0 / 2.0 - (square.y + square.h / 2.0)).abs() < 1.0);
+
+        let wide = logos::fit_area(800.0, 95.0, LOGO_AREA, logo_box(x), Align::Left);
+        assert!((wide.w * wide.h / LOGO_AREA - 1.0).abs() < 0.15, "{wide:?}");
+        assert!(wide.w <= LOGO_MAX_W && wide.h <= LOGO_MAX_H);
+        assert_eq!(name_beside(wide), None);
+
+        let lowest_logo = LOGO_MID_Y + LOGO_MAX_H / 2.0;
+        assert!(HEADER_Y - 0.73 * 20.0 >= lowest_logo + 12.0);
     }
 
     #[test]

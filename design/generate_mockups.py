@@ -159,6 +159,21 @@ def system_logo(sysid, x, y, w, h, align="xMid"):
             f' height="{h:.1f}" preserveAspectRatio="{align}YMid meet"/>')
 
 
+def system_logo_area(sysid, x, y, w, h, area, align="xMid"):
+    """The System's logo drawn at about `area` px² whatever its shape (FR-CAR-2), no wider or taller than
+    the box x, y, w, h and never larger than its own size, placed in the box as `system_logo` places it
+    (`logos::fit_area` in Game37)."""
+    png = Path(__file__).resolve().parent.parent / "assets" / "logos" / f"{sysid}.png"
+    head = png.read_bytes()[16:24]
+    pw, ph = int.from_bytes(head[:4], "big"), int.from_bytes(head[4:], "big")
+    scale = min(math.sqrt(area / (pw * ph)), 1.0)
+    pw, ph = pw * scale, ph * scale
+    scale = min(w / pw, h / ph, 1.0)
+    fw, fh = pw * scale, ph * scale
+    fx = x if align == "xMin" else x + (w - fw) / 2
+    return system_logo(sysid, fx, y + (h - fh) / 2, fw, fh, align)
+
+
 def background(sv, glow=C["accent"], glow_opacity=0.18):
     sv.add(rect(0, 0, W, H, C["bg"]))
     sv.add(rect(0, 0, W, 520, sv.rad([(0, glow, glow_opacity), (1, glow, 0)], cx=0.5, cy=0, r=0.9)))
@@ -408,7 +423,8 @@ def console_card(sv, cx, cy, size, sysid, opacity=1.0):
     sv.add(circle(cx + size * 0.2, cy - size * 0.2, size * 0.26, "#FFFFFF", 0.07),
            circle(cx + size * 0.2, cy - size * 0.2, size * 0.14, "#FFFFFF", 0.08))
     # The logo in place of the name, fitted into a box centred where the name block's centre was.
-    sv.add(system_logo(sysid, cx - size * 0.39, cy + size * 0.10 - size * 0.17, size * 0.78, size * 0.34))
+    sv.add(system_logo_area(sysid, cx - size * 0.39, cy + size * 0.10 - size * 0.20, size * 0.78, size * 0.40,
+                            0.075 * size * size))
     sv.add(text(cx, cy + size * 0.32, meta, round(size * 0.045), 500, anchor="middle", opacity=0.75))
     sv.add("</g>")
 
@@ -455,8 +471,8 @@ def console_page(name, title, order="Most played", list_focus=None, note=None):
     background(sv, glow=color, glow_opacity=0.35)
     topbar(sv, active="consoles")
     sv.add(rect(M, 152, 8, 76, color, rx=4),
-           system_logo("gc", M + 30, 183 - 32, 420, 64, align="xMin"),
-           text(M + 32, 236, "38 games  ·  Plays in Game37", 20, 500, fill=C["muted"]))
+           system_logo_area("gc", M + 30, 171 - 48, 440, 96, 22000, align="xMin"),
+           text(M + 32, 246, "38 games  ·  Plays in Game37", 20, 500, fill=C["muted"]))
     chip_w = 330 + tw(order, 19, 700) - tw("Most played", 19, 700)
     cx = W - M - chip_w
     sv.add(rect(cx, 168, chip_w, 52, C["surface"], rx=26, stroke=C["line"], sw=1))
@@ -464,7 +480,7 @@ def console_page(name, title, order="Most played", list_focus=None, note=None):
     sv.add(text(cx + 60, 201, "Sort:", 19, 500, fill=C["muted"]), text(cx + 112, 201, order, 19, 700),
            text(cx + chip_w - 22, 201, "▾", 18, 700, fill=C["muted"], anchor="end"))
     if note:
-        sv.add(text(M + 32, 262, note, 17, 500, fill=C["muted"]))
+        sv.add(text(M + 32, 268, note, 17, 500, fill=C["muted"]))
     cols, top, pitch = GRID_COLS, 288, GH + 72
     for i, g in enumerate(GAMECUBE[:24]):
         r, c = divmod(i, cols)
@@ -518,7 +534,7 @@ def screen_see_all():
     background(sv)
     topbar(sv, active="home")
     sv.add(text(M, 202, "All games", 52, 800),
-           text(M + 2, 236, "35 games  ·  Sorted by Recently added", 20, 500, fill=C["muted"]))
+           text(M + 2, 246, "35 games  ·  Sorted by Recently added", 20, 500, fill=C["muted"]))
     label = "Recently added"
     chip_w = 330 + tw(label, 19, 700) - tw("Most played", 19, 700)
     cx = W - M - chip_w
@@ -549,8 +565,8 @@ def screen_console_missing_emulator():
     background(sv, glow=color, glow_opacity=0.35)
     topbar(sv, active="consoles")
     sv.add(rect(M, 152, 8, 76, color, rx=4),
-           system_logo("wiiu", M + 30, 183 - 32, 420, 64, align="xMin"),
-           text(M + 32, 236, f"{len(WIIU)} games  ·  Plays in Cemu", 20, 500, fill=C["muted"]))
+           system_logo_area("wiiu", M + 30, 171 - 48, 440, 96, 22000, align="xMin"),
+           text(M + 32, 246, f"{len(WIIU)} games  ·  Plays in Cemu", 20, 500, fill=C["muted"]))
     chip_w = 330
     cx = W - M - chip_w
     sv.add(rect(cx, 168, chip_w, 52, C["surface"], rx=26, stroke=C["line"], sw=1))
@@ -558,7 +574,7 @@ def screen_console_missing_emulator():
     sv.add(text(cx + 60, 201, "Sort:", 19, 500, fill=C["muted"]), text(cx + 112, 201, "Most played", 19, 700),
            text(cx + chip_w - 22, 201, "▾", 18, 700, fill=C["muted"], anchor="end"))
     # missing-emulator notice
-    by, bh = 268, 176
+    by, bh = 278, 176
     sv.add(rect(M, by, W - 2 * M, bh, WARN, rx=18, opacity=0.1),
            rect(M, by, W - 2 * M, bh, "none", rx=18, stroke=WARN, sw=2, opacity=0.55),
            circle(M + 52, by + 52, 24, WARN), text(M + 52, by + 62, "!", 28, 800, fill=C["bg"], anchor="middle"),

@@ -14,9 +14,10 @@ use crate::ui::cover::{self, COVER_GAP, COVER_RADIUS, CoverPlace, RING_REACH, el
 use crate::ui::gfx::{Align, Gfx, TextStyle};
 use crate::ui::input::{Action, Input, Pointer, glyph_label};
 use crate::ui::nav::{Hint, Screen, Transition};
+use crate::ui::scroll::{self, Notches};
 use crate::ui::text::Weight;
 use crate::ui::theme::{ACCENT, BG, LINE, MUTED, SURFACE, SURFACE2, TEXT};
-use crate::ui::{M, Rect, W, hit, scroll};
+use crate::ui::{M, Rect, W, hit};
 
 /// The most Shelves Home shows: the per-Shelf arrays are this long, and only the first
 /// `Home::shelves.len()` of each are used.
@@ -222,8 +223,8 @@ pub struct Home {
     hscroll: [f32; SHELVES],
     /// The first Shelf showing: Home rests on whole Shelves, `top` and the one below it.
     top: usize,
-    /// The wheel's `dy` not yet turned into whole Shelves: a touchpad sends many small ones.
-    wheel_dy: f32,
+    /// The wheel's `dy` turned into whole Shelves: a touchpad sends many small ones.
+    notches: Notches,
     /// The canvas height `hscroll` was last fitted to; a resize refits it in `draw`.
     fitted_h: f32,
     /// What is drawn: `hscroll` and `top`'s offset eased, so the Shelves glide to the focus.
@@ -259,7 +260,7 @@ impl Home {
             focus: Focus::default(),
             hscroll: [0.0; SHELVES],
             top: 0,
-            wheel_dy: 0.0,
+            notches: Notches::default(),
             fitted_h: crate::ui::h(),
             shown_h: std::array::from_fn(|_| Eased::new(0.0)),
             shown_v: Eased::new(0.0),
@@ -444,19 +445,9 @@ impl Home {
     /// Shelf for each notch (1.0) of it, keeping the rest: a mouse notch moves one Shelf, and a
     /// touchpad swipe moves by how far it went.
     fn turn_wheel(&mut self, dy: f32) {
-        // A little short of 1.0, so ten touchpad steps of 0.1 make a notch whatever their rounding.
-        const NOTCH: f32 = 1.0 - 1e-4;
-        if dy * self.wheel_dy < 0.0 {
-            self.wheel_dy = 0.0;
-        }
-        self.wheel_dy += dy;
-        while self.wheel_dy >= NOTCH {
-            self.wheel_dy -= 1.0;
-            self.wheel(-1);
-        }
-        while self.wheel_dy <= -NOTCH {
-            self.wheel_dy += 1.0;
-            self.wheel(1);
+        let notches = self.notches.turn(dy);
+        for _ in 0..notches.abs() {
+            self.wheel(-notches.signum() as isize);
         }
     }
 

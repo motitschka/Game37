@@ -13,6 +13,7 @@ use crate::ui::gfx::{Align, Gfx, Layer, TextStyle};
 use crate::ui::input::{Action, Input, Pointer};
 use crate::ui::logos;
 use crate::ui::nav::{Hint, Screen, Transition};
+use crate::ui::scroll::Notches;
 use crate::ui::text::Weight;
 use crate::ui::theme::{BG, Colour, MUTED, TEXT, WARN};
 use crate::ui::{self, H, Rect, W};
@@ -205,6 +206,8 @@ pub struct Carousel {
     counted: Option<u64>,
     /// The index last written as the last-viewed System (FR-CAR-6).
     saved: usize,
+    /// The wheel's `dy` turned into whole Systems: a touchpad sends many small ones (FR-CAR-2).
+    notches: Notches,
 }
 
 impl Carousel {
@@ -218,6 +221,7 @@ impl Carousel {
             counts: [0; SYSTEMS.len()],
             counted: None,
             saved: focus,
+            notches: Notches::default(),
         }
     }
 
@@ -320,14 +324,19 @@ impl Carousel {
         gfx.fill_circle(ox, oy, size * 0.26, white.alpha(0.07 * opacity));
         gfx.fill_circle(ox, oy, size * 0.14, white.alpha(0.08 * opacity));
 
-        // The System's logo where the name block's centre would be (FR-CAR-2), else its name.
-        let (logo_w, logo_h) = (size * 0.78, size * 0.34);
+        // The System's logo where the name block's centre would be, about the same size whatever
+        // its shape (FR-CAR-2), else its name.
+        let (logo_w, logo_h) = (size * 0.78, size * 0.40);
         let logo_box = Rect::new(cx - logo_w / 2.0, cy + size * 0.10 - logo_h / 2.0, logo_w, logo_h);
+        let area = 0.075 * size * size;
         let layer = Layer {
             opacity,
             ..Layer::NONE
         };
-        if !gfx.with_layer(layer, |gfx| logos::draw(gfx, system.id, logo_box, Align::Centre)) {
+        let logo = gfx.with_layer(layer, |gfx| {
+            logos::draw(gfx, system.id, area, logo_box, Align::Centre)
+        });
+        if logo.is_none() {
             let fs = size * if system.name.len() < 10 { 0.13 } else { 0.095 };
             let name = TextStyle::new(text_size(fs, 4.0), Weight::ExtraBold, TEXT.alpha(opacity));
             let lines = wrap_name(system.name, 12);
@@ -377,8 +386,10 @@ impl Screen for Carousel {
             Input::Action(Action::Left) => self.step(-1),
             Input::Action(Action::Right) => self.step(1),
             Input::Action(Action::Confirm) => return self.open(ctx),
-            Input::Pointer(Pointer::Wheel { dy }) if dy > 0.0 => self.step(-1),
-            Input::Pointer(Pointer::Wheel { dy }) if dy < 0.0 => self.step(1),
+            Input::Pointer(Pointer::Wheel { dy }) => {
+                let notches = self.notches.turn(dy);
+                self.step(-notches);
+            }
             Input::Pointer(Pointer::Click { x, y }) => match card_at(x, y) {
                 Some(0) => return self.open(ctx),
                 Some(offset) => self.step(offset),
@@ -657,6 +668,23 @@ mod tests {
         assert_eq!(carousel.system().id, "ps5");
         let t = act(&mut carousel, &mut ctx, Input::Action(Action::Confirm));
         assert_eq!(opened(t).as_deref(), Some("PlayStation 5"));
+    }
+
+    /// A touchpad swipe sends many small `dy`: the Carousel moves one System per notch's worth
+    /// (1.0) of them, not one per event.
+    #[test]
+    fn twenty_small_wheel_steps_move_the_carousel_two_systems() {
+        let mut ctx = Ctx::empty();
+        let mut carousel = Carousel::new(&ctx.library);
+        assert_eq!(carousel.system().id, "nes");
+        for _ in 0..20 {
+            act(
+                &mut carousel,
+                &mut ctx,
+                Input::Pointer(Pointer::Wheel { dy: -0.1 }),
+            );
+        }
+        assert_eq!(carousel.system().id, "snes", "two Systems on from NES");
     }
 
     #[test]

@@ -42,6 +42,8 @@ const ROW_GAP: f32 = 12.0;
 const DANGER_GAP: f32 = 24.0;
 /// Space above the first row of a group, for its heading.
 const GROUP_H: f32 = 52.0;
+/// The value of a choice row, between its ‹ and ›.
+const CHOICE_VALUE: TextStyle = TextStyle::new(20, Weight::SemiBold, TEXT);
 
 /// One row of a section, as it is now.
 #[derive(Debug, Clone, PartialEq)]
@@ -206,6 +208,9 @@ pub struct Settings {
     /// Where the rows' highlight is drawn (top and height), eased between rows; `None` until the
     /// focus enters a section's rows, and again after it leaves.
     row_bar: Option<(Eased, Eased)>,
+    /// The ‹ and › of the focused section's choice rows as last drawn, with their row and the
+    /// action they stand for (FR-UI-1).
+    arrows: Vec<(Rect, (usize, Action))>,
 }
 
 impl Default for Settings {
@@ -237,6 +242,7 @@ impl Settings {
             rows: Vec::new(),
             section_bar: Eased::new(section_rect(0).y),
             row_bar: None,
+            arrows: Vec::new(),
         }
     }
 
@@ -267,6 +273,7 @@ impl Settings {
         if i != self.section {
             self.section = i;
             self.row = 0;
+            self.arrows.clear();
             self.sections[i].shown(ctx);
         }
         self.focus = Focus::Sections;
@@ -294,6 +301,12 @@ impl Settings {
             } else {
                 self.focus_section(i, ctx);
             }
+        } else if let Some((i, action)) = hit(&self.arrows, x, y) {
+            // A choice row's ‹ or › steps it at once, focused or not (FR-UI-1).
+            self.focus = Focus::Rows;
+            self.row = i;
+            let step = self.sections[self.section].handle(i, Input::Action(action), ctx);
+            return step.unwrap_or(Transition::None);
         } else if let Some(i) = hit(&self.sections[self.section].layout(&self.rows), x, y) {
             if i == self.row && self.focus == Focus::Rows {
                 return self.sections[self.section].confirm(i, ctx);
@@ -302,6 +315,14 @@ impl Settings {
             self.row = i;
         }
         Transition::None
+    }
+
+    /// The pointer over a row focuses it, as in lists elsewhere.
+    fn hover(&mut self, x: f32, y: f32) {
+        if let Some(i) = hit(&self.sections[self.section].layout(&self.rows), x, y) {
+            self.focus = Focus::Rows;
+            self.row = i;
+        }
     }
 
     fn draw_sections(&self, gfx: &mut Gfx<'_>) {
@@ -329,8 +350,9 @@ impl Settings {
         }
     }
 
-    fn draw_rows(&self, gfx: &mut Gfx<'_>) {
+    fn draw_rows(&mut self, gfx: &mut Gfx<'_>) {
         let rects = row_rects(&self.rows);
+        self.arrows = arrow_hits(&self.rows, |value| gfx.measure(value, CHOICE_VALUE));
         for &(r, _) in &rects {
             gfx.fill_round_rect(r, 14.0, SURFACE.alpha(0.6));
         }
@@ -357,17 +379,16 @@ impl Settings {
                 let style = TextStyle::new(16, Weight::Medium, MUTED);
                 gfx.text(RX + 32.0, base + 30.0, sub, style, Align::Left);
             }
-            let right = RX + RW - 32.0;
+            let right = CHOICE_RIGHT;
             if row.choice {
                 if let Some(value) = &row.value {
                     let base = r.y + r.h / 2.0 + 9.0;
                     let arrow = TextStyle::new(26, Weight::SemiBold, ACCENT);
-                    let value_style = TextStyle::new(20, Weight::SemiBold, TEXT);
                     gfx.text(right, base, "›", arrow, Align::Right);
-                    let value_x = right - 30.0;
-                    gfx.text(value_x, base - 2.0, value, value_style, Align::Right);
-                    let value_w = gfx.measure(value, value_style);
-                    gfx.text(value_x - value_w - 8.0, base, "‹", arrow, Align::Right);
+                    let value_x = right - CHOICE_VALUE_GAP;
+                    gfx.text(value_x, base - 2.0, value, CHOICE_VALUE, Align::Right);
+                    let value_w = gfx.measure(value, CHOICE_VALUE);
+                    gfx.text(back_arrow_x(value_w), base, "‹", arrow, Align::Right);
                 }
             } else {
                 let mut right = right;
@@ -385,6 +406,34 @@ impl Settings {
             }
         }
     }
+}
+
+/// The right edge of a choice row's ›, its value and its ‹, and the room each arrow takes for a click.
+const CHOICE_RIGHT: f32 = RX + RW - 32.0;
+const CHOICE_VALUE_GAP: f32 = 30.0;
+const ARROW_HIT_W: f32 = 30.0;
+
+/// The right edge of a choice row's ‹, left of a value `value_w` wide.
+fn back_arrow_x(value_w: f32) -> f32 {
+    CHOICE_RIGHT - CHOICE_VALUE_GAP - value_w - 8.0
+}
+
+/// The ‹ and › of each choice row among `rows`, as drawn by `Settings::draw_rows` with a value
+/// `measure` wide, each with its row and the action it stands for: Left for ‹, Right for ›.
+fn arrow_hits(rows: &[Row], mut measure: impl FnMut(&str) -> f32) -> Vec<(Rect, (usize, Action))> {
+    let mut hits = Vec::new();
+    for (row, (r, i)) in rows.iter().zip(row_rects(rows)) {
+        let Some(value) = row.value.as_deref().filter(|_| row.choice) else {
+            continue;
+        };
+        // Each arrow glyph is about 10 px wide; its hit rect takes the row's height and a little
+        // either side of it.
+        let back = back_arrow_x(measure(value));
+        hits.push((Rect::new(back - 20.0, r.y, ARROW_HIT_W, r.h), (i, Action::Left)));
+        let forward = Rect::new(CHOICE_RIGHT - 20.0, r.y, ARROW_HIT_W + 6.0, r.h);
+        hits.push((forward, (i, Action::Right)));
+    }
+    hits
 }
 
 /// The rule between the sections and the rows, from their top to 30 above the hint bar.
@@ -447,6 +496,7 @@ impl Screen for Settings {
                 return self.sections[self.section].confirm(self.row, ctx);
             }
             (_, Input::Pointer(Pointer::Click { x, y })) => return self.click(x, y, ctx),
+            (_, Input::Pointer(Pointer::Move { x, y })) => self.hover(x, y),
             _ => {}
         }
         Transition::None
@@ -481,6 +531,7 @@ impl Screen for Settings {
         self.draw_sections(gfx);
         gfx.fill_rect(divider(), LINE);
         let focused = (self.focus == Focus::Rows).then_some(self.row);
+        self.arrows.clear();
         if self.rows.is_empty() {
             self.sections[self.section].draw_body(gfx, ctx);
         } else if !self.sections[self.section].draw_rows(gfx, ctx, &self.rows, focused) {
@@ -723,6 +774,63 @@ mod tests {
         assert!(log.borrow().is_empty());
         click(&mut s, ctx, rows[2].0);
         assert_eq!(*log.borrow(), ["confirm 2"]);
+    }
+
+    /// A click on a choice row's ‹ steps it back and one on its › forward, at once, whether or
+    /// not the row had the focus; a click on its title only focuses it (FR-UI-1).
+    #[test]
+    fn a_click_on_a_choice_rows_arrows_steps_it_at_once() {
+        let ctx = &mut Ctx::empty();
+        let mut s = Settings::new();
+        for _ in 0..6 {
+            act(&mut s, ctx, Action::Down);
+        }
+        assert_eq!(at(&s), (Focus::Sections, "Display", 0));
+        // As drawn, with a stand-in for the font's widths.
+        s.arrows = arrow_hits(&s.rows, |value| value.len() as f32 * 11.0);
+        let arrow = |s: &Settings, row, action| {
+            let &(r, _) = s.arrows.iter().find(|(_, hit)| *hit == (row, action)).unwrap();
+            Input::Pointer(Pointer::Click {
+                x: r.x + r.w / 2.0,
+                y: r.y + r.h / 2.0,
+            })
+        };
+        assert_eq!(ctx.games_per_row, 8);
+
+        s.handle(arrow(&s, 2, Action::Left), ctx);
+        assert_eq!(ctx.games_per_row, 7, "‹ steps back on the first click");
+        assert_eq!(at(&s), (Focus::Rows, "Display", 2), "and focuses the row");
+
+        act(&mut s, ctx, Action::Back);
+        s.handle(arrow(&s, 2, Action::Right), ctx);
+        assert_eq!(ctx.games_per_row, 8, "› steps forward on the first click");
+        s.handle(arrow(&s, 2, Action::Right), ctx);
+        assert_eq!(ctx.games_per_row, 9, "and again on the focused row");
+
+        act(&mut s, ctx, Action::Back);
+        let title = row_rects(&s.rows)[2].0;
+        click(&mut s, ctx, Rect::new(RX + 32.0, title.y, 100.0, title.h));
+        assert_eq!(at(&s), (Focus::Rows, "Display", 2));
+        assert_eq!(ctx.games_per_row, 9, "a click on the title only focuses");
+    }
+
+    #[test]
+    fn the_pointer_over_a_row_focuses_it() {
+        let (mut s, log) = settings();
+        let ctx = &mut Ctx::empty();
+        act(&mut s, ctx, Action::Up);
+        let r = row_rects(&s.rows)[1].0;
+        s.handle(
+            Input::Pointer(Pointer::Move {
+                x: r.x + 10.0,
+                y: r.y + 10.0,
+            }),
+            ctx,
+        );
+        assert_eq!(at(&s), (Focus::Rows, "A", 1));
+        s.handle(Input::Pointer(Pointer::Move { x: 5.0, y: 5.0 }), ctx);
+        assert_eq!(at(&s), (Focus::Rows, "A", 1), "off the rows, the focus stays");
+        assert!(log.borrow().is_empty(), "nothing acted");
     }
 
     #[test]
