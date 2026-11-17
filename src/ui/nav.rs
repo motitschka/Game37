@@ -60,6 +60,10 @@ pub trait Screen {
     fn text_input(&self) -> bool {
         false
     }
+    /// A sideways wheel or touchpad swipe, or Shift and the wheel, with the pointer at (`x`, `y`):
+    /// positive `dx` scrolls right. Only the top screen gets it. The vertical wheel comes as
+    /// [`Pointer::Wheel`].
+    fn side_wheel(&mut self, _dx: f32, _x: f32, _y: f32, _ctx: &mut Ctx) {}
     /// The Pause Menu, if it is one.
     fn pause_menu(&mut self) -> Option<&mut PauseMenu> {
         None

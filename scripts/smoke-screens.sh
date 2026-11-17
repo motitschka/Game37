@@ -195,12 +195,11 @@ shot d1-console-page-6 "$root/grid.toml" "$per_row,left,left,back,back"
 # D1: Home after moving down to the third Shelf (Recently added): it moves by one whole Shelf, so
 # Continue playing and Recently added show
 shot d1-home-lower "$root/cfg.toml" "down,down"
-# D1: Settings → Home with the focus on Shelf 2, as in the mockup; then Home after Shelf 1 steps back
-# from Favorites to Recently added and Shelf 2 back from Continue playing to Most played (each swap
-# leaves Shelves 3 and 4 Off), so Home shows Recently added then Most played
+# D1: Settings → Home with the focus on Continue playing, as in the mockup; then Home after
+# Favorites and Continue playing are switched off, so Home shows Recently added then Most played
 shot d1-settings-home "$root/cfg.toml" "settings$(printf ',down%.0s' {1..5}),right,down"
 shot d1-home-two-shelves "$root/cfg.toml" \
-    "settings$(printf ',down%.0s' {1..5}),right,left,left,left,down,left,left,left,back,back"
+    "settings$(printf ',down%.0s' {1..5}),right,confirm,down,confirm,back,back"
 # D1: "See all" of Recently added (every Game, as m1-see-all opens it) after one press of Sort:
 # sorted A–Z (the cycle wraps after Recently added), for this grid only
 shot d1-see-all-sorted "$root/cfg.toml" "down,down,$(printf 'right,%.0s' {1..25})confirm,sort"

@@ -264,12 +264,14 @@ def cover(sv, x, y, w, h, g, focused=False, show_sys=True):
                text(x + 19, y + 25, label, 11, 700, ls=1))
 
 
-def see_all(sv, x, y, w, h, count):
+def see_all(sv, x, y, w, h, count, label="All games"):
+    """A Shelf's "See all" item (FR-HOME-3): "All games" where it opens every Game, "See all" on
+    Favorites, over the count."""
     sv.add(rect(x, y, w, h, C["surface"], rx=10, stroke=C["line"], sw=1),
            circle(x + w / 2, y + h / 2 - 24, 26, C["surface2"]),
            f'<path d="M{x + w / 2 - 6},{y + h / 2 - 36} l12,12 l-12,12" fill="none" stroke="{C["text"]}"'
            f' stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>',
-           text(x + w / 2, y + h / 2 + 30, "See all", 18, 600, anchor="middle"),
+           text(x + w / 2, y + h / 2 + 30, label, 18, 600, anchor="middle"),
            text(x + w / 2, y + h / 2 + 54, f"{count} games", 15, 400, fill=C["muted"], anchor="middle"))
 
 
@@ -1499,20 +1501,20 @@ def screen_settings_display():
     sv.save()
 
 
-# Settings → Home (FR-HOME-2): four slots, each holding one of the four Shelves or Off; Home shows the
-# slots' Shelves in slot order. Left and right step a slot through the Shelves, then Off.
-HOME_SLOTS = ["Favorites", "Continue playing", "Recently added", "Most played"]
+# Settings → Home (FR-HOME-2): the four Shelves in Home's order, each On or Off. Confirm switches the
+# focused one on or off (never the last one on); left and right move it up or down the list.
+HOME_SHELVES = [("Favorites", "On"), ("Continue playing", "On"), ("Recently added", "On"),
+                ("Most played", "Off")]
 
 
 def screen_settings_home():
     sv = Svg("45-settings-home", "Settings: Home")
     settings_page(sv, "Home")
     y, h = TOP, 76
-    for i, shelf in enumerate(HOME_SLOTS):
-        r = settings_row(sv, y, h, f"Shelf {i + 1}", focused=i == 1)
-        choice_value(sv, r, y, h, shelf)
+    for i, (shelf, on) in enumerate(HOME_SHELVES):
+        settings_row(sv, y, h, shelf, on, focused=i == 1)
         y += h + 12
-    hintbar(sv, [(["←", "→"], "Change"), (["B"], "Back")])
+    hintbar(sv, [(["A"], "On/Off"), (["←", "→"], "Move"), (["B"], "Back")])
     sv.save()
 
 
