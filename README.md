@@ -453,7 +453,8 @@ eight sections, down the left:
 - **Cores:** Update all, or redownload a single one.
 - **Controls:** Menu button style (Nintendo, where the right face button confirms; or Xbox or
   PlayStation, where the bottom face button confirms) and Controller test, which exits by holding B.
-- **Home:** Shelf 1 to Shelf 4, each one of the four Shelves or Off, in the order Home shows them.
+- **Home:** the four Shelves in the order Home shows them; A switches one on or off, left and right move
+  it.
 - **Display:** Startup window mode (Remember last, Always fullscreen or Always windowed), which applies
   the next time Game37 starts; Motion (Full, or Reduced without fades, slides and gliding); Games per
   row (6 to 10) on Console Pages, "See all" and Search; Show Playtime under the selected cover (Off,

@@ -58,8 +58,9 @@ Two people use Game37:
 - *Covers FR-HOME-5*
 
 **US-46 Home my way.** As a player, I want to choose which Shelves Home shows and in what order, so it shows what I care about first.
-- Settings → Home has four rows, Shelf 1 to Shelf 4, each set to one of the four Shelves or Off.
-- Picking a Shelf another row holds swaps the two; at least one Shelf stays on.
+- Settings → Home lists the four Shelves in Home's order; A switches one on or off and left/right move it.
+- The last Shelf left on can't be switched off.
+- A new player's Home opens on their Games.
 - Home shows my choice as soon as I go back to it, and after a restart.
 - *Covers FR-HOME-2*
 
@@ -76,7 +77,8 @@ Two people use Game37:
 - *Covers FR-UI-7*
 
 **US-49 Sort by release.** As a player, I want to sort a grid by release date, so I can walk a System's history in order.
-- Newest release and Oldest release are in the sort button's cycle.
+- Newest release and Oldest release are in the sort list.
+- Without a key, the grid says release dates need one.
 - Games without a known date come last in both.
 - The Details Page shows the release year when it is known.
 - *Covers FR-CAR-5, FR-ART-5, FR-DET-2*
@@ -100,7 +102,7 @@ Two people use Game37:
 **US-12 One sort order everywhere.** As a player, I want my chosen sort order to apply to every console, so I don't have to set it again each time.
 - I change the sort to Most played on Wii, open PS2, and it's sorted by Most played too.
 - The choice survives a restart.
-- The sort button steps through A–Z, Z–A, Last played, Most played, Recently added, Newest release and Oldest release.
+- The sort button opens a list of A–Z, Z–A, Last played, Most played, Recently added, Newest release and Oldest release; picking one jumps to the first Game.
 - *Covers FR-CAR-5*
 
 **US-38 Get around the carousel fast.** As a player, I want the carousel to remember where I was and loop around, so reaching any console takes only a few presses.
