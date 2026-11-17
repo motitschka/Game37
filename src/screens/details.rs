@@ -37,9 +37,20 @@ const STAT_Y: f32 = 410.0;
 const STAT_H: f32 = 104.0;
 const STAT_GAP: f32 = 20.0;
 /// Stat box widths: four boxes as in the mockup; five (with Save States or a Release Date)
-/// narrowed to fit before the right margin.
+/// narrowed to fit before the right margin; six share the room left before it (see [`stat_w`]).
 const STAT_W: f32 = 250.0;
 const STAT_W_NARROW: f32 = 232.0;
+/// Value text sizes tried in turn, largest first, until every value in the row fits its box.
+const STAT_VALUE_SIZES: [u16; 3] = [30, 26, 22];
+
+/// The width of each of `n` stat boxes: the row always ends before the right margin.
+fn stat_w(n: usize) -> f32 {
+    match n {
+        0..=4 => STAT_W,
+        5 => STAT_W_NARROW,
+        _ => ((W - M - X - (n - 1) as f32 * STAT_GAP) / n as f32).floor(),
+    }
+}
 const PLAY: Rect = Rect::new(X, 604.0, 270.0, 76.0);
 const OPTIONS: Rect = Rect::new(X + 290.0, 604.0, 236.0, 76.0);
 const BUTTON_RADIUS: f32 = 38.0;
@@ -521,9 +532,18 @@ impl Screen for DetailsPage {
         }
 
         let stats = self.stats();
-        let w = if stats.len() > 4 { STAT_W_NARROW } else { STAT_W };
+        let w = stat_w(stats.len());
         let key = TextStyle::new(14, Weight::Bold, MUTED);
-        let value = TextStyle::new(30, Weight::Bold, TEXT);
+        // One value size for the whole row: the largest at which every value fits its box.
+        let fits = |size: u16, gfx: &mut Gfx<'_>| {
+            let style = TextStyle::new(size, Weight::Bold, TEXT);
+            stats.iter().all(|(_, v)| gfx.measure(v, style) <= w - 44.0)
+        };
+        let size = STAT_VALUE_SIZES
+            .into_iter()
+            .find(|&size| fits(size, gfx))
+            .unwrap_or(STAT_VALUE_SIZES[STAT_VALUE_SIZES.len() - 1]);
+        let value = TextStyle::new(size, Weight::Bold, TEXT);
         for (i, (k, v)) in stats.iter().enumerate() {
             let x = X + i as f32 * (w + STAT_GAP);
             gfx.fill_round_rect(Rect::new(x, STAT_Y, w, STAT_H), 14.0, SURFACE.alpha(0.75));
@@ -576,6 +596,16 @@ impl Screen for DetailsPage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_stat_row_ends_before_the_right_margin() {
+        for n in 1..=6 {
+            let end = X + n as f32 * stat_w(n) + (n - 1) as f32 * STAT_GAP;
+            assert!(end <= W - M, "{n} stat boxes end at {end}");
+        }
+        assert_eq!(stat_w(4), STAT_W);
+        assert_eq!(stat_w(5), STAT_W_NARROW);
+    }
     use crate::emulators::Emulators;
     use crate::library::FoundGame;
     use crate::library::db::SortOrder;
