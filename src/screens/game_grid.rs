@@ -16,6 +16,7 @@ use crate::ui::cover::{self, CoverPlace, RING_REACH};
 use crate::ui::gfx::{Align, Gfx, TextStyle};
 use crate::ui::grid::Grid;
 use crate::ui::input::{Action, Input, Pointer, glyph_label};
+use crate::ui::logos;
 use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
 use crate::ui::theme::{BG, Colour, LINE, MUTED, SURFACE, TEXT, WARN};
@@ -58,6 +59,12 @@ const CHIP_Y: f32 = 168.0;
 const CHIP_H: f32 = 52.0;
 const CHIP_PAD: f32 = 20.0;
 const ARROW_W: f32 = 10.0;
+/// The box a Console Page's System logo is fitted into in place of the title, from the title's
+/// left edge: centred where the title's capitals sit (52 px, baseline 202, capitals about 0.73 em
+/// tall), so the line under it and the sort chip keep their places.
+const LOGO_W: f32 = 420.0;
+const LOGO_H: f32 = 64.0;
+const LOGO_MID_Y: f32 = 183.0;
 
 /// The missing-emulator notice (FR-CAR-9), after `screen_console_page_missing_emulator` in
 /// `design/generate_mockups.py`.
@@ -627,13 +634,21 @@ impl Screen for GameGrid {
             gfx.fill_round_rect(Rect::new(M, 152.0, 8.0, 76.0), 4.0, extra.tint);
             title_x += 30.0;
         }
-        gfx.text(
-            title_x,
-            202.0,
-            &self.title,
-            TextStyle::new(52, Weight::ExtraBold, TEXT),
-            Align::Left,
-        );
+        // A Console Page is headed by its System's logo in place of its name (FR-CAR-3).
+        let logo_box = Rect::new(title_x, LOGO_MID_Y - LOGO_H / 2.0, LOGO_W, LOGO_H);
+        let logo = self
+            .extra
+            .as_ref()
+            .is_some_and(|extra| logos::draw(gfx, extra.system.id, logo_box, Align::Left));
+        if !logo {
+            gfx.text(
+                title_x,
+                202.0,
+                &self.title,
+                TextStyle::new(52, Weight::ExtraBold, TEXT),
+                Align::Left,
+            );
+        }
         self.sort_hit = None;
         self.notice_hits = None;
         if let Some(emulator) = self.missing_emulator(ctx) {

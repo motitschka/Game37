@@ -11,6 +11,7 @@ pub mod cover;
 pub mod gfx;
 pub mod grid;
 pub mod input;
+pub mod logos;
 pub mod nav;
 pub mod scroll;
 pub mod text;

@@ -9,8 +9,9 @@ use crate::ctx::Ctx;
 use crate::emulators::Emulator;
 use crate::library::db::Library;
 use crate::systems::{self, SYSTEMS, System};
-use crate::ui::gfx::{Align, Gfx, TextStyle};
+use crate::ui::gfx::{Align, Gfx, Layer, TextStyle};
 use crate::ui::input::{Action, Input, Pointer};
+use crate::ui::logos;
 use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
 use crate::ui::theme::{BG, Colour, MUTED, TEXT, WARN};
@@ -319,13 +320,22 @@ impl Carousel {
         gfx.fill_circle(ox, oy, size * 0.26, white.alpha(0.07 * opacity));
         gfx.fill_circle(ox, oy, size * 0.14, white.alpha(0.08 * opacity));
 
-        let fs = size * if system.name.len() < 10 { 0.13 } else { 0.095 };
-        let name = TextStyle::new(text_size(fs, 4.0), Weight::ExtraBold, TEXT.alpha(opacity));
-        let lines = wrap_name(system.name, 12);
-        let last = lines.len() as f32 - 1.0;
-        for (i, line) in lines.iter().enumerate() {
-            let y = cy + size * 0.18 + (i as f32 - last) * fs * 1.1;
-            gfx.text(cx, y, line, name, Align::Centre);
+        // The System's logo where the name block's centre would be (FR-CAR-2), else its name.
+        let (logo_w, logo_h) = (size * 0.78, size * 0.34);
+        let logo_box = Rect::new(cx - logo_w / 2.0, cy + size * 0.10 - logo_h / 2.0, logo_w, logo_h);
+        let layer = Layer {
+            opacity,
+            ..Layer::NONE
+        };
+        if !gfx.with_layer(layer, |gfx| logos::draw(gfx, system.id, logo_box, Align::Centre)) {
+            let fs = size * if system.name.len() < 10 { 0.13 } else { 0.095 };
+            let name = TextStyle::new(text_size(fs, 4.0), Weight::ExtraBold, TEXT.alpha(opacity));
+            let lines = wrap_name(system.name, 12);
+            let last = lines.len() as f32 - 1.0;
+            for (i, line) in lines.iter().enumerate() {
+                let y = cy + size * 0.18 + (i as f32 - last) * fs * 1.1;
+                gfx.text(cx, y, line, name, Align::Centre);
+            }
         }
         let caption = TextStyle::new(
             text_size(size * 0.045, 2.0),

@@ -3,6 +3,7 @@
 
 Cover art is placeholder gradients: real art comes from SteamGridDB at runtime.
 """
+import base64
 import math
 import textwrap
 from html import escape
@@ -147,6 +148,16 @@ def text(x, y, s, size=16, weight=400, fill=None, anchor="start", opacity=1, ls=
 
 
 # ---------- shared components ----------
+
+def system_logo(sysid, x, y, w, h, align="xMid"):
+    """The System's logo fitted into the box x, y, w, h with its shape kept, centred vertically and, per
+    `align` ("xMin" or "xMid"), at the box's left edge or centred. It is the same recoloured PNG Game37
+    draws (`assets/logos/<id>.png`, made by `make_logos.sh`), embedded so every SVG viewer shows it."""
+    png = Path(__file__).resolve().parent.parent / "assets" / "logos" / f"{sysid}.png"
+    data = base64.b64encode(png.read_bytes()).decode("ascii")
+    return (f'<image href="data:image/png;base64,{data}" x="{x:.1f}" y="{y:.1f}" width="{w:.1f}"'
+            f' height="{h:.1f}" preserveAspectRatio="{align}YMid meet"/>')
+
 
 def background(sv, glow=C["accent"], glow_opacity=0.18):
     sv.add(rect(0, 0, W, H, C["bg"]))
@@ -387,17 +398,15 @@ def screen_home_empty():
 
 
 def console_card(sv, cx, cy, size, sysid, opacity=1.0):
-    _, name, meta, color = SYS[sysid]
+    _, _, meta, color = SYS[sysid]
     x, y = cx - size / 2, cy - size / 2
     g = sv.lin([(0, color), (1, "#0B0D12")], 0, 0, 0.7, 1)
     sv.add(f'<g opacity="{opacity}">')
     sv.add(rect(x, y, size, size, g, rx=size * 0.08))
     sv.add(circle(cx + size * 0.2, cy - size * 0.2, size * 0.26, "#FFFFFF", 0.07),
            circle(cx + size * 0.2, cy - size * 0.2, size * 0.14, "#FFFFFF", 0.08))
-    fs = size * (0.13 if len(name) < 10 else 0.095)
-    lines = textwrap.wrap(name, 12)
-    for i, line in enumerate(lines):
-        sv.add(text(cx, cy + size * 0.18 + (i - len(lines) + 1) * fs * 1.1, line, round(fs), 800, anchor="middle"))
+    # The logo in place of the name, fitted into a box centred where the name block's centre was.
+    sv.add(system_logo(sysid, cx - size * 0.39, cy + size * 0.10 - size * 0.17, size * 0.78, size * 0.34))
     sv.add(text(cx, cy + size * 0.32, meta, round(size * 0.045), 500, anchor="middle", opacity=0.75))
     sv.add("</g>")
 
@@ -442,7 +451,7 @@ def screen_console_page():
     background(sv, glow=color, glow_opacity=0.35)
     topbar(sv, active="consoles")
     sv.add(rect(M, 152, 8, 76, color, rx=4),
-           text(M + 30, 202, "GameCube", 52, 800),
+           system_logo("gc", M + 30, 183 - 32, 420, 64, align="xMin"),
            text(M + 32, 236, "38 games  ·  Plays in Game37", 20, 500, fill=C["muted"]))
     chip_w = 330
     cx = W - M - chip_w
@@ -500,7 +509,7 @@ def screen_console_missing_emulator():
     background(sv, glow=color, glow_opacity=0.35)
     topbar(sv, active="consoles")
     sv.add(rect(M, 152, 8, 76, color, rx=4),
-           text(M + 30, 202, "Wii U", 52, 800),
+           system_logo("wiiu", M + 30, 183 - 32, 420, 64, align="xMin"),
            text(M + 32, 236, f"{len(WIIU)} games  ·  Plays in Cemu", 20, 500, fill=C["muted"]))
     chip_w = 330
     cx = W - M - chip_w
