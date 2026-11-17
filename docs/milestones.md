@@ -194,7 +194,7 @@ checks so that they are made once, on the final look. The speedrun timer (M7) fo
 | 5 Release dates | Done: dates stored and recorded with cover lookups; Newest release, Oldest release and the Details Page year; missing dates asked for only while a grid sorted by a release order is showing (the owner's decision, 2026-11-16, because of SteamGridDB's terms) |
 | 6 Logos | Done: on the Carousel card and the Console Page header, with sources in `design/logos/SOURCES.md` and a trademark note in the README |
 
-Reviewed by two fresh reviewers (screens, data) on 2026-11-17; their findings are fixed. Installed on the owner's machine; not merged into `b1-hardening` or `main` yet.
+Reviewed by two fresh reviewers (screens, data) on 2026-11-17; their findings are fixed. Installed on the owner's machine and merged into `b1-hardening` on 2026-11-17; not in `main` yet.
 
 **Done when**
 - Every grid is centred with the chosen number of Games per row, at 1080 and at 1200 high.
