@@ -45,20 +45,21 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 ### Home and Shelves
 
 - **FR-HOME-1** Game37 opens on Home.
-- **FR-HOME-2** Home shows the Shelves the player has switched on, in the order the player gave them (Settings → Home). The four Shelves are Favorites, Continue playing, Recently added and Most played; by default all four are on, in that order. At least one Shelf is always on.
-- **FR-HOME-3** Each Shelf shows at most 20 Games. A "See all" item opens a grid of every Game in the library in that Shelf's order (Last played, Recently added or Most played), with Games never played last; on Favorites it opens a grid of the Favorites only. That grid can be sorted like a Console Page (FR-CAR-5), but the order chosen there is not remembered: it opens in its Shelf's order every time.
+- **FR-HOME-2** Home shows the Shelves the player has switched on, in the order the player gave them. Settings → Home lists the four Shelves (Favorites, Continue playing, Recently added, Most played) in Home's order: Confirm switches the focused Shelf on or off, and left/right move it up or down the list. By default all four are on, in that order. The last Shelf left on can't be switched off.
+- **FR-HOME-3** Each Shelf shows at most 20 Games. A "See all" item opens a grid of every Game in the library in that Shelf's order (Last played, Recently added or Most played), with Games never played last; on Favorites it opens a grid of the Favorites only. That grid can be sorted like a Console Page (FR-CAR-5), but the order chosen there is not remembered: it opens in its Shelf's order every time. The "See all" item of Continue playing, Recently added and Most played reads "All games" with the number of Games it opens; on Favorites it reads "See all" with the number of Favorites. Left on a Shelf's first Game moves to its "See all" item.
 - **FR-HOME-4** Recently added holds the 20 most recently found Games. Continue playing is ordered by last played. Most played is ordered by Playtime.
 - **FR-HOME-5** An empty Shelf stays visible, as tall as any other, and shows a hint explaining how to fill it.
 - **FR-HOME-6** At most 5 Favorites exist. Favoriting a 6th Game opens a picker to choose which Favorite to replace.
 - **FR-HOME-7** One screen of Home shows exactly two Shelves, whatever the screen's height: the covers on Home are sized from the height, so they are larger on a taller screen. Moving up or down, with a controller, the keyboard or the mouse wheel, moves by one whole Shelf with a short snap animation (a jump when Motion is Reduced); Home never rests on half a Shelf.
+- **FR-HOME-8** While Favorites and Continue playing are both empty, Home opens on the first Shelf shown that has Games (normally Recently added), so a new player sees their Games at once; with no Games at all it opens on the first Shelf. A sideways wheel or touchpad swipe moves the Shelf under the pointer, and the paging arrows at a Shelf's edges move the focus with it.
 
 ### Carousel and Console Pages
 
 - **FR-CAR-1** L1/R1, or clicking a tab, switches between Home and Carousel.
-- **FR-CAR-2** The Carousel always lists all 19 Systems in System Order, whatever was picked in First-run Setup. Each card shows the System's logo in its official colours (its name where Game37 has no logo for it) and the maker and European release year (e.g. "Nintendo · 2002"). There are no maker labels or dividers. The background colour changes with the highlighted System.
-- **FR-CAR-3** Selecting a System opens its Console Page, a grid of tall covers, headed by the System's logo in place of its name.
+- **FR-CAR-2** The Carousel always lists all 19 Systems in System Order, whatever was picked in First-run Setup. Each card shows the System's logo in its official colours (its name where Game37 has no logo for it) and the maker and European release year (e.g. "Nintendo · 2002"). There are no maker labels or dividers. The background colour changes with the highlighted System. Logos are drawn at about the same visual size whatever their shape; dark parts of a logo are drawn light so it reads on its card, with only its accent colours kept. A wheel or touchpad moves the Carousel one System per notch, however the swipe is split into events.
+- **FR-CAR-3** Selecting a System opens its Console Page, a grid of tall covers, headed by the System's logo in place of its name. A square logo, such as Switch's, has the System's name beside it.
 - **FR-CAR-4** A System with no Games keeps its place in the Carousel but its card is slightly dimmed. Its Console Page explains which folder to put files in.
-- **FR-CAR-5** Console Pages can be sorted A–Z, Z–A, by Last played, by Most played, by Recently added, by Newest release or by Oldest release; one button steps through them in that order. The two release orders use the Game's release date (FR-ART-5): a Game without one comes last in both, A–Z among themselves. The sort order is global: changing it on one Console Page applies to all of them until it is changed again. It persists across restarts.
+- **FR-CAR-5** Console Pages can be sorted A–Z, Z–A, by Last played, by Most played, by Recently added, by Newest release or by Oldest release; the Sort button (or a click on the sort chip) opens a list of the seven, with the current one focused; picking one sorts the grid and moves the focus to its first Game. The two release orders use the Game's release date (FR-ART-5): a Game without one comes last in both, A–Z among themselves. The sort order is global: changing it on one Console Page applies to all of them until it is changed again. It persists across restarts.
 - **FR-CAR-6** The Carousel opens on the System last viewed, across restarts. On the very first launch it opens on NES.
 - **FR-CAR-7** The Carousel wraps around in both directions. Holding left or right speeds up scrolling. There is no shortcut to jump between makers.
 - **FR-CAR-8** System Order is defined once and used everywhere Systems are listed: the Carousel, the First-run Setup checklist, Settings → BIOS status, and the README.
@@ -85,7 +86,7 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 - **FR-ART-2** "Choose different Artwork" lets the player browse other SteamGridDB results for that Game.
 - **FR-ART-3** Without an API key, or without a match, Game37 shows the Display Title and a System icon.
 - **FR-ART-4** Fetched Artwork is cached locally and not re-downloaded on every start.
-- **FR-ART-5** A Game's release date is the one SteamGridDB gives for the game its title matched (FR-ART-1). When the player sorts a grid by Newest release or Oldest release, Game37 asks SteamGridDB once for each Game in that grid whose date it has not asked for yet, in the background and without fetching images; it never asks about the whole library on its own (SteamGridDB's terms forbid bulk use). Without an API key or without a match, a Game has no release date.
+- **FR-ART-5** A Game's release date is the one SteamGridDB gives for the game its title matched (FR-ART-1). When the player sorts a grid by Newest release or Oldest release, Game37 asks SteamGridDB once for each Game in that grid whose date it has not asked for yet, in the background and without fetching images; it never asks about the whole library on its own (SteamGridDB's terms forbid bulk use). Without an API key or without a match, a Game has no release date. A grid sorted by a release order says why its Games are not in date order: without an API key, "Release dates need a SteamGridDB API key (Settings → Artwork)"; while dates are being asked for, "Getting release dates… n of N".
 
 ### Search
 
@@ -136,7 +137,7 @@ Built in milestone 8 (ADR 0016, research in [research/m8-newer-cores.md](researc
 
 ### Controls and window
 
-- **FR-UI-1** Every screen is fully usable with a controller alone, and with mouse and keyboard alone.
+- **FR-UI-1** Every screen is fully usable with a controller alone, and with mouse and keyboard alone. With a keyboard, Page Up and Page Down move a grid by one screen of rows and Home and End to its first and last Game; Shift+Tab switches to the previous view. In Settings, the ‹ and › of a choice row step it back and forward with one click.
 - **FR-UI-2** Menus use Nintendo-style confirm/back by default (right face button confirms). Settings can switch to Xbox/PlayStation style.
 - **FR-UI-3** Startup window mode setting: Remember last (default), Always fullscreen, Always windowed.
 - **FR-UI-4** Game37 has a dark theme only.

@@ -202,6 +202,26 @@ Reviewed by two fresh reviewers (screens, data) on 2026-11-17; their findings ar
 - The mockups and the smoke shots show the new Home, grids, Settings pages and logos.
 - Tests, clippy and fmt pass, and the real-Core tests still pass.
 
+### D2 — Design fixes from the design test
+
+**Goal:** Fix what five design testers found broken or slow in D1 (groups A and B of their report, 2026-11-17).
+
+**Branch:** `d2-design-fixes`, cut from `main`.
+
+**Scope**
+1. Settings → Home lists the four Shelves in Home's order: Confirm switches one on or off, left/right moves it (FR-HOME-2). The "See all" item says "All games" with the right count (FR-HOME-3). Home opens on Games for a new player (FR-HOME-8). Left on a Shelf's first Game reaches "See all"; sideways swipes and the edge arrows move the focus.
+2. The Sort button opens a list of the seven orders, and picking one focuses the first Game (FR-CAR-5). Release orders explain themselves without a key and show progress while dates arrive (FR-ART-5). Page Up/Down, Home/End and Shift+Tab for keyboard users (FR-UI-1).
+3. Logos: dark parts light, accents kept, the same visual size whatever their shape, the name beside square ones (FR-CAR-2, 3). The Carousel moves one System per notch on a touchpad. Settings' ‹ › step back and forward with one click (FR-UI-1).
+
+| Step | Status |
+|---|---|
+| 1 Home | Not started |
+| 2 Sorting and keyboard | Not started |
+| 3 Logos, Carousel, Settings arrows | Not started |
+
+**Done when**
+- Every change above has a test, the mockups and smoke shots show them, and tests, clippy, fmt and the real-Core tests pass.
+
 ### B2 — Owner verification
 
 **Goal:** Every "done when" of M1–M6 has been seen working in a real window with real Games.
