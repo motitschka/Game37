@@ -733,6 +733,12 @@ enum Feed {
     Control(u64, ControlEvent),
     Typed(String),
     Input(Input),
+    /// A sideways wheel, for [`Screen::side_wheel`](crate::ui::nav::Screen::side_wheel).
+    SideWheel {
+        dx: f32,
+        x: f32,
+        y: f32,
+    },
     /// The held direction's repeat, if due at this time.
     Repeat(u64),
 }
@@ -774,6 +780,12 @@ fn feed(
                 }
                 inputs.push(input);
             }
+            Feed::SideWheel { dx, x, y } => {
+                controls.kind = InputKind::Keyboard;
+                if !sdl::playing(nav) {
+                    nav.top().side_wheel(dx, x, y, ctx);
+                }
+            }
             Feed::Repeat(at) => inputs.extend(controls.poll(at)),
         }
         for input in inputs.drain(..) {
@@ -814,6 +826,27 @@ fn feed(
     }
     controls.text = wants_text(nav);
     Flow::Continue
+}
+
+/// A wheel event as the screens get it: the vertical wheel as [`Pointer::Wheel`], a sideways one
+/// as [`Feed::SideWheel`] at `at`. With Shift held the vertical wheel scrolls sideways, down
+/// scrolling right. A touchpad's diagonal swipe goes the way it went most.
+fn wheel_feed(x: f32, y: f32, shift: bool, at: (f32, f32)) -> Option<Feed> {
+    let (dx, dy) = if shift && x == 0.0 { (-y, 0.0) } else { (x, y) };
+    if dx.abs() > dy.abs() {
+        Some(Feed::SideWheel { dx, x: at.0, y: at.1 })
+    } else if dy != 0.0 {
+        Some(Feed::Input(Input::Pointer(Pointer::Wheel { dy })))
+    } else {
+        None
+    }
+}
+
+/// Whether a Shift key is held now.
+fn shift_held() -> bool {
+    // SAFETY: SDL_GetModState only reads SDL's keyboard state, and SDL is running while events come.
+    let state = unsafe { sdl3::sys::keyboard::SDL_GetModState() };
+    Mod::from_bits_truncate(state.0).intersects(Mod::LSHIFTMOD | Mod::RSHIFTMOD)
 }
 
 /// Clipboard text turned into one [`Input::Text`] per printable character (FR-UI-1): newlines,
@@ -983,8 +1016,15 @@ impl InputState {
                 };
                 return Some(Feed::Input(Input::Pointer(pointer)));
             }
-            Event::MouseWheel { y, .. } => {
-                return Some(Feed::Input(Input::Pointer(Pointer::Wheel { dy: y })));
+            Event::MouseWheel {
+                x,
+                y,
+                mouse_x,
+                mouse_y,
+                ..
+            } => {
+                let at = gfx.to_logical(mouse_x, mouse_y);
+                return wheel_feed(x, y, shift_held(), at);
             }
             _ => return None,
         };

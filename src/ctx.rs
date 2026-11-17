@@ -314,8 +314,7 @@ mod tests {
         ctx.set_show_playtime(ShowPlaytime::GridsAndHome);
         assert_eq!(ctx.show_playtime, ShowPlaytime::GridsAndHome);
         assert_eq!(ctx.library.show_playtime().unwrap(), ShowPlaytime::GridsAndHome);
-        let shelves =
-            HomeShelves::new([None, Some(crate::library::db::Shelf::MostPlayed), None, None]).unwrap();
+        let shelves = HomeShelves::showing(&[crate::library::db::Shelf::MostPlayed]).unwrap();
         ctx.set_home_shelves(shelves);
         assert_eq!(ctx.home_shelves, shelves);
         assert_eq!(ctx.library.home_shelves().unwrap(), shelves);

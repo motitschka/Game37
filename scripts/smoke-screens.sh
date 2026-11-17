@@ -55,7 +55,7 @@ shot() {
 shot m1-no-config "$root/missing.toml" ""
 shot m1-home-empty "$root/empty.toml" ""
 shot m1-home "$root/cfg.toml" ""
-shot m1-see-all "$root/cfg.toml" "down,down,$(printf 'right,%.0s' {1..25})confirm"
+shot m1-see-all "$root/cfg.toml" "$(printf 'right,%.0s' {1..25})confirm"
 shot m1-carousel "$root/cfg.toml" "nexttab,right,right"
 shot m1-console-page "$root/cfg.toml" "nexttab,right,right,confirm,sort,down,confirm"
 # D2: the sort list open on a Console Page (on A–Z, Down to Z–A), and Newest release picked through it
@@ -117,19 +117,19 @@ shot m8-options-wii "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..8}),confi
 # M5: the Details Page, the Options Menu, the Favorite replace picker (six Favorites asked for), the
 # Options Menu's slot picker for the SNES Game (m3-pause-saved filled its slot 1), renaming
 shot m5-details "$root/cfg.toml" "nexttab,right,right,confirm,confirm"
-shot m5-options "$root/cfg.toml" "down,down,options"
-shot m5-favorite-replace "$root/cfg.toml" "down,down$(printf ',options,confirm,right%.0s' {1..5}),options,confirm,down"
+shot m5-options "$root/cfg.toml" "options"
+shot m5-favorite-replace "$root/cfg.toml" "$(printf ',options,confirm,right%.0s' {1..5}),options,confirm,down"
 shot m5-load-state "$root/cfg.toml" "nexttab,right,right,confirm,confirm,options,down,confirm"
 # Choose artwork: offline, without --artwork, the picker says it needs a SteamGridDB API key. This
 # Game already has a Resume State (m3-gb left one in the shared games dir), so only Load save
 # state is skipped (its Save States are still empty); three downs reach Choose artwork.
-shot m5-choose-artwork "$root/cfg.toml" "down,down,options,down,down,down,confirm"
+shot m5-choose-artwork "$root/cfg.toml" "options,down,down,down,confirm"
 # Rename with the on-screen keyboard: erase the Display Title, then Shift, m, k and a space. Four
 # downs reach Rename, past Choose artwork (Load save state alone is skipped, see above).
 shot m5-rename "$root/cfg.toml" \
-    "down,down,options,down,down,down,down,confirm$(printf ',options%.0s' {1..40}),down,down,confirm,$(printf 'right,%.0s' {1..7})confirm,up,left,confirm,sort,up"
+    "options,down,down,down,down,confirm$(printf ',options%.0s' {1..40}),down,down,confirm,$(printf 'right,%.0s' {1..7})confirm,up,left,confirm,sort,up"
 # M6: top bar entries
-shot m6-search-open "$root/cfg.toml" "down,down,search"
+shot m6-search-open "$root/cfg.toml" "search"
 shot m6-settings-open "$root/cfg.toml" "settings"
 # First-run Setup step 2: Wii U, Switch and PlayStation 3 ticked (Switch plays in Game37, so its
 # row is not here), then every System
@@ -174,7 +174,7 @@ shot m6-search-controller "$root/cfg.toml" "search,text:test,up"
 # from its Options Menu (five downs reach Hide game: Load save state alone is skipped, see the
 # Choose artwork shot above), the Reset confirmation, About
 shot m6-settings-library "$root/cfg.toml" "settings,right,down,down"
-shot m6-settings-hidden "$root/cfg.toml" "down,down,options,down,down,down,down,down,confirm,settings,right,down,down,confirm"
+shot m6-settings-hidden "$root/cfg.toml" "options,down,down,down,down,down,confirm,settings,right,down,down,confirm"
 shot m6-settings-reset "$root/cfg.toml" "settings,right,down,down,down,confirm"
 shot m6-settings-about "$root/cfg.toml" "settings$(printf ',down%.0s' {1..7})"
 # M6: Settings BIOS and Cores, each with the focus on its first row (no download starts)
@@ -196,18 +196,17 @@ shot m8-settings-display-screens "$root/cfg.toml" "settings$(printf ',down%.0s' 
 per_row="nexttab,right,right,confirm,settings$(printf ',down%.0s' {1..6}),right,down,down"
 shot d1-console-page-10 "$root/grid.toml" "$per_row,right,right,back,back"
 shot d1-console-page-6 "$root/grid.toml" "$per_row,left,left,back,back"
-# D1: Home after moving down to the third Shelf (Recently added): it moves by one whole Shelf, so
-# Continue playing and Recently added show
-shot d1-home-lower "$root/cfg.toml" "down,down"
-# D1: Settings → Home with the focus on Shelf 2, as in the mockup; then Home after Shelf 1 steps back
-# from Favorites to Recently added and Shelf 2 back from Continue playing to Most played (each swap
-# leaves Shelves 3 and 4 Off), so Home shows Recently added then Most played
+# D1: Home one Shelf up from where a new library opens it (Recently added, D2): it moves by one
+# whole Shelf, so Continue playing and Recently added show
+shot d1-home-lower "$root/cfg.toml" "up"
+# D1: Settings → Home with the focus on Continue playing, as in the mockup; then Home after
+# Favorites and Continue playing are switched off, so Home shows Recently added then Most played
 shot d1-settings-home "$root/cfg.toml" "settings$(printf ',down%.0s' {1..5}),right,down"
 shot d1-home-two-shelves "$root/cfg.toml" \
-    "settings$(printf ',down%.0s' {1..5}),right,left,left,left,down,left,left,left,back,back"
+    "settings$(printf ',down%.0s' {1..5}),right,confirm,down,confirm,back,back"
 # D1: "See all" of Recently added (every Game, as m1-see-all opens it) sorted A–Z: Sort opens the list
 # on Recently added, four Ups reach A–Z, Confirm picks it (for this grid only)
-shot d1-see-all-sorted "$root/cfg.toml" "down,down,$(printf 'right,%.0s' {1..25})confirm,sort,up,up,up,up,confirm"
+shot d1-see-all-sorted "$root/cfg.toml" "$(printf 'right,%.0s' {1..25})confirm,sort,up,up,up,up,confirm"
 
 # M6: Settings Artwork: the key row with no key set (screenshot mode runs Artwork off, so it shows
 # "Not set"), and the key entry modal with a typed key
@@ -222,19 +221,19 @@ shot m6-settings-games-root "$root/cfg.toml" "settings,right,confirm"
 # overwrites slot 1, which m3-pause-saved already filled).
 tall=(--size 1920x1200)
 shot tall-home "$root/cfg.toml" "" "${tall[@]}"                                         # m1-home
-shot tall-home-lower "$root/cfg.toml" "down,down" "${tall[@]}"                         # d1-home-lower
+shot tall-home-lower "$root/cfg.toml" "up" "${tall[@]}"                         # d1-home-lower
 shot tall-carousel "$root/cfg.toml" "nexttab,right,right" "${tall[@]}"                  # m1-carousel
 shot tall-console-page "$root/cfg.toml" "nexttab,right,right,confirm,sort,down,confirm" "${tall[@]}" # m1-console-page
 shot tall-details "$root/cfg.toml" "nexttab,right,right,confirm,confirm" "${tall[@]}"   # m5-details
-shot tall-options "$root/cfg.toml" "down,down,options" "${tall[@]}"                    # m5-options
-shot tall-choose-artwork "$root/cfg.toml" "down,down,options,down,down,down,confirm" \
+shot tall-options "$root/cfg.toml" "options" "${tall[@]}"                    # m5-options
+shot tall-choose-artwork "$root/cfg.toml" "options,down,down,down,confirm" \
     "${tall[@]}"                                                                         # m5-choose-artwork
-shot tall-search-open "$root/cfg.toml" "down,down,search" "${tall[@]}"                 # m6-search-open
+shot tall-search-open "$root/cfg.toml" "search" "${tall[@]}"                 # m6-search-open
 shot tall-search-results "$root/cfg.toml" "search,text:test,down,right" "${tall[@]}"   # m6-search-results
 shot tall-settings-library "$root/cfg.toml" "settings,right,down,down" "${tall[@]}"    # m6-settings-library
 shot tall-settings-bios "$root/cfg.toml" "settings,down,down,right" "${tall[@]}"       # m6-settings-bios
 shot tall-settings-hidden "$root/cfg.toml" \
-    "down,down,options,down,down,down,down,down,confirm,settings,right,down,down,confirm" \
+    "options,down,down,down,down,down,confirm,settings,right,down,down,confirm" \
     "${tall[@]}"                                                                         # m6-settings-hidden
 shot tall-settings-games-root "$root/cfg.toml" "settings,right,confirm" "${tall[@]}"   # m6-settings-games-root
 shot tall-setup "$root/missing.toml" "" "${tall[@]}"                                    # m1-no-config
@@ -244,7 +243,7 @@ shot tall-setup-folders "$root/missing.toml" \
 shot tall-notice "$root/cfg.toml" "nexttab,left,left,left,left,left,left,left,left,left,confirm" \
     --missing-emulators wiiu "${tall[@]}"                                                # m2-notice
 shot tall-rename "$root/cfg.toml" \
-    "down,down,options,down,down,down,down,confirm$(printf ',options%.0s' {1..40}),down,down,confirm,$(printf 'right,%.0s' {1..7})confirm,up,left,confirm,sort,up" \
+    "options,down,down,down,down,confirm$(printf ',options%.0s' {1..40}),down,down,confirm,$(printf 'right,%.0s' {1..7})confirm,up,left,confirm,sort,up" \
     "${tall[@]}"                                                                         # m5-rename
 shot tall-controller-test "$root/cfg.toml" "" --screen controller-test "${tall[@]}"     # m6-controller-test
 shot tall-settings-reset "$root/cfg.toml" "settings,right,down,down,down,confirm" "${tall[@]}" # m6-settings-reset

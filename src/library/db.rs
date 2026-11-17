@@ -96,8 +96,7 @@ pub enum Shelf {
 }
 
 impl Shelf {
-    /// Every Shelf, in Home's default order, which is also the order a Settings → Home slot steps
-    /// through them.
+    /// Every Shelf, in Home's default order.
     pub const ALL: [Shelf; 4] = [
         Shelf::Favorites,
         Shelf::ContinuePlaying,
@@ -151,52 +150,104 @@ impl Shelf {
     }
 }
 
-/// What Home shows (FR-HOME-2): four slots, Shelf 1 to Shelf 4, each holding a Shelf or Off
-/// (`None`). No Shelf is in two slots and at least one slot holds a Shelf; Home shows the Shelves
-/// in slot order.
+/// What Home shows (FR-HOME-2): every Shelf once, in the order Home shows them, each switched on or
+/// off. At least one is on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HomeShelves([Option<Shelf>; 4]);
+pub struct HomeShelves([(Shelf, bool); 4]);
 
 impl HomeShelves {
-    /// Every Shelf, in [`Shelf::ALL`] order.
+    /// Every Shelf on, in [`Shelf::ALL`] order.
     pub const DEFAULT: HomeShelves = HomeShelves([
-        Some(Shelf::Favorites),
-        Some(Shelf::ContinuePlaying),
-        Some(Shelf::RecentlyAdded),
-        Some(Shelf::MostPlayed),
+        (Shelf::Favorites, true),
+        (Shelf::ContinuePlaying, true),
+        (Shelf::RecentlyAdded, true),
+        (Shelf::MostPlayed, true),
     ]);
 
-    /// `None` if a Shelf is in two slots or every slot is Off.
-    pub fn new(slots: [Option<Shelf>; 4]) -> Option<HomeShelves> {
-        let shelves: Vec<Shelf> = slots.into_iter().flatten().collect();
-        let once = shelves.iter().enumerate().all(|(i, s)| !shelves[..i].contains(s));
-        (once && !shelves.is_empty()).then_some(HomeShelves(slots))
+    /// `None` if a Shelf is listed twice or none is on.
+    pub fn new(shelves: [(Shelf, bool); 4]) -> Option<HomeShelves> {
+        let once = shelves
+            .iter()
+            .enumerate()
+            .all(|(i, (s, _))| !shelves[..i].iter().any(|(t, _)| t == s));
+        (once && shelves.iter().any(|&(_, on)| on)).then_some(HomeShelves(shelves))
     }
 
-    pub fn slots(self) -> [Option<Shelf>; 4] {
+    /// `on` switched on in that order, then the other Shelves switched off, in [`Shelf::ALL`] order.
+    /// `None` if `on` is empty or names a Shelf twice.
+    pub fn showing(on: &[Shelf]) -> Option<HomeShelves> {
+        let off = Shelf::ALL
+            .into_iter()
+            .filter(|s| !on.contains(s))
+            .map(|s| (s, false));
+        let all: Vec<_> = on.iter().map(|&s| (s, true)).chain(off).collect();
+        HomeShelves::new(all.try_into().ok()?)
+    }
+
+    /// Every Shelf in Home's order, with whether it is on.
+    pub fn shelves(self) -> [(Shelf, bool); 4] {
         self.0
     }
 
-    /// The Shelves Home shows, in slot order.
+    /// The Shelves Home shows, in order.
     pub fn shown(self) -> impl Iterator<Item = Shelf> {
-        self.0.into_iter().flatten()
+        self.0.into_iter().filter(|&(_, on)| on).map(|(s, _)| s)
     }
 
-    /// The setting: each slot's Shelf id or "off", comma-separated.
+    /// The `i`th Shelf switched on or off; `None` if that would leave no Shelf on.
+    pub fn toggled(self, i: usize) -> Option<HomeShelves> {
+        let mut shelves = self.0;
+        shelves[i].1 = !shelves[i].1;
+        HomeShelves::new(shelves)
+    }
+
+    /// The `i`th Shelf moved one place up (`by` -1) or down (+1); `None` past either end.
+    pub fn moved(self, i: usize, by: isize) -> Option<HomeShelves> {
+        let j = i.checked_add_signed(by).filter(|&j| j < self.0.len())?;
+        let mut shelves = self.0;
+        shelves.swap(i, j);
+        Some(HomeShelves(shelves))
+    }
+
+    /// The setting: each Shelf's id in order, an off one's after a "!", comma-separated.
     fn to_setting(self) -> String {
-        let ids: Vec<_> = self.0.iter().map(|s| s.map_or("off", Shelf::id)).collect();
+        let ids: Vec<_> = self
+            .0
+            .iter()
+            .map(|&(s, on)| {
+                if on {
+                    s.id().to_owned()
+                } else {
+                    format!("!{}", s.id())
+                }
+            })
+            .collect();
         ids.join(",")
     }
 
+    /// Reads [`HomeShelves::to_setting`]'s format, or the one before it: four slots, each a Shelf
+    /// id or "off", whose Shelves are on in slot order and the rest off.
     fn from_setting(value: &str) -> Option<HomeShelves> {
-        let slots: Vec<Option<Shelf>> = value
-            .split(',')
-            .map(|id| match id {
-                "off" => Some(None),
-                id => Shelf::from_id(id).map(Some),
+        let ids: Vec<&str> = value.split(',').collect();
+        let shelves: Option<Vec<(Shelf, bool)>> = ids
+            .iter()
+            .map(|id| match id.strip_prefix('!') {
+                Some(id) => Shelf::from_id(id).map(|s| (s, false)),
+                None => Shelf::from_id(id).map(|s| (s, true)),
             })
-            .collect::<Option<_>>()?;
-        HomeShelves::new(slots.try_into().ok()?)
+            .collect();
+        if let Some(shelves) = shelves {
+            return HomeShelves::new(shelves.try_into().ok()?);
+        }
+        if ids.len() != 4 {
+            return None;
+        }
+        let on: Option<Vec<Shelf>> = ids
+            .iter()
+            .filter(|&&id| id != "off")
+            .map(|id| Shelf::from_id(id))
+            .collect();
+        HomeShelves::showing(&on?)
     }
 }
 
@@ -824,9 +875,8 @@ impl Library {
         self.set_setting("show_playtime", show.id())
     }
 
-    /// Which Shelf each of Home's slots holds (FR-HOME-2); all four in their default order until
-    /// changed, or if the stored value is not four slots with each Shelf at most once and at least
-    /// one on.
+    /// Home's Shelves, in order, each on or off (FR-HOME-2); all four on in their default order
+    /// until changed, or if the stored value is not every Shelf once with at least one on.
     pub fn home_shelves(&self) -> Result<HomeShelves, DbError> {
         Ok(self
             .setting("home_shelves")?
@@ -1561,32 +1611,87 @@ mod tests {
     }
 
     #[test]
-    fn home_shelves_default_to_all_four_in_order_and_round_trip_with_off_slots() {
+    fn home_shelves_default_to_all_four_on_in_order_and_round_trip_with_off_shelves() {
+        use Shelf::{ContinuePlaying, Favorites, MostPlayed, RecentlyAdded};
         let lib = Library::open_in_memory().unwrap();
         assert_eq!(lib.home_shelves().unwrap(), HomeShelves::DEFAULT);
         assert_eq!(
             lib.home_shelves().unwrap().shown().collect::<Vec<_>>(),
             Shelf::ALL
         );
-        let arranged =
-            HomeShelves::new([None, Some(Shelf::MostPlayed), None, Some(Shelf::Favorites)]).unwrap();
+        let arranged = HomeShelves::new([
+            (MostPlayed, true),
+            (Favorites, false),
+            (RecentlyAdded, true),
+            (ContinuePlaying, false),
+        ])
+        .unwrap();
         lib.set_home_shelves(arranged).unwrap();
         assert_eq!(lib.home_shelves().unwrap(), arranged);
         assert_eq!(
             lib.home_shelves().unwrap().shown().collect::<Vec<_>>(),
-            [Shelf::MostPlayed, Shelf::Favorites]
+            [MostPlayed, RecentlyAdded]
         );
         assert_eq!(
             lib.setting("home_shelves").unwrap().as_deref(),
-            Some("off,most_played,off,favorites")
+            Some("most_played,!favorites,recently_added,!continue_playing")
+        );
+    }
+
+    /// The format before every Shelf was listed: four slots, each a Shelf or Off. The Shelves named
+    /// are on in slot order; the rest follow, off, in `Shelf::ALL` order.
+    #[test]
+    fn home_shelves_stored_as_four_slots_read_as_those_shelves_on_then_the_rest_off() {
+        use Shelf::{ContinuePlaying, Favorites, MostPlayed, RecentlyAdded};
+        let lib = Library::open_in_memory().unwrap();
+        for (stored, want) in [
+            (
+                "favorites,off,most_played,recently_added",
+                [
+                    (Favorites, true),
+                    (MostPlayed, true),
+                    (RecentlyAdded, true),
+                    (ContinuePlaying, false),
+                ],
+            ),
+            (
+                "off,most_played,off,off",
+                [
+                    (MostPlayed, true),
+                    (Favorites, false),
+                    (ContinuePlaying, false),
+                    (RecentlyAdded, false),
+                ],
+            ),
+            (
+                "recently_added,favorites,off,continue_playing",
+                [
+                    (RecentlyAdded, true),
+                    (Favorites, true),
+                    (ContinuePlaying, true),
+                    (MostPlayed, false),
+                ],
+            ),
+        ] {
+            lib.set_setting("home_shelves", stored).unwrap();
+            assert_eq!(lib.home_shelves().unwrap().shelves(), want, "stored {stored:?}");
+        }
+        assert_eq!(
+            HomeShelves::showing(&[Favorites, MostPlayed, RecentlyAdded])
+                .unwrap()
+                .shelves(),
+            [
+                (Favorites, true),
+                (MostPlayed, true),
+                (RecentlyAdded, true),
+                (ContinuePlaying, false)
+            ]
         );
     }
 
     #[test]
-    fn home_shelves_that_are_not_four_slots_of_distinct_shelves_with_one_on_read_as_the_default() {
+    fn home_shelves_that_are_not_every_shelf_once_with_one_on_read_as_the_default() {
         let lib = Library::open_in_memory().unwrap();
-        lib.set_home_shelves(HomeShelves::new([Some(Shelf::MostPlayed), None, None, None]).unwrap())
-            .unwrap();
         for stored in [
             "garbage",
             "",
@@ -1597,6 +1702,11 @@ mod tests {
             "off,off,off,off",
             "favorites,continue_playing,recently_added,wishlist",
             "Favorites,off,off,off",
+            "!favorites,!continue_playing,!recently_added,!most_played",
+            "favorites,!favorites,recently_added,most_played",
+            "favorites,!continue_playing,recently_added",
+            "off,!continue_playing,recently_added,most_played",
+            "!off,favorites,off,off",
         ] {
             lib.set_setting("home_shelves", stored).unwrap();
             assert_eq!(
@@ -1605,6 +1715,36 @@ mod tests {
                 "stored {stored:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_home_shelf_toggles_unless_it_is_the_last_one_on_and_moves_within_the_list() {
+        use Shelf::{ContinuePlaying, Favorites, MostPlayed, RecentlyAdded};
+        let start = HomeShelves::DEFAULT;
+        let off = start.toggled(1).unwrap();
+        assert_eq!(
+            off.shown().collect::<Vec<_>>(),
+            [Favorites, RecentlyAdded, MostPlayed]
+        );
+        assert_eq!(off.toggled(1), Some(start), "back on");
+        let one = HomeShelves::showing(&[RecentlyAdded]).unwrap();
+        assert_eq!(one.toggled(0), None, "the last Shelf on stays on");
+        assert_eq!(
+            start.moved(1, -1).unwrap().shown().collect::<Vec<_>>(),
+            [ContinuePlaying, Favorites, RecentlyAdded, MostPlayed]
+        );
+        assert_eq!(
+            off.moved(1, 1).unwrap().shelves(),
+            [
+                (Favorites, true),
+                (RecentlyAdded, true),
+                (ContinuePlaying, false),
+                (MostPlayed, true)
+            ],
+            "an off Shelf moves too"
+        );
+        assert_eq!(start.moved(0, -1), None);
+        assert_eq!(start.moved(3, 1), None);
     }
 
     #[test]

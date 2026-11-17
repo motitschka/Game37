@@ -1,7 +1,7 @@
 //! Settings (FR-SET-1), after `settings_page` and `settings_row` in `design/generate_mockups.py`:
 //! the sections down the left, the focused section's rows on the right. Up and Down move within a
-//! column; Right or Confirm goes from a section into its rows, Left or Back goes back, and Back on
-//! the sections leaves Settings. Each section lives in its own file as a [`Section`], so this file
+//! column; Right or Confirm goes from a section into its rows, Left or Back goes back (Back alone
+//! where Left moves the row, as on Home's), and Back on the sections leaves Settings. Each section lives in its own file as a [`Section`], so this file
 //! only knows the focus, the layout and the mouse.
 
 mod about;
@@ -66,6 +66,9 @@ pub struct Row {
     pub choice: bool,
     /// The heading of the group of rows this one starts, drawn above it, e.g. Display's "Screens".
     pub group: Option<&'static str>,
+    /// Whether Left and Right move the row up and down its list, as on Home's Shelves: its hints
+    /// add "← →" Move.
+    pub moves: bool,
 }
 
 impl Row {
@@ -81,6 +84,7 @@ impl Row {
             inert: false,
             choice: false,
             group: None,
+            moves: false,
         }
     }
 
@@ -126,6 +130,11 @@ impl Row {
         Row { inert: true, ..self }
     }
 
+    /// Marks the row as one Left and Right move up and down its list.
+    pub fn moves(self) -> Row {
+        Row { moves: true, ..self }
+    }
+
     /// Marks `value` as a cycled choice, drawn "‹ value ›" instead of a plain right-aligned value.
     pub fn choice(self, value: impl Into<String>) -> Row {
         Row {
@@ -150,6 +159,10 @@ pub trait Section {
     /// Input while row `i` has the focus, before Settings' own handling: a choice row takes Left
     /// and Right, say. `None` leaves the input to Settings.
     fn handle(&mut self, _i: usize, _input: Input, _ctx: &mut Ctx) -> Option<Transition> {
+        None
+    }
+    /// The row the focus follows to after [`Section::handle`] moved the focused row in the list.
+    fn moved_to(&mut self) -> Option<usize> {
         None
     }
     /// What a section without rows shows in the rows column.
@@ -209,7 +222,7 @@ impl Settings {
             Box::new(bios::Bios::default()),
             Box::new(cores::Cores::default()),
             Box::new(controls::Controls),
-            Box::new(home::Home),
+            Box::new(home::Home::default()),
             Box::new(display::Display),
             Box::new(about::About),
         ])
@@ -412,6 +425,10 @@ impl Screen for Settings {
         if self.focus == Focus::Rows
             && let Some(transition) = self.sections[self.section].handle(self.row, input, ctx)
         {
+            if let Some(row) = self.sections[self.section].moved_to() {
+                self.row = row;
+                self.refresh(ctx);
+            }
             return transition;
         }
         match (self.focus, input) {
@@ -495,6 +512,13 @@ impl Screen for Settings {
             .flatten();
         if focused.is_some_and(|r| r.choice) {
             return vec![Hint::new(&[Action::Left, Action::Right], "Change"), back];
+        }
+        if let Some(row) = focused.filter(|r| r.moves) {
+            return vec![
+                Hint::new(&[Action::Confirm], row.verb),
+                Hint::new(&[Action::Left, Action::Right], "Move"),
+                back,
+            ];
         }
         let verb = match self.focus {
             Focus::Sections => (!self.rows.is_empty()).then_some("Open"),
