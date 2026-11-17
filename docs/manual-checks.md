@@ -103,3 +103,34 @@ The Switch controller in PlayStation Games is checked in section 5.
       note, and the Game (and its sound) stops while the menu is open, then carries on with Resume.
 - [ ] An In-game Save made in a Switch Game is there after quitting and starting it again, and lives
       under `~/Games/saves/switch/suyu/nand/`. Nothing appears in `~/.local/share/suyu`.
+
+## 11. Home and grid design (D1)
+
+- [ ] Home on your 1920×1200 screen, and in a 1920×1080 window: exactly two whole Shelves show; the
+      covers are bigger on the taller screen; nothing is cut off at the bottom.
+- [ ] Down and up with the controller, the keyboard and the mouse wheel move one whole Shelf with a
+      short snap; with Settings → Display → Motion set to Reduced they jump. A slow two-finger touchpad
+      swipe moves one Shelf at a time, not straight to the last one.
+- [ ] Moving the mouse over the Shelves while Home snaps never leaves the selection on a Shelf you can't
+      see.
+- [ ] Settings → Home: set Shelf 1 to Most played, then back to Home: Most played is first and the
+      Shelf it replaced moved to where Most played was. Set three Shelves Off: Home shows one Shelf in
+      its upper half. After a restart Home is the same.
+- [ ] Settings → Display → Games per row at 6, 8 and 10: a Console Page, "See all" and Search show that
+      many covers per row, with equal gaps left and right; the selected Game stays selected.
+- [ ] The Sort button on a Console Page steps A–Z, Z–A, Last played, Most played, Recently added,
+      Newest release, Oldest release; another System's Console Page uses the same order, also after a
+      restart.
+- [ ] "See all" on Recently added shows every Game you have, newest first; Sort changes it there, and a
+      Console Page's order is unchanged afterwards. "See all" on Favorites shows only the Favorites.
+- [ ] With your SteamGridDB key: sort a Console Page by Newest release and wait: Games fill in by date,
+      the selected Game stays selected, and the grid doesn't jump more than once a second. Sort on to
+      A–Z, wait a few seconds, then back to Newest release: only the dates fetched before you left
+      it are filled in, and the rest start arriving again from there.
+- [ ] The Details Page of a Game with a known date shows RELEASED with its year; an embedded Game with
+      Save States and a date shows six boxes, all inside the screen.
+- [ ] Settings → Display → Show Playtime: Grids shows a played Game's Playtime only under the selected
+      cover on a Console Page; Grids and Home also on Home; Off shows it nowhere.
+- [ ] Each of the 19 Carousel cards and its Console Page header shows that System's logo, readable on
+      its background.
+

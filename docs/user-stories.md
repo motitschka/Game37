@@ -57,7 +57,33 @@ Two people use Game37:
 - An empty Continue playing Shelf says it fills as I play.
 - *Covers FR-HOME-5*
 
+**US-46 Home my way.** As a player, I want to choose which Shelves Home shows and in what order, so it shows what I care about first.
+- Settings → Home has four rows, Shelf 1 to Shelf 4, each set to one of the four Shelves or Off.
+- Picking a Shelf another row holds swaps the two; at least one Shelf stays on.
+- Home shows my choice as soon as I go back to it, and after a restart.
+- *Covers FR-HOME-2*
+
+**US-47 Big covers, whole Shelves.** As a player, I want Home to use the whole screen for two Shelves, so covers are easy to see from the couch.
+- One screen shows exactly two Shelves, at 1920×1080 and at 1920×1200.
+- Up, down and the mouse wheel move one whole Shelf; Home never stops on half a Shelf.
+- *Covers FR-HOME-5, FR-HOME-7*
+
 ## Epic 3: Browse by console
+
+**US-48 As many covers as I like.** As a player, I want to choose how many Games a grid shows per row, so I can trade cover size for overview.
+- Settings → Display sets Games per row from 6 to 10; Console Pages, "See all" and Search follow it.
+- The grid is centred, with the same gap on both sides.
+- *Covers FR-UI-7*
+
+**US-49 Sort by release.** As a player, I want to sort a grid by release date, so I can walk a System's history in order.
+- Newest release and Oldest release are in the sort button's cycle.
+- Games without a known date come last in both.
+- The Details Page shows the release year when it is known.
+- *Covers FR-CAR-5, FR-ART-5, FR-DET-2*
+
+**US-50 Recognise each System.** As a player, I want each System shown with its own logo, so I find it at a glance.
+- Carousel cards and Console Page headers show the System's logo in its official colours.
+- *Covers FR-CAR-2, FR-CAR-3*
 
 **US-10 Browse a console.** As a player, I want to pick a console from a themed carousel and see all its games, so I can browse the way I think about my collection.
 - L1/R1 or the tabs switch between Home and Carousel.
@@ -212,6 +238,11 @@ Two people use Game37:
 **US-34 Check my controller.** As a player, I want a controller test screen, so I can see what Game37 receives.
 - Pressing any button or moving a stick highlights it on the test screen.
 - *Covers FR-SET-1*
+
+**US-51 Playtime where I want it.** As a player, I want to choose where Playtime shows, so the menus stay as clean as I like.
+- Settings → Display → Show Playtime: Off, Grids, or Grids and Home.
+- It shows under the selected cover only, without the title, once a Game has run for a minute.
+- *Covers FR-UI-8*
 
 ## Epic 10: Setup
 

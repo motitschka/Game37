@@ -63,10 +63,12 @@ Details are in [docs/milestones.md](docs/milestones.md), and the current state i
 - **One library for 19 Systems.** Game37 scans one folder per System, cleans up file names into Display
   Titles (`Super Mario World (USA) [!].sfc` becomes "Super Mario World"), and notices added, removed and
   renamed Games while it runs.
-- **Home:** four Shelves (Favorites, Continue playing, Recently added, Most played) with up to 20 Games
-  each and a "See all" grid.
-- **Carousel:** every System in a fixed order, themed per System, opening that System's Console Page:
-  a sortable grid of its Games.
+- **Home:** up to four Shelves (Favorites, Continue playing, Recently added, Most played), two per
+  screen with big covers, each with up to 20 Games and a "See all" grid of every Game you have. You
+  choose which Shelves show, and in what order, in Settings → Home.
+- **Carousel:** every System in a fixed order, shown by its logo and themed per System, opening that
+  System's Console Page: a grid of its Games, 6 to 10 per row as you like, sorted A–Z, Z–A, by Last
+  played, Most played, Recently added, Newest release or Oldest release.
 - **Thirteen Systems play inside Game37,** from NES to PS2, 3DS and Wii. Each Core downloads
   automatically the first time you play that System. You get a Pause Menu, three Save State slots with
   screenshots, a Resume State written on quit, and In-game Saves that are always kept. Up to four
@@ -82,7 +84,7 @@ Details are in [docs/milestones.md](docs/milestones.md), and the current state i
   `The Legend of Zelda - Ocarina of Time (2026).nup`. Without a key, Games show their Display Title
   and System.
 - **Details Page:** selecting a Game opens it, with its hero image, Playtime, last played, Save States,
-  file and size. Play starts it from there.
+  release year, file and size. Play starts it from there.
 - **Options Menu:** on any Game, add it to your five Favorites, start it from a Save State slot, choose
   its Artwork, rename it (the file keeps its name), hide it, or show its file in the file manager. A Wii
   Game also has a Controller row: Wii Remote and Nunchuk, or Classic Controller.
@@ -441,7 +443,7 @@ without a restart.
 ## Settings
 
 Open Settings with Start on a controller, Ctrl+, on the keyboard, or the gear in the top bar. It has
-seven sections, down the left:
+eight sections, down the left:
 
 - **Library:** the Games Root location (Change it), Rescan library, Hidden games (bring one back), and
   Reset Playtime and stats.
@@ -451,8 +453,11 @@ seven sections, down the left:
 - **Cores:** Update all, or redownload a single one.
 - **Controls:** Menu button style (Nintendo, where the right face button confirms; or Xbox or
   PlayStation, where the bottom face button confirms) and Controller test, which exits by holding B.
+- **Home:** Shelf 1 to Shelf 4, each one of the four Shelves or Off, in the order Home shows them.
 - **Display:** Startup window mode (Remember last, Always fullscreen or Always windowed), which applies
-  the next time Game37 starts; and under Screens, a DS layout and a 3DS layout: Large and small (the
+  the next time Game37 starts; Motion (Full, or Reduced without fades, slides and gliding); Games per
+  row (6 to 10) on Console Pages, "See all" and Search; Show Playtime under the selected cover (Off,
+  Grids, or Grids and Home); and under Screens, a DS layout and a 3DS layout: Large and small (the
   default, the large screen three times the small one), Side by side or One screen, which applies from
   the next Game started.
 - **About:** the version, the licence and the paths Game37 uses.
@@ -587,7 +592,8 @@ your Playtime, Favorites, renames and these settings.
 
 Game37 has no telemetry. It only goes online to download Cores from the libretro build server, and to
 fetch Artwork from SteamGridDB when you've added a key: only for the Games you look at, a few requests
-a second at most.
+a second at most. Release dates are asked for only while you have a grid sorted by Newest release or
+Oldest release on screen, once per Game.
 
 ## Known limitations
 

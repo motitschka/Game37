@@ -10,6 +10,21 @@
   none. Switch has no Save States, Resume State or Restart game. Ryubing is no longer used.
 - **Switch 2 Games in `.nup` files are listed** in `switch2/`, next to `.nsp` and `.xci`. Like every
   Switch 2 Game they can't be played yet: Play says "Not playable yet" and starts nothing.
+- **Home shows two Shelves per screen, with bigger covers.** Up, down and the mouse wheel move one whole
+  Shelf with a short snap, so Home never stops on half a Shelf; a touchpad swipe moves one Shelf per
+  notch. Empty Shelves are as tall as the others.
+- **Settings → Home** chooses which Shelves Home shows and in what order: four rows, Shelf 1 to Shelf
+  4, each set to Favorites, Continue playing, Recently added, Most played or Off.
+- **Games per row** in Settings → Display: 6 to 10 (default 8) on Console Pages, "See all" and Search.
+  The grid now runs from margin to margin, centred, and the covers grow or shrink to fit.
+- **Seven sort orders** on one Sort button: A–Z, Z–A, Last played, Most played, Recently added, Newest
+  release and Oldest release. Games without a release date come last in both release orders.
+- **Release dates** come from SteamGridDB with a key. Game37 asks for the dates it is missing only while
+  a grid sorted by Newest release or Oldest release is on screen, one request per Game, never for the
+  whole library on its own. The Details Page shows the release year.
+- **System logos** on the Carousel cards and the Console Page header, in their official colours. They
+  are trademarks of Nintendo and Sony and are not under Game37's licence (see the README).
+- **Show Playtime** in Settings → Display: Off, Grids (default) or Grids and Home.
 
 ### Changed
 - **Artwork is searched by the file name, not the Display Title.** Renaming a Game in Game37 now only
@@ -17,6 +32,13 @@
   pick it with Choose artwork. A year in parentheses stays in the title, so a remake can be told from
   the original: `The Legend of Zelda - Ocarina of Time (2026).nup` finds the Switch 2 Artwork, not the
   N64 one. The `.nkit` of a `.nkit.iso` no longer shows in titles.
+- **"See all" opens every Game you have,** in that Shelf's order, with Games never played last, and can
+  be sorted there without changing the Console Pages' order. On Favorites it still shows only the
+  Favorites.
+- **Playtime shows under the selected cover only,** not under every cover, and not before a Game has
+  run for a minute.
+- **The library database gains a column** for release dates. It upgrades on the first start; an older
+  Game37 can't open it afterwards.
 
 ## 0.2.0-beta.3 (2026-11-03)
 
