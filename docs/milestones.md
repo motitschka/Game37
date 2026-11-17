@@ -189,10 +189,12 @@ checks so that they are made once, on the final look. The speedrun timer (M7) fo
 |---|---|
 | 1 Grids | Done |
 | 2 Home | Done |
-| 3 Sorting and See all | Done (the two release orders come with step 5) |
+| 3 Sorting and See all | Done |
 | 4 Playtime | Done |
-| 5 Release dates | Dates stored, and recorded whenever a cover is looked up. Newest release, Oldest release and the year on the Details Page done. Missing dates are asked for when the player sorts a grid by a release order. Done. |
-| 6 Logos | The 19 files, their sources and the render script are in `design/logos/`, `design/make_logos.sh` and `assets/logos/` (approved by the owner, black parts turned white). Shown on the Carousel card and the Console Page header; trademark note in the README. Done. |
+| 5 Release dates | Done: dates stored and recorded with cover lookups; Newest release, Oldest release and the Details Page year; missing dates asked for only while a grid sorted by a release order is showing (the owner's decision, 2026-11-16, because of SteamGridDB's terms) |
+| 6 Logos | Done: on the Carousel card and the Console Page header, with sources in `design/logos/SOURCES.md` and a trademark note in the README |
+
+Reviewed by two fresh reviewers (screens, data) on 2026-11-17; their findings are fixed. Installed on the owner's machine; not merged into `b1-hardening` or `main` yet.
 
 **Done when**
 - Every grid is centred with the chosen number of Games per row, at 1080 and at 1200 high.
