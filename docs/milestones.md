@@ -191,7 +191,7 @@ checks so that they are made once, on the final look. The speedrun timer (M7) fo
 | 2 Home | Done |
 | 3 Sorting and See all | Done (the two release orders come with step 5) |
 | 4 Playtime | Done |
-| 5 Release dates | Dates stored, and recorded whenever a cover is looked up. Newest release, Oldest release and the year on the Details Page done. To do: asking for the missing dates of a grid's Games when the player picks a release order there (the owner's decision, 2026-11-16: never the whole library at startup, because of SteamGridDB's terms; `Artwork::ask_release_dates` is built for this but nothing calls it yet) |
+| 5 Release dates | Dates stored, and recorded whenever a cover is looked up. Newest release, Oldest release and the year on the Details Page done. Missing dates are asked for when the player sorts a grid by a release order. Done. |
 | 6 Logos | The 19 files, their sources and the render script are in `design/logos/`, `design/make_logos.sh` and `assets/logos/` (approved by the owner, black parts turned white). Shown on the Carousel card and the Console Page header; trademark note in the README. Done. |
 
 **Done when**

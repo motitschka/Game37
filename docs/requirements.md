@@ -85,7 +85,7 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 - **FR-ART-2** "Choose different Artwork" lets the player browse other SteamGridDB results for that Game.
 - **FR-ART-3** Without an API key, or without a match, Game37 shows the Display Title and a System icon.
 - **FR-ART-4** Fetched Artwork is cached locally and not re-downloaded on every start.
-- **FR-ART-5** A Game's release date is the one SteamGridDB gives for the game its title matched (FR-ART-1). A Game matched before release dates were recorded gets its date fetched once, in the background. Without an API key or without a match, a Game has no release date.
+- **FR-ART-5** A Game's release date is the one SteamGridDB gives for the game its title matched (FR-ART-1). When the player sorts a grid by Newest release or Oldest release, Game37 asks SteamGridDB once for each Game in that grid whose date it has not asked for yet, in the background and without fetching images; it never asks about the whole library on its own (SteamGridDB's terms forbid bulk use). Without an API key or without a match, a Game has no release date.
 
 ### Search
 

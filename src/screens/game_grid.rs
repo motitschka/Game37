@@ -84,6 +84,15 @@ enum NoticeFocus {
 /// usual label (US-39).
 const FEEDBACK: Duration = Duration::from_secs(2);
 
+/// The least time between two re-sorts of a grid sorted by a release order as Release Dates arrive.
+const RESORT_GAP: Duration = Duration::from_secs(1);
+
+/// Whether `order` sorts by Release Date, so a grid in it asks SteamGridDB for the missing ones
+/// (FR-ART-5).
+fn is_release(order: SortOrder) -> bool {
+    matches!(order, SortOrder::NewestRelease | SortOrder::OldestRelease)
+}
+
 /// Where focus goes from the notice or the grid combined (US-39): Left/Right move between the
 /// notice's two buttons; Down from the notice goes to the grid's first Game, if there are any;
 /// Up from the grid's first row returns to the notice's Copy command button. Only called while
@@ -186,6 +195,12 @@ pub struct GameGrid {
     notice_hits: Option<(Rect, Rect)>,
     /// Transient feedback on a notice button after it's pressed, and until when (US-39).
     feedback: Option<(NoticeFocus, &'static str, Instant)>,
+    /// `Artwork::dates_stored` when the Games were loaded: a change re-sorts a grid in a release
+    /// order.
+    dates_seen: u64,
+    /// When the Games were last re-sorted for Release Dates that arrived, to do it at most once
+    /// every [`RESORT_GAP`].
+    resorted: Option<Instant>,
 }
 
 impl GameGrid {
@@ -211,6 +226,8 @@ impl GameGrid {
             notice_focus: None,
             notice_hits: None,
             feedback: None,
+            dates_seen: 0,
+            resorted: None,
         }
     }
 
@@ -263,7 +280,17 @@ impl GameGrid {
         (order, self.games.iter().map(|g| g.id).collect())
     }
 
+    /// Loads the Games again; in a release order, also asks SteamGridDB for those of them whose
+    /// Release Date is missing (FR-ART-5), which the player's choice of that order allows.
     fn reload(&mut self, ctx: &Ctx) {
+        self.load(ctx);
+        if self.is_sortable() && is_release(self.sort_order) {
+            ctx.artwork.ask_release_dates(&ctx.library, &self.games);
+        }
+    }
+
+    /// Loads the Games again in the order shown, keeping focus on the same Game.
+    fn load(&mut self, ctx: &Ctx) {
         if self.sorting == Sorting::Global {
             self.sort_order = ctx.library.sort_order().unwrap_or_default();
         }
@@ -274,6 +301,7 @@ impl GameGrid {
         self.focus = refocus(&self.games, self.focus, &games);
         self.games = games;
         self.revision = Some(ctx.revision);
+        self.dates_seen = ctx.artwork.dates_stored();
         // The previous frame's hit rects may point at Games that moved or went: drop them until the
         // next draw.
         self.hits.clear();
@@ -285,6 +313,20 @@ impl GameGrid {
     fn reload_if_changed(&mut self, ctx: &Ctx) {
         if self.revision != Some(ctx.revision) {
             self.reload(ctx);
+        }
+    }
+
+    /// In a release order, sorts the Games again once Release Dates arrived, at most once every
+    /// [`RESORT_GAP`] (`now` is the current time), keeping focus on the same Game.
+    fn resort_if_dated(&mut self, ctx: &Ctx, now: Instant) {
+        let due = self.resorted.is_none_or(|at| now >= at + RESORT_GAP);
+        if self.is_sortable()
+            && is_release(self.sort_order)
+            && ctx.artwork.dates_stored() != self.dates_seen
+            && due
+        {
+            self.load(ctx);
+            self.resorted = Some(now);
         }
     }
 
@@ -557,6 +599,7 @@ impl Screen for GameGrid {
     fn handle(&mut self, input: Input, ctx: &mut Ctx) -> Transition {
         self.sync_grid(ctx);
         self.reload_if_changed(ctx);
+        self.resort_if_dated(ctx, Instant::now());
         self.sync_notice(ctx);
         match input {
             Input::Action(Action::Back) => return Transition::Pop,
@@ -626,6 +669,7 @@ impl Screen for GameGrid {
     fn draw(&mut self, gfx: &mut Gfx<'_>, ctx: &Ctx) {
         self.sync_grid(ctx);
         self.reload_if_changed(ctx);
+        self.resort_if_dated(ctx, Instant::now());
         self.sync_notice(ctx);
         self.refit();
         let mut title_x = M;
@@ -1301,5 +1345,154 @@ mod tests {
             ctx.clipboard_request.as_deref(),
             Some("flatpak install flathub info.cemu.Cemu")
         );
+    }
+
+    mod release_dates {
+        use super::*;
+        use crate::artwork::Artwork;
+        use crate::artwork::tests::{Fake, settle, unpaced};
+        use crate::config::ApiKey;
+        use std::path::Path;
+
+        /// A Ctx with the SNES Games "Alpha", "Beta" and "Gamma" and the NES Game "Kid", none
+        /// dated yet, whose Artwork asks `fake` for Release Dates.
+        fn world(dir: &Path, fake: &Fake) -> Ctx {
+            let mut ctx = Ctx::empty();
+            let game = |system: &'static str, title: &str| FoundGame {
+                system,
+                rel_path: format!("{system}/{title}.sfc"),
+                title: title.to_owned(),
+            };
+            let snes: Vec<_> = ["Alpha", "Beta", "Gamma"]
+                .iter()
+                .map(|t| game("snes", t))
+                .collect();
+            ctx.library.sync_system("snes", &snes, 0).unwrap();
+            ctx.library.sync_system("nes", &[game("nes", "Kid")], 0).unwrap();
+            ctx.artwork = online(dir, fake);
+            ctx
+        }
+
+        fn online(dir: &Path, fake: &Fake) -> Artwork {
+            let key = ApiKey::new("0123456789abcdef0123456789abcdef");
+            unpaced(Artwork::new(dir.join("artwork"), Some(key), fake.fetch()))
+        }
+
+        /// SNES's Console Page, sorted by the stored global order.
+        fn console_page() -> GameGrid {
+            let source: Source = Box::new(|library, order| library.system_games("snes", order));
+            GameGrid::new("SNES", source).sortable(Colour::hex(0), "hint".into(), snes())
+        }
+
+        fn ids(games: &[GameRow]) -> Vec<i64> {
+            games.iter().map(|g| g.id).collect()
+        }
+
+        fn titles(grid: &GameGrid) -> Vec<&str> {
+            grid.games.iter().map(|g| g.title.as_str()).collect()
+        }
+
+        #[test]
+        fn sort_landing_on_newest_release_asks_for_the_console_pages_games_only() {
+            let dir = tempfile::tempdir().unwrap();
+            let mut ctx = world(dir.path(), &Fake::new());
+            ctx.library.set_sort_order(SortOrder::RecentlyAdded).unwrap();
+            let mut grid = console_page();
+            grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+            assert!(
+                ctx.artwork.queued_dates().is_empty(),
+                "Recently added asks for none"
+            );
+
+            grid.handle(Input::Action(Action::Sort), &mut ctx);
+
+            assert_eq!(grid.sort_order, SortOrder::NewestRelease);
+            let snes = ctx.library.system_games("snes", SortOrder::AZ).unwrap();
+            assert_eq!(ctx.artwork.queued_dates(), ids(&snes), "not NES's Kid");
+        }
+
+        #[test]
+        fn sort_landing_on_a_to_z_asks_for_no_release_dates() {
+            let dir = tempfile::tempdir().unwrap();
+            let fake = Fake::new();
+            let mut ctx = world(dir.path(), &fake);
+            ctx.library.set_sort_order(SortOrder::OldestRelease).unwrap();
+            // Opened before an API key was entered, so nothing was asked for then.
+            ctx.artwork = Artwork::off();
+            let mut grid = console_page();
+            grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+            ctx.artwork = online(dir.path(), &fake);
+
+            grid.handle(Input::Action(Action::Sort), &mut ctx);
+
+            assert_eq!(grid.sort_order, SortOrder::AZ);
+            assert!(ctx.artwork.queued_dates().is_empty());
+        }
+
+        #[test]
+        fn a_console_page_opened_in_oldest_release_asks_for_its_games_dates() {
+            let dir = tempfile::tempdir().unwrap();
+            let mut ctx = world(dir.path(), &Fake::new());
+            ctx.library.set_sort_order(SortOrder::OldestRelease).unwrap();
+            let mut grid = console_page();
+            grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+
+            assert_eq!(ctx.artwork.queued_dates(), ids(&grid.games));
+            assert_eq!(titles(&grid), ["Alpha", "Beta", "Gamma"]);
+        }
+
+        #[test]
+        fn all_games_in_a_release_order_asks_for_its_games_dates() {
+            let dir = tempfile::tempdir().unwrap();
+            let mut ctx = world(dir.path(), &Fake::new());
+            let source: Source = Box::new(|library, order| library.all_games(order));
+            let mut grid = GameGrid::new("All games", source).own_sort(SortOrder::NewestRelease);
+            grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+
+            assert_eq!(titles(&grid), ["Alpha", "Beta", "Gamma", "Kid"]);
+            assert_eq!(ctx.artwork.queued_dates(), ids(&grid.games));
+        }
+
+        #[test]
+        fn arriving_release_dates_re_sort_the_grid_at_most_once_a_second_keeping_the_focus() {
+            let dir = tempfile::tempdir().unwrap();
+            // Asked in A–Z order: Alpha has no Release Date, Beta's comes first, then Gamma's.
+            let fake = Fake::new();
+            fake.api("/search/autocomplete/Alpha", "[{\"id\":1}]")
+                .api("/search/autocomplete/Beta", "[{\"id\":2,\"release_date\":100}]")
+                .api("/search/autocomplete/Gamma", "[{\"id\":3,\"release_date\":200}]");
+            let mut ctx = world(dir.path(), &fake);
+            ctx.library.set_sort_order(SortOrder::NewestRelease).unwrap();
+            let mut grid = console_page();
+            grid.handle(Input::Action(Action::Back), &mut ctx); // initial load
+            assert_eq!(titles(&grid), ["Alpha", "Beta", "Gamma"]);
+            assert_eq!(grid.focus, 0, "Alpha");
+
+            // Only Beta's date is in: a result is collected only by a poll, one per poll.
+            settle(
+                &ctx.artwork,
+                &ctx.library,
+                || ctx.artwork.dates_stored(),
+                |n| *n < 1,
+            );
+            let before = Instant::now() - RESORT_GAP;
+            grid.resort_if_dated(&ctx, before);
+            assert_eq!(titles(&grid), ["Beta", "Alpha", "Gamma"]);
+            assert_eq!(grid.focus, 1, "Alpha keeps the focus");
+
+            settle(
+                &ctx.artwork,
+                &ctx.library,
+                || ctx.artwork.dates_stored(),
+                |n| *n < 2,
+            );
+            grid.resort_if_dated(&ctx, before + RESORT_GAP - Duration::from_millis(1));
+            assert_eq!(titles(&grid), ["Beta", "Alpha", "Gamma"], "not within a second");
+
+            // The next frame, a second after the last re-sort.
+            grid.handle(Input::Action(Action::Back), &mut ctx);
+            assert_eq!(titles(&grid), ["Gamma", "Beta", "Alpha"]);
+            assert_eq!(grid.focus, 2, "Alpha keeps the focus");
+        }
     }
 }

@@ -14,10 +14,10 @@
 //! scrolled past are never fetched, and at most [`MAX_QUEUED_NET`] network jobs wait at once.
 //!
 //! Only Games a screen asks about have their Artwork looked up, never the whole library: SteamGridDB's
-//! terms forbid bulk loading. [`Artwork::ask_release_dates`] can ask for each Game's Release Date
-//! (FR-ART-5) once per Game, one paced request each and no images, only while nothing a screen asks
-//! for waits; nothing calls it yet, until the owner has decided whether those terms allow it. Only SteamGridDB hosts are contacted (NFR-5), and the API
-//! key only goes to the API.
+//! terms forbid automated bulk use. For the same reason, [`Artwork::ask_release_dates`] asks for the
+//! Release Dates (FR-ART-5) only of the Games in a grid the player sorted by Newest release or Oldest
+//! release, once per Game, one paced request each and no images, only while nothing a screen asks
+//! for waits. Only SteamGridDB hosts are contacted (NFR-5), and the API key only goes to the API.
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::cmp::Reverse;
@@ -36,7 +36,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::config::ApiKey;
-use crate::library::db::{DbError, GameRow, Library, SortOrder};
+use crate::library::db::{DbError, GameRow, Library};
 
 const API: &str = "https://www.steamgriddb.com/api/v2";
 
@@ -227,6 +227,9 @@ pub struct Artwork {
     /// Started on first use, so a `Ctx` that never shows Artwork starts no threads.
     workers: OnceCell<Workers>,
     state: RefCell<State>,
+    /// How many Release Dates background work has stored this run, for a grid sorted by one to
+    /// re-sort when it changes.
+    dates_stored: Cell<u64>,
 }
 
 /// Sets its flag when dropped. A separate type so `Artwork` itself stays free to move fields out.
@@ -679,6 +682,7 @@ impl Artwork {
             gap: REQUEST_GAP,
             workers: OnceCell::new(),
             state: RefCell::new(State::default()),
+            dates_stored: Cell::new(0),
         }
     }
 
@@ -889,27 +893,23 @@ impl Artwork {
         Ok(())
     }
 
-    /// Queues asking SteamGridDB for the Release Date (FR-ART-5) of every Game in `library` that is
-    /// not a Hidden Game and not dated yet: a search for one never searched for its search title,
-    /// a look at the match for one matched before Release Dates were recorded, and no images
-    /// either way. They go one at a time through the same paced requests as Artwork, each only once
-    /// nothing a screen asks for waits. A Game is queued at most once a run, so one whose request
-    /// fails is asked about again next run. Call it once the library is open and whenever a scan
-    /// changes it; without a key it does nothing.
-    pub fn ask_release_dates(&self, library: &Library) {
+    /// Queues asking SteamGridDB for the Release Date (FR-ART-5) of each of `games` not dated yet: a
+    /// search for one never searched for its search title, a look at the match for one matched
+    /// before Release Dates were recorded, and no images either way. They go one at a time through
+    /// the same paced requests as Artwork, each only once nothing a screen asks for waits. A Game is
+    /// queued at most once a run, so one whose request fails is asked about again next run. Without
+    /// a key it does nothing.
+    ///
+    /// A grid calls it with its own Games (which leave out Hidden Games) whenever it is sorted by
+    /// Newest release or Oldest release, the player's choice; never for the whole library, which
+    /// SteamGridDB's terms forbid as automated bulk use.
+    pub fn ask_release_dates(&self, library: &Library, games: &[GameRow]) {
         if self.dir.is_none() || !self.online() {
             return;
         }
-        let games = match library.all_games(SortOrder::AZ) {
-            Ok(games) => games,
-            Err(e) => {
-                eprintln!("game37: can't list the Games to ask Release Dates for: {e}");
-                return;
-            }
-        };
         let mut state = self.state.borrow_mut();
         for game in games {
-            let key = (game.id, game.search_title);
+            let key = (game.id, game.search_title.clone());
             if state.dating.contains(&key) {
                 continue;
             }
@@ -935,6 +935,27 @@ impl Artwork {
             }
             state.dating.insert(key);
         }
+    }
+
+    /// How many Release Dates background work has stored this run: a grid sorted by a release order
+    /// re-sorts when it changes. Cheap enough to call every frame.
+    pub fn dates_stored(&self) -> u64 {
+        self.dates_stored.get()
+    }
+
+    /// The Games whose Release Date is queued and not asked for yet, in order.
+    #[cfg(test)]
+    pub(crate) fn queued_dates(&self) -> Vec<i64> {
+        self.state.borrow().dates.iter().map(|job| job.game_id).collect()
+    }
+
+    /// Stores Game `id`'s Release Date as background work learnt it, counting each date stored.
+    fn record_date(&self, library: &Library, id: i64, date: Option<i64>) -> bool {
+        let stored = store_date(library, id, date);
+        if stored && date.is_some() {
+            self.dates_stored.set(self.dates_stored.get() + 1);
+        }
+        stored
     }
 
     /// Collects finished background work and records it in `library`, drops queued work no longer
@@ -1020,7 +1041,7 @@ impl Artwork {
                         picture,
                     } => {
                         let Key::Game(id, kind, title) = &key else { return };
-                        let dated = release_date.is_some_and(|date| store_date(library, *id, date));
+                        let dated = release_date.is_some_and(|date| self.record_date(library, *id, date));
                         update_record(library, *id, |record| {
                             let mut record = record.searched(title, Some(game));
                             record.dated |= dated;
@@ -1046,7 +1067,7 @@ impl Artwork {
                             _ => (None, Some(None)),
                         };
                         let Key::Game(id, _, title) = &key else { return };
-                        let dated = release_date.is_some_and(|date| store_date(library, *id, date));
+                        let dated = release_date.is_some_and(|date| self.record_date(library, *id, date));
                         update_record(library, *id, |record| {
                             let mut record = record.searched(title, game);
                             record.dated |= dated;
@@ -1068,7 +1089,7 @@ impl Artwork {
                 title,
                 result,
             } => {
-                let dated = |date: Learnt| date.is_some_and(|date| store_date(library, game_id, date));
+                let dated = |date: Learnt| date.is_some_and(|date| self.record_date(library, game_id, date));
                 let candidates = match result {
                     Ok((game, release_date, list)) => {
                         let dated = dated(release_date);
@@ -1104,7 +1125,7 @@ impl Artwork {
             } => {
                 // A failed request leaves the Game not dated, for the next run to ask again.
                 let Ok((game, date)) = result else { return };
-                let dated = store_date(library, game_id, date);
+                let dated = self.record_date(library, game_id, date);
                 update_record(library, game_id, |record| {
                     let mut record = record.searched(&title, game);
                     record.dated |= dated;
@@ -3188,7 +3209,7 @@ pub(crate) mod tests {
         let fake = with_release_dates();
         let (library, games) = library(dir.path());
         let artwork = artwork(dir.path(), &fake, true);
-        artwork.ask_release_dates(&library);
+        artwork.ask_release_dates(&library, &library.all_games(SortOrder::AZ).unwrap());
         settle_dates(&artwork, &library);
 
         assert_eq!(
@@ -3215,13 +3236,13 @@ pub(crate) mod tests {
         {
             let fake = with_release_dates();
             let artwork = artwork(dir.path(), &fake, true);
-            artwork.ask_release_dates(&library);
+            artwork.ask_release_dates(&library, &library.all_games(SortOrder::AZ).unwrap());
             settle_dates(&artwork, &library);
             assert_eq!(fake.calls(), 2);
         }
         let fake = with_release_dates();
         let artwork = artwork(dir.path(), &fake, true);
-        artwork.ask_release_dates(&library);
+        artwork.ask_release_dates(&library, &library.all_games(SortOrder::AZ).unwrap());
         settle_dates(&artwork, &library);
         assert_eq!(fake.calls(), 0);
     }
@@ -3249,7 +3270,7 @@ pub(crate) mod tests {
         write_record(&library, games[0].id, &alpha).unwrap();
         write_record(&library, games[1].id, &beta).unwrap();
         let artwork = artwork(dir.path(), &fake, true);
-        artwork.ask_release_dates(&library);
+        artwork.ask_release_dates(&library, &library.all_games(SortOrder::AZ).unwrap());
         settle_dates(&artwork, &library);
 
         assert_eq!(fake.urls(), [format!("{API}/games/id/42")]);
@@ -3272,7 +3293,7 @@ pub(crate) mod tests {
         let fake = with_release_dates();
         let (library, games) = library(dir.path());
         let artwork = self::artwork(dir.path(), &fake, false);
-        artwork.ask_release_dates(&library);
+        artwork.ask_release_dates(&library, &library.all_games(SortOrder::AZ).unwrap());
         for _ in 0..20 {
             artwork.poll(&library);
             thread::sleep(Duration::from_millis(1));
@@ -3282,7 +3303,7 @@ pub(crate) mod tests {
 
         library.set_hidden(games[1].id, true).unwrap();
         let artwork = self::artwork(dir.path(), &fake, true);
-        artwork.ask_release_dates(&library);
+        artwork.ask_release_dates(&library, &library.all_games(SortOrder::AZ).unwrap());
         settle_dates(&artwork, &library);
         assert_eq!(fake.urls(), [format!("{API}/search/autocomplete/Alpha")]);
         assert!(!is_dated(&library, &games[1]));
@@ -3295,7 +3316,7 @@ pub(crate) mod tests {
         let (library, games) = many(dir.path(), 4);
         let artwork = artwork(dir.path(), &fake, true);
         fake.set_gate(false);
-        artwork.ask_release_dates(&library);
+        artwork.ask_release_dates(&library, &library.all_games(SortOrder::AZ).unwrap());
         // The first Release Date's search is on its way, held at the gate.
         artwork.poll(&library);
         assert!(matches!(artwork.cover(&library, &games[3]), Art::Loading));
@@ -3319,6 +3340,28 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn release_dates_are_asked_for_only_the_games_given_and_each_only_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = any_title();
+        let (library, games) = many(dir.path(), 4);
+        let artwork = artwork(dir.path(), &fake, true);
+        artwork.ask_release_dates(&library, &games[1..3]);
+        // Already queued: not queued again.
+        artwork.ask_release_dates(&library, &games[1..3]);
+        assert_eq!(artwork.queued_dates(), [games[1].id, games[2].id]);
+        settle_dates(&artwork, &library);
+        let search = |i: usize| format!("{API}/search/autocomplete/Game%20000{i}");
+        assert_eq!(fake.urls(), [search(1), search(2)]);
+        assert!(!is_dated(&library, &games[0]) && !is_dated(&library, &games[3]));
+
+        // Dated now: only the other two are asked about.
+        artwork.ask_release_dates(&library, &games);
+        assert_eq!(artwork.queued_dates(), [games[0].id, games[3].id]);
+        settle_dates(&artwork, &library);
+        assert_eq!(fake.urls(), [search(1), search(2), search(0), search(3)]);
+    }
+
+    #[test]
     fn a_failed_release_date_request_leaves_the_game_not_dated_and_is_not_retried_this_run() {
         let dir = tempfile::tempdir().unwrap();
         let fake = steamgriddb();
@@ -3328,14 +3371,14 @@ pub(crate) mod tests {
         );
         let (library, games) = library(dir.path());
         let artwork = artwork(dir.path(), &fake, true);
-        artwork.ask_release_dates(&library);
+        artwork.ask_release_dates(&library, &library.all_games(SortOrder::AZ).unwrap());
         settle_dates(&artwork, &library);
         assert_eq!(fake.calls(), 2, "Beta is still asked about");
         assert!(!is_dated(&library, &games[0]));
         assert!(is_dated(&library, &games[1]));
 
         // A scan changing the library starts the pass again: the failed Game waits for next run.
-        artwork.ask_release_dates(&library);
+        artwork.ask_release_dates(&library, &library.all_games(SortOrder::AZ).unwrap());
         settle_dates(&artwork, &library);
         assert_eq!(fake.calls(), 2);
         assert!(!is_dated(&library, &games[0]));
