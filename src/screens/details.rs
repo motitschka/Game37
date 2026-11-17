@@ -36,7 +36,7 @@ const COVER: Rect = Rect::new(M, 176.0, 380.0, 570.0);
 const STAT_Y: f32 = 410.0;
 const STAT_H: f32 = 104.0;
 const STAT_GAP: f32 = 20.0;
-/// Stat box widths: four boxes as in the mockup; five (an Embedded System's, with Save States)
+/// Stat box widths: four boxes as in the mockup; five (with Save States or a Release Date)
 /// narrowed to fit before the right margin.
 const STAT_W: f32 = 250.0;
 const STAT_W_NARROW: f32 = 232.0;
@@ -138,6 +138,18 @@ pub fn day_label(then: Local, now: Local) -> String {
 /// Unix seconds in local time.
 fn local(secs: i64) -> Option<Local> {
     local_time(secs.saturating_mul(1_000_000_000))
+}
+
+/// The UTC year of unix seconds, four digits (Howard Hinnant's `civil_from_days`, year only).
+fn year_label(secs: i64) -> String {
+    let z = secs.div_euclid(86_400) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    // Months counted from March: 10 and 11 are January and February of the next year.
+    let march_month = (5 * doy + 2) / 153;
+    format!("{:04}", era * 400 + yoe + i64::from(march_month >= 10))
 }
 
 /// How many of the Game's Save State slots are filled; `None` for an External System's Game,
@@ -266,7 +278,8 @@ impl DetailsPage {
         }
     }
 
-    /// The stat boxes' labels and values: Save States only for an Embedded System's Game.
+    /// The stat boxes' labels and values: Save States only for an Embedded System's Game, the
+    /// release year only once the Release Date is known (FR-DET-2).
     fn stats(&self) -> Vec<(&'static str, String)> {
         let playtime = match self.game.playtime_secs {
             0 => "—".to_owned(),
@@ -275,6 +288,9 @@ impl DetailsPage {
         let mut stats = vec![("PLAYTIME", playtime), ("LAST PLAYED", self.last_played.clone())];
         if let Some(n) = self.save_states {
             stats.push(("SAVE STATES", format!("{n} of {SLOTS}")));
+        }
+        if let Some(date) = self.game.release_date {
+            stats.push(("RELEASED", year_label(date)));
         }
         stats.push(("ADDED", self.added.clone()));
         let size = match &self.size {
@@ -758,6 +774,32 @@ mod tests {
         let page = DetailsPage::new(game, &ctx);
         let keys: Vec<_> = page.stats().into_iter().map(|(k, _)| k).collect();
         assert_eq!(keys, ["PLAYTIME", "LAST PLAYED", "ADDED", "SIZE"]);
+    }
+
+    #[test]
+    fn the_release_year_shows_before_added_once_the_release_date_is_known() {
+        let (_dir, ctx, mut game) = world("wiiu", "wiiu/Zelda.wua");
+        let page = DetailsPage::new(game.clone(), &ctx);
+        let keys: Vec<_> = page.stats().into_iter().map(|(k, _)| k).collect();
+        assert_eq!(
+            keys,
+            ["PLAYTIME", "LAST PLAYED", "ADDED", "SIZE"],
+            "no Release Date"
+        );
+
+        game.release_date = Some(659145600);
+        let page = DetailsPage::new(game, &ctx);
+        let keys: Vec<_> = page.stats().into_iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, ["PLAYTIME", "LAST PLAYED", "RELEASED", "ADDED", "SIZE"]);
+        assert_eq!(stat(&page, "RELEASED").as_deref(), Some("1990"));
+    }
+
+    #[test]
+    fn the_release_year_is_the_utc_year() {
+        assert_eq!(year_label(631151999), "1989", "the last second of 1989");
+        assert_eq!(year_label(631152000), "1990", "1 Jan 1990, 00:00 UTC");
+        assert_eq!(year_label(951782400), "2000", "29 Feb 2000");
+        assert_eq!(year_label(-1), "1969");
     }
 
     #[test]

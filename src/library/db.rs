@@ -216,16 +216,20 @@ pub enum SortOrder {
     LastPlayed,
     MostPlayed,
     RecentlyAdded,
+    NewestRelease,
+    OldestRelease,
 }
 
 impl SortOrder {
     /// Every order, in the Sort action's cycle (FR-CAR-5).
-    pub const ALL: [SortOrder; 5] = [
+    pub const ALL: [SortOrder; 7] = [
         SortOrder::AZ,
         SortOrder::ZA,
         SortOrder::LastPlayed,
         SortOrder::MostPlayed,
         SortOrder::RecentlyAdded,
+        SortOrder::NewestRelease,
+        SortOrder::OldestRelease,
     ];
 
     fn as_str(self) -> &'static str {
@@ -235,6 +239,8 @@ impl SortOrder {
             SortOrder::LastPlayed => "last_played",
             SortOrder::MostPlayed => "most_played",
             SortOrder::RecentlyAdded => "recently_added",
+            SortOrder::NewestRelease => "newest_release",
+            SortOrder::OldestRelease => "oldest_release",
         }
     }
 
@@ -256,18 +262,23 @@ impl SortOrder {
             SortOrder::LastPlayed => "Last played",
             SortOrder::MostPlayed => "Most played",
             SortOrder::RecentlyAdded => "Recently added",
+            SortOrder::NewestRelease => "Newest release",
+            SortOrder::OldestRelease => "Oldest release",
         }
     }
 
     /// Primary sort key, ascending; ties fall back to Display Title and id. `Reverse` puts the largest
-    /// value first and `None` (never played) last. Z–A has none: [`SortOrder::sort`] orders it by
-    /// Display Title alone.
+    /// value first and `None` (never played, no Release Date) last; Oldest release negates the
+    /// Release Date so the earliest comes first while undated Games stay last. Z–A has none:
+    /// [`SortOrder::sort`] orders it by Display Title alone.
     fn key(self, game: &Fetched) -> Reverse<Option<i64>> {
         match self {
             SortOrder::AZ | SortOrder::ZA => Reverse(None),
             SortOrder::LastPlayed => Reverse(game.row.last_played),
             SortOrder::MostPlayed => Reverse(Some(game.playtime_secs)),
             SortOrder::RecentlyAdded => Reverse(Some(game.row.date_added)),
+            SortOrder::NewestRelease => Reverse(game.row.release_date),
+            SortOrder::OldestRelease => Reverse(game.row.release_date.map(i64::saturating_neg)),
         }
     }
 
@@ -1314,11 +1325,18 @@ mod tests {
         assert_eq!(SortOrder::ZA.next(), SortOrder::LastPlayed);
         assert_eq!(SortOrder::LastPlayed.next(), SortOrder::MostPlayed);
         assert_eq!(SortOrder::MostPlayed.next(), SortOrder::RecentlyAdded);
+        assert_eq!(SortOrder::RecentlyAdded.next(), SortOrder::NewestRelease);
+        assert_eq!(SortOrder::NewestRelease.next(), SortOrder::OldestRelease);
         assert_eq!(
-            SortOrder::RecentlyAdded.next(),
+            SortOrder::OldestRelease.next(),
             SortOrder::AZ,
             "wraps back to A–Z"
         );
+        let walked: Vec<_> = std::iter::successors(Some(SortOrder::AZ), |o| {
+            Some(o.next()).filter(|&n| n != SortOrder::AZ)
+        })
+        .collect();
+        assert_eq!(walked, SortOrder::ALL, "the cycle is exactly the seven orders");
     }
 
     #[test]
@@ -1328,6 +1346,45 @@ mod tests {
         }
         assert_eq!(SortOrder::ZA.as_str(), "za");
         assert_eq!(SortOrder::from_str("newest"), None);
+    }
+
+    /// Three dated Games and two undated ones, given out of order.
+    fn library_with_release_dates() -> Library {
+        let mut lib = Library::open_in_memory().unwrap();
+        let titles = ["Mid", "zeta", "Old", "alpha", "New"];
+        lib.sync_system("snes", &games("snes", &titles), 100).unwrap();
+        for (title, date) in [("Old", 659145600), ("Mid", 800000000), ("New", 1500000000)] {
+            lib.set_release_date(id_of(&lib, "snes", title), Some(date))
+                .unwrap();
+        }
+        lib
+    }
+
+    #[test]
+    fn release_orders_put_dated_games_in_date_order_and_undated_ones_last_a_to_z() {
+        let lib = library_with_release_dates();
+        let order = |o| titles(&lib.system_games("snes", o).unwrap()).join(",");
+        assert_eq!(order(SortOrder::NewestRelease), "New,Mid,Old,alpha,zeta");
+        assert_eq!(order(SortOrder::OldestRelease), "Old,Mid,New,alpha,zeta");
+        assert_eq!(
+            titles(&lib.all_games(SortOrder::OldestRelease).unwrap()).join(","),
+            "Old,Mid,New,alpha,zeta"
+        );
+    }
+
+    #[test]
+    fn games_with_the_same_release_date_fall_back_to_display_title() {
+        let mut lib = Library::open_in_memory().unwrap();
+        lib.sync_system("snes", &games("snes", &["beta", "Gamma", "Alpha"]), 100)
+            .unwrap();
+        for title in ["beta", "Gamma", "Alpha"] {
+            lib.set_release_date(id_of(&lib, "snes", title), Some(659145600))
+                .unwrap();
+        }
+        for order in [SortOrder::NewestRelease, SortOrder::OldestRelease] {
+            let shown = lib.system_games("snes", order).unwrap();
+            assert_eq!(titles(&shown), ["Alpha", "beta", "Gamma"], "{order:?}");
+        }
     }
 
     #[test]

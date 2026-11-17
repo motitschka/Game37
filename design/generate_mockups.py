@@ -566,9 +566,11 @@ def details_page(name, title, g, sysid, emulator, stats, path, favorite=False, m
     if favorite:
         sv.add(text(x + pill_w + 20, 220, "★  Favorite", 18, 600, fill=C["star"]))
     sv.add(text(x - 4, 322, g["title"], 84, 800), text(x, 368, f"Opens in {emulator}", 22, 500, fill=C["muted"]))
+    # Four boxes 250 wide; more are narrowed to 232 to fit before the right margin, as the app does.
+    box_w = 250 if len(stats) <= 4 else 232
     for i, (k, v) in enumerate(stats):
-        sx = x + i * 270
-        sv.add(rect(sx, 410, 250, 104, C["surface"], rx=14, opacity=0.75),
+        sx = x + i * (box_w + 20)
+        sv.add(rect(sx, 410, box_w, 104, C["surface"], rx=14, opacity=0.75),
                text(sx + 22, 448, k, 14, 700, fill=C["muted"], ls=1.5), text(sx + 22, 490, v, 30, 700))
     sv.add(text(x, 560, path, 18, 400, fill=C["muted"], font=MONO))
     # actions
@@ -606,13 +608,15 @@ def details_page(name, title, g, sysid, emulator, stats, path, favorite=False, m
 
 def screen_details():
     details_page("05-details", "Details Page", GAMECUBE[0], "gc", "Game37 · Dolphin core",
-                 [("PLAYTIME", "31h 05m"), ("LAST PLAYED", "Yesterday"), ("ADDED", "3 Oct 2026"), ("SIZE", "1.36 GB")],
+                 [("PLAYTIME", "31h 05m"), ("LAST PLAYED", "Yesterday"), ("RELEASED", "2002"),
+                  ("ADDED", "3 Oct 2026"), ("SIZE", "1.36 GB")],
                  "~/Games/gc/Metroid Prime (USA).rvz", favorite=True)
 
 
 def screen_details_missing_emulator():
     details_page("10-details-emulator-missing", "Details Page (emulator missing)", WIIU[0], "wiiu", "Cemu",
-                 [("PLAYTIME", "—"), ("LAST PLAYED", "Never"), ("ADDED", "17 Oct 2026"), ("SIZE", "22.4 GB")],
+                 [("PLAYTIME", "—"), ("LAST PLAYED", "Never"), ("RELEASED", "2015"),
+                  ("ADDED", "17 Oct 2026"), ("SIZE", "22.4 GB")],
                  "~/Games/wiiu/Xenoblade Chronicles X/", missing=True)
 
 
