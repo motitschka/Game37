@@ -40,6 +40,10 @@
   Game is 1600×1200 instead of 1440×1080 with bars all round, and on a screen wider than 16:9 a wide
   picture (DS side by side) fills the width. The Pause Menu and messages keep their size, centred, and
   dim the whole screen. On a 16:9 screen Games look as before.
+- **DS and 3DS Large and small fill the screen too:** the large screen is as tall as the screen and the
+  small one sits at its bottom right in the width left over, three to six times smaller, following the
+  window as it is resized or goes fullscreen. On a 1920×1200 screen a DS's large screen is 1600×1200.
+  R3 and Tab swap which screen is large, and a click on the touch screen touches it wherever it is.
 - **Shelves wrap on a press, not while held:** Right on a Shelf's last item goes round to its first Game and Left on the first goes to the last, but holding Left or Right stops at the end.
 - **Artwork is searched by the file name, not the Display Title.** Renaming a Game in Game37 now only
   changes the name shown, and its cover and hero stay. To get different Artwork, rename the file, or

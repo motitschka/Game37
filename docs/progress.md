@@ -124,8 +124,11 @@ The owner's `~/.config/game37/secrets.toml` holds a real SteamGridDB key (mode 6
   it at 0).
 - **Core options:** Game37 answers `GET_VARIABLE` with per-Core overrides from `cores.rs`:
   - Beetle PSX HW: `hardware_gl`.
-  - melonDS DS: hybrid layouts, one small screen, `touch_mode=auto`, cursor shown, **JIT off**
-    (the JIT crashed the test homebrew).
+  - melonDS DS: `touch_mode=auto`, cursor shown, **JIT off** (the JIT crashed the test homebrew).
+  - DS and 3DS Large and small (ADR 0020): the Core runs its side-by-side layout (melonDS DS one
+    `left-right` layout, no gap; Azahar `side_by_side`) and Game37 draws each screen from its part of
+    that frame, the large one full height, and swaps them itself; Side by side and One screen are the
+    Cores' own layouts and swaps.
 - **PS1 BIOS:** checked strictly before anything downloads: a non-empty `scph5500/5501/5502/5503`,
   `scph7003` or `scph5552.bin` in `<Games Root>/bios/`. This holds even though Beetle has an
   OpenBIOS fallback.

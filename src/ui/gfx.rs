@@ -509,6 +509,31 @@ fn set_linear_scaling(texture: &Texture<'_>) {
     unsafe { SDL_SetTextureScaleMode(texture.raw(), SDL_SCALEMODE_LINEAR) };
 }
 
+/// `part` of a texture `size` texels big, given in fractions of it, in texels. With `linear`
+/// scaling, half a texel in from each of its edges inside the texture: smooth scaling blends each
+/// edge with the texels past it, which in Large and small are the other screen's (ADR 0020).
+fn texels(part: Rect, (w, h): (f32, f32), linear: bool) -> Rect {
+    let (mut x0, mut y0) = (part.x * w, part.y * h);
+    let (mut x1, mut y1) = (x0 + part.w * w, y0 + part.h * h);
+    if linear {
+        // Edges within a hundredth of a texel of the texture's own are its own.
+        let inside = |at: f32, size: f32| at > 0.01 && at < size - 0.01;
+        if inside(x0, w) {
+            x0 += 0.5;
+        }
+        if inside(y0, h) {
+            y0 += 0.5;
+        }
+        if inside(x1, w) {
+            x1 -= 0.5;
+        }
+        if inside(y1, h) {
+            y1 -= 0.5;
+        }
+    }
+    Rect::new(x0, y0, x1 - x0, y1 - y0)
+}
+
 /// Half the width of the soft edge drawn around shapes, standing in for anti-aliasing.
 const FEATHER: f32 = 0.5;
 
@@ -654,12 +679,18 @@ impl<'tc> Gfx<'tc> {
     /// one frame (ADR 0020).
     pub fn draw_game_parts(&mut self, parts: &[(Rect, Rect)]) {
         let Some(game) = &mut self.game else { return };
-        let (w, h) = (game.width as f32, game.height as f32);
+        let size = (game.width as f32, game.height as f32);
+        // Smooth scaling blends in the texels just past a part's edge (see `set_linear_scaling`).
+        let linear = game.format == libretro::PixelFormat::Rgba32;
         in_window_pixels(&mut self.canvas, self.layer, |canvas, layer| {
             game.texture.set_alpha_mod(layer.alpha(255));
             for &(part, r) in parts {
-                let src = FRect::new(part.x * w, part.y * h, part.w * w, part.h * h);
-                let _ = canvas.copy(&game.texture, src, layer.rect(r));
+                let src = texels(part, size, linear);
+                let _ = canvas.copy(
+                    &game.texture,
+                    FRect::new(src.x, src.y, src.w, src.h),
+                    layer.rect(r),
+                );
             }
             game.texture.set_alpha_mod(255);
         });
@@ -1495,6 +1526,33 @@ pub(crate) mod tests {
             let i = y as usize * self.pitch + x as usize * 3;
             [self.rgb[i], self.rgb[i + 1], self.rgb[i + 2]]
         }
+    }
+
+    /// Large and small's two parts of a 720×240 frame (ADR 0020): smoothly scaled, each stops half
+    /// a texel short of where the other starts, so neither blends in the other's edge; its edges on
+    /// the frame's own stay. Pixel-art scaling and the whole frame keep every texel.
+    #[test]
+    fn a_smoothly_scaled_part_stops_half_a_texel_short_of_the_part_beside_it() {
+        let size = (720.0, 240.0);
+        let (top, touch) = (
+            Rect::new(0.0, 0.0, 400.0 / 720.0, 1.0),
+            Rect::new(400.0 / 720.0, 0.0, 320.0 / 720.0, 1.0),
+        );
+        let near = |a: Rect, b: Rect| {
+            let (a, b) = ([a.x, a.y, a.w, a.h], [b.x, b.y, b.w, b.h]);
+            assert!(
+                a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-3),
+                "{a:?} is not {b:?}"
+            );
+        };
+        near(texels(top, size, true), Rect::new(0.0, 0.0, 399.5, 240.0));
+        near(texels(touch, size, true), Rect::new(400.5, 0.0, 319.5, 240.0));
+        near(texels(top, size, false), Rect::new(0.0, 0.0, 400.0, 240.0));
+        near(texels(touch, size, false), Rect::new(400.0, 0.0, 320.0, 240.0));
+        near(
+            texels(Rect::new(0.0, 0.0, 1.0, 1.0), size, true),
+            Rect::new(0.0, 0.0, 720.0, 240.0),
+        );
     }
 
     #[test]

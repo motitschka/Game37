@@ -1831,10 +1831,15 @@ mod tests {
     /// The opengl renderer of a hidden offscreen window, as `app.rs` makes it. SDL must outlive
     /// the canvas.
     fn offscreen_renderer() -> (sdl3::Sdl, sdl3::render::Canvas<Window>) {
+        offscreen_renderer_sized(1280, 720)
+    }
+
+    /// [`offscreen_renderer`] in a window `w`×`h` pixels big.
+    fn offscreen_renderer_sized(w: u32, h: u32) -> (sdl3::Sdl, sdl3::render::Canvas<Window>) {
         sdl3::hint::set("SDL_VIDEO_DRIVER", "offscreen");
         let sdl = sdl3::init().unwrap();
         let video = sdl.video().unwrap();
-        let window = video.window("hw", 1280, 720).hidden().build().unwrap();
+        let window = video.window("hw", w, h).hidden().build().unwrap();
         let mut canvas = sdl3::render::create_renderer(window, Some(c"opengl")).unwrap();
         // As the app's window shows it (`app::canvas`): Game37 draws in logical 1920×1080.
         canvas
@@ -2270,12 +2275,10 @@ mod tests {
         (root, data, ctx, game)
     }
 
-    /// Azahar's 1920×960 frame with the large/small layout at proportion 3
-    /// (`cores::THREE_DS_LAYOUTS.large_and_small`): the
-    /// large screen's inside, `(x, y, w, h)`, top left, and the small one's, bottom right, each
-    /// a few pixels in from its edges.
-    const AZAHAR_LARGE: (usize, usize, usize, usize) = (8, 8, 1500, 895);
-    const AZAHAR_SMALL: (usize, usize, usize, usize) = (1524, 640, 388, 287);
+    /// Azahar's 720×240 side-by-side frame, which Large and small draws from (ADR 0020): the top
+    /// screen's part, `(x, y, w, h)`, on the left, and the touch screen's on the right.
+    const AZAHAR_TOP: (usize, usize, usize, usize) = (0, 0, 400, 240);
+    const AZAHAR_TOUCH: (usize, usize, usize, usize) = (400, 0, 320, 240);
 
     /// The RGB bytes of `area` of an `Xrgb8888` or `Rgba32` frame, sampled on a 96 × 72 grid, so
     /// that a large and a small screen compare.
@@ -2297,18 +2300,80 @@ mod tests {
         sum as f64 / a.len() as f64
     }
 
-    /// Whether the swap put what the small screen showed in `before` on the large one now: the large
-    /// screen looks more like the old small one than like the old large one.
-    fn swapped(before: &Frame, now: &Frame) -> bool {
-        let now_large = sampled(now, AZAHAR_LARGE);
-        let (to_small, to_large) = (
-            difference(&now_large, &sampled(before, AZAHAR_SMALL)),
-            difference(&now_large, &sampled(before, AZAHAR_LARGE)),
+    /// What the renderer shows for `session`'s Game on a black screen, read back as an `Rgba32`
+    /// frame the size of the window, so that it samples like the Core's own frames.
+    fn shown_frame(session: &mut Session, gfx: &mut Gfx<'_>, ctx: &Ctx, at: &Path) -> Frame {
+        use sdl3::surface::Surface;
+        gfx.clear(crate::ui::theme::Colour::hex(0x000000));
+        session.draw(gfx, ctx);
+        gfx.save_bmp(at).unwrap();
+        let shot = Surface::load_bmp(at)
+            .unwrap()
+            .convert_format(sdl3::pixels::PixelFormat::RGBX32)
+            .unwrap();
+        Frame {
+            width: shot.width(),
+            height: shot.height(),
+            pitch: shot.pitch() as usize,
+            format: crate::libretro::PixelFormat::Rgba32,
+            data: shot.with_lock(<[u8]>::to_vec),
+        }
+    }
+
+    /// `r`, in window pixels, as an `(x, y, w, h)` area of the renderer's picture, `inset` pixels in
+    /// from each edge.
+    fn area(r: Rect, inset: f32) -> (usize, usize, usize, usize) {
+        let (x, y) = ((r.x + inset).ceil(), (r.y + inset).ceil());
+        let (w, h) = ((r.x + r.w - inset).floor() - x, (r.y + r.h - inset).floor() - y);
+        (x as usize, y as usize, w as usize, h as usize)
+    }
+
+    /// The mean RGB of `area` of an `Xrgb8888` or `Rgba32` frame in each cell of a 16 × 12 grid: a
+    /// screen drawn at another size, or from a frame a pixel off, still compares, as single
+    /// pixels of text don't.
+    fn averaged(frame: &Frame, (x, y, w, h): (usize, usize, usize, usize)) -> Vec<u8> {
+        let bpp = frame.format.bytes_per_pixel();
+        let mut out = Vec::with_capacity(16 * 12 * 3);
+        for row in 0..12 {
+            for col in 0..16 {
+                let (xs, ys) = (
+                    x + col * w / 16..x + (col + 1) * w / 16,
+                    y + row * h / 12..y + (row + 1) * h / 12,
+                );
+                let mut sum = [0u64; 3];
+                for py in ys.clone() {
+                    for px in xs.clone() {
+                        let at = py * frame.pitch + px * bpp;
+                        for (s, &b) in sum.iter_mut().zip(&frame.data[at..at + 3]) {
+                            *s += u64::from(b);
+                        }
+                    }
+                }
+                let n = (xs.len() * ys.len()).max(1) as u64;
+                out.extend(sum.map(|s| (s / n) as u8));
+            }
+        }
+        out
+    }
+
+    /// Whether `at`, an area of what the renderer `shows`, looks more like the `like` part of the
+    /// Core's `frame` than like its `unlike` part.
+    fn shows_part(
+        shows: &Frame,
+        at: (usize, usize, usize, usize),
+        frame: &Frame,
+        like: (usize, usize, usize, usize),
+        unlike: (usize, usize, usize, usize),
+    ) -> bool {
+        let shown = averaged(shows, at);
+        let (to_like, to_unlike) = (
+            difference(&shown, &averaged(frame, like)),
+            difference(&shown, &averaged(frame, unlike)),
         );
         eprintln!(
-            "the large screen differs from the old small one by {to_small}, the old large one by {to_large}"
+            "{at:?} on the renderer differs from {like:?} by {to_like}, from {unlike:?} by {to_unlike}"
         );
-        to_small < to_large
+        to_like < to_unlike
     }
 
     /// suyu (ADR 0019) boots the Space NX homebrew from `.testdata/games/switch/` on the renderer
@@ -2385,13 +2450,16 @@ mod tests {
         assert!(!root.path().join("states").exists(), "no Resume State");
     }
 
-    /// 3DS with Azahar (FR-NEW-2): ftpd boots through a 3DS session on the SDL OpenGL host and its
-    /// picture shows on the renderer; one large and one small screen in a 2:1 frame. The mouse on
-    /// the small screen reaches Azahar as `RETRO_DEVICE_POINTER`; a pad's L3 reaches it as R3, the
-    /// tap of its right-stick cursor; a pad's R3 swaps the screens and Tab swaps them back,
-    /// through `citra_swap_screen`, and Azahar never sees L3, its HOME button, pressed. Save State
-    /// slot 1 saves and loads, and slot 1 and the Resume State restore in the next session (after
-    /// its first frame, for Azahar's `MUST_INITIALIZE`).
+    /// 3DS with Azahar (FR-NEW-2, ADR 0020): ftpd boots through a 3DS session on the SDL OpenGL
+    /// host, in Large and small on a 1920×1200 window. Azahar sends its 720×240 side-by-side frame
+    /// and the renderer shows the top screen large, 1694×1016 across the whole width with bars
+    /// above and below, and the touch screen small at its bottom right. The mouse on the drawn
+    /// touch screen reaches Azahar as `RETRO_DEVICE_POINTER` on the frame's touch screen; a pad's
+    /// L3 reaches it as R3, the tap of its right-stick cursor; a pad's R3 draws the touch screen
+    /// large and Tab draws the top screen large again, on the renderer, while Azahar's frame stays
+    /// as it was and Azahar sees neither, nor L3, its HOME button. Save State slot 1 saves and
+    /// loads, and slot 1 and the Resume State restore in the next session (after its first frame,
+    /// for Azahar's `MUST_INITIALIZE`).
     #[test]
     #[ignore = "needs /home/matei/Game37/.testdata"]
     fn hw_azahar_boots_ftpd_on_the_renderer_touches_swaps_and_states_round_trip() {
@@ -2408,7 +2476,7 @@ mod tests {
 
         let _serial = serial();
         let (_root, data, ctx, game) = three_ds_world();
-        let (_sdl, canvas) = offscreen_renderer();
+        let (_sdl, canvas) = offscreen_renderer_sized(1920, 1200);
         let creator = canvas.texture_creator();
         let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
         let shot = data.path().join("shot.bmp");
@@ -2423,21 +2491,92 @@ mod tests {
         assert!(session.touch_screen(), "the mouse cursor shows");
         tick_n(&mut session, &mut gfx, 600);
         assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "booted");
-        let frame = session.core.frame();
-        assert_eq!((frame.width, frame.height), (1920, 960), "large and small at 3");
-
-        // The mouse pressed at the small screen's centre, in Game37's logical coordinates.
-        let picture = gfx.to_logical_rect(session.picture(gfx.window_size()));
-        let (x, y, w, h) = AZAHAR_SMALL;
-        let at = (
-            picture.x + (x + w / 2) as f32 * picture.w / 1920.0,
-            picture.y + (y + h / 2) as f32 * picture.h / 960.0,
+        let frame = session.core.frame().clone();
+        assert_eq!(
+            (frame.width, frame.height),
+            (720, 240),
+            "the top and touch screens side by side, which Game37 draws large and small"
         );
+
+        // Where the renderer shows each screen: the top one large, filling the width.
+        let window = gfx.window_size();
+        assert_eq!(window, (1920.0, 1200.0));
+        let screens = |session: &Session| session.screens(window).expect("Large and small");
+        let [(_, top_at), (part, touch_at)] = screens(&session);
+        let rounded = |r: Rect| (r.x.round(), r.y.round(), r.w.round(), r.h.round());
+        assert_eq!(
+            rounded(top_at),
+            (0.0, 92.0, 1694.0, 1016.0),
+            "the top screen large"
+        );
+        assert_eq!(
+            rounded(touch_at),
+            (1694.0, 939.0, 226.0, 169.0),
+            "the touch screen small, at its bottom right"
+        );
+        let shows = shown_frame(&mut session, &mut gfx, &ctx, &shot);
+        assert!(
+            shows_part(&shows, area(top_at, 8.0), &frame, AZAHAR_TOP, AZAHAR_TOUCH),
+            "the renderer shows the top screen large"
+        );
+        assert!(
+            shows_part(&shows, area(touch_at, 4.0), &frame, AZAHAR_TOUCH, AZAHAR_TOP),
+            "and the touch screen small"
+        );
+        // Where the screens meet in the frame, the top screen's last column on the renderer is a
+        // mix of its own last two columns, with nothing of the touch screen's first one beside it:
+        // checked on rows where the three columns are the same in the rows above and below too.
+        let px = |f: &Frame, x: usize, y: usize| -> [f32; 3] {
+            let at = y * f.pitch + x * 4;
+            [0, 1, 2].map(|i| f32::from(f.data[at + i]))
+        };
+        let edge = (top_at.x + top_at.w).floor() as usize - 1;
+        let mut checked = 0;
+        for fy in 1..239 {
+            let seam = |y| [398, 399, 400].map(|x| px(&frame, x, y));
+            let [inner, last, touch] = seam(fy);
+            if seam(fy - 1) != seam(fy) || seam(fy + 1) != seam(fy) || last == touch {
+                continue;
+            }
+            let y = (top_at.y + (fy as f32 + 0.5) / 240.0 * top_at.h) as usize;
+            let shown = px(&shows, edge, y);
+            // Its distance from the line between the two columns' colours.
+            let (d, v) = (
+                [0, 1, 2].map(|i| last[i] - inner[i]),
+                [0, 1, 2].map(|i| shown[i] - inner[i]),
+            );
+            let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+            let t = if dot(d, d) > 0.0 {
+                (dot(v, d) / dot(d, d)).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let off = [0, 1, 2].map(|i| v[i] - t * d[i]);
+            assert!(
+                dot(off, off).sqrt() <= 4.0,
+                "row {fy}: {shown:?} at x {edge} mixes in the touch screen's {touch:?}, not only {inner:?} and {last:?}"
+            );
+            checked += 1;
+        }
+        assert!(checked > 0, "no row to check where the screens meet");
+        let bars = [(0, 0, 1920, 88), (0, 1112, 1920, 88)];
+        for bar in bars {
+            assert!(sampled(&shows, bar).iter().all(|&b| b == 0), "a bar at {bar:?}");
+        }
+
+        // The mouse pressed at the drawn touch screen's centre, in Game37's logical coordinates:
+        // the centre of the frame's touch screen, in the whole frame's pointer range.
+        let drawn = gfx.to_logical_rect(touch_at);
         let mouse = Mouse {
-            at: Some(at),
+            at: Some((drawn.x + drawn.w / 2.0, drawn.y + drawn.h / 2.0)),
             left: true,
         };
-        let pointer = input::touch(picture, mouse).expect("on the picture");
+        let pointer = input::touch_part(drawn, part, mouse).expect("on the touch screen");
+        let centre = ((560.0 / 720.0 * 2.0 - 1.0) * 32767.0_f32).round() as i16;
+        assert!(
+            (pointer.x - centre).abs() <= 2 && pointer.y.abs() <= 2,
+            "{pointer:?}: x 560 of 720, y 120 of 240"
+        );
         for _ in 0..10 {
             assert!(!session.tick(&mut gfx, 1.0 / 60.0, &[], mouse, |_| false));
         }
@@ -2461,8 +2600,14 @@ mod tests {
         assert_eq!(joypad(&session, L3), Some(0), "and is not L3");
         tick_n(&mut session, &mut gfx, 30);
 
-        // R3 on a pad, then Tab: each swaps which screen is large.
+        // R3 on a pad, then Tab: each swaps which screen the renderer shows large, from the screens
+        // as they were before; Azahar's frame keeps the top screen on its left.
         let before = session.core.frame().clone();
+        let top_still_left = |session: &Session| {
+            let left = sampled(session.core.frame(), AZAHAR_TOP);
+            difference(&left, &sampled(&before, AZAHAR_TOP))
+                < difference(&left, &sampled(&before, AZAHAR_TOUCH))
+        };
         let mut r3 = PadState::default();
         r3.press(sdl3::gamepad::Button::RightStick);
         for _ in 0..5 {
@@ -2474,11 +2619,22 @@ mod tests {
             );
         }
         tick_n(&mut session, &mut gfx, 30);
-        let after_r3 = session.core.frame().clone();
+        let [(_, top_at), (_, touch_at)] = screens(&session);
         assert!(
-            swapped(&before, &after_r3),
-            "R3 put the touch screen on the large one"
+            touch_at.h > top_at.h * 3.0,
+            "R3 made the touch screen the large one"
         );
+        let shows = shown_frame(&mut session, &mut gfx, &ctx, &shot);
+        assert!(
+            shows_part(&shows, area(touch_at, 8.0), &before, AZAHAR_TOUCH, AZAHAR_TOP),
+            "R3: the renderer shows the touch screen large"
+        );
+        assert!(
+            shows_part(&shows, area(top_at, 4.0), &before, AZAHAR_TOP, AZAHAR_TOUCH),
+            "R3: and the top screen small"
+        );
+        assert!(top_still_left(&session), "R3 leaves Azahar's frame as it was");
+
         let tab = |key| key == input::SWAP_SCREENS_KEY;
         for _ in 0..5 {
             session.tick(&mut gfx, 1.0 / 60.0, &[], Mouse::default(), tab);
@@ -2489,10 +2645,17 @@ mod tests {
             );
         }
         tick_n(&mut session, &mut gfx, 30);
+        let [(_, top_at), (_, touch_at)] = screens(&session);
         assert!(
-            swapped(&after_r3, session.core.frame()),
-            "Tab put the top screen back on the large one"
+            top_at.h > touch_at.h * 3.0,
+            "Tab made the top screen the large one again"
         );
+        let shows = shown_frame(&mut session, &mut gfx, &ctx, &shot);
+        assert!(
+            shows_part(&shows, area(top_at, 8.0), &before, AZAHAR_TOP, AZAHAR_TOUCH),
+            "Tab: the renderer shows the top screen large again"
+        );
+        assert!(top_still_left(&session), "Tab leaves Azahar's frame as it was");
 
         session.save_slot(1).unwrap_or_else(|e| panic!("save: {e}"));
         tick_n(&mut session, &mut gfx, 60);
@@ -2526,11 +2689,11 @@ mod tests {
         assert_a_picture(&shown(&mut session, &mut gfx, &ctx, &shot), "resumed");
     }
 
-    /// 3DS swaps its screens in Side by side and One screen too (FR-DS-2, FR-NEW-2), not only
-    /// Large and small: Side by side (720×240, the top screen's 400 width beside the touch
-    /// screen's 320) puts the touch screen on the left; One screen (either screen at its own
-    /// size) shows the other one, through `citra_swap_screen`, checked on the real Core's
-    /// picture, and Tab swaps each back.
+    /// 3DS swaps its screens in Side by side and One screen too (FR-DS-2, FR-NEW-2), through
+    /// Azahar's own `citra_swap_screen`, where Large and small swaps them as Game37 draws them
+    /// (ADR 0020): Side by side (720×240, the top screen's 400 width beside the touch screen's
+    /// 320) puts the touch screen on the left; One screen (either screen at its own size) shows
+    /// the other one, checked on the real Core's picture, and Tab swaps each back.
     #[test]
     #[ignore = "needs /home/matei/Game37/.testdata"]
     fn hw_azahar_swaps_the_screens_in_side_by_side_and_one_screen_layouts() {
