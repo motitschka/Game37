@@ -157,15 +157,17 @@ impl Focus {
     }
 
     /// Moves one step in `dir` given each shown Shelf's item count. Up and Down go to the
-    /// neighbouring Shelf's remembered position; Left on a Shelf's first Game goes round to its See
-    /// all (FR-HOME-3), and Right stops there. Returns whether focus moved.
-    pub fn step(&mut self, dir: Action, counts: &[usize]) -> bool {
+    /// neighbouring Shelf's remembered position. A press of Left on a Shelf's first Game goes round
+    /// to its last item, and a press of Right on that item to its first Game (FR-HOME-3); a `repeat`
+    /// (the held direction's auto-repeat) stops at either end instead. Returns whether focus moved.
+    pub fn step(&mut self, dir: Action, counts: &[usize], repeat: bool) -> bool {
         let before = self.clone();
         match dir {
             Action::Up => self.shelf = self.shelf.saturating_sub(1),
             Action::Down => self.shelf = (self.shelf + 1).min(counts.len() - 1),
-            Action::Left if self.col() == 0 => self.cols[self.shelf] = counts[self.shelf] - 1,
-            Action::Left => self.cols[self.shelf] = self.col() - 1,
+            Action::Left if self.col() == 0 && !repeat => self.cols[self.shelf] = counts[self.shelf] - 1,
+            Action::Left => self.cols[self.shelf] = self.col().saturating_sub(1),
+            Action::Right if self.col() + 1 >= counts[self.shelf] && !repeat => self.cols[self.shelf] = 0,
             Action::Right => self.cols[self.shelf] = self.col() + 1,
             _ => {}
         }
@@ -718,7 +720,7 @@ impl Screen for Home {
             Input::Action(Action::Confirm) => self.confirm(ctx),
             Input::Action(Action::Options) => self.options(ctx),
             Input::Action(dir) if dir.is_direction() => {
-                if self.focus.step(dir, &self.counts()) {
+                if self.focus.step(dir, &self.counts(), ctx.repeat) {
                     self.reveal(self.focus.shelf);
                     self.reveal_shelf();
                 }
@@ -876,19 +878,51 @@ mod tests {
     }
 
     #[test]
-    fn left_on_the_first_game_goes_round_to_see_all_and_right_stops_there() {
+    fn a_press_of_left_on_the_first_game_goes_round_to_see_all_and_right_on_it_goes_back() {
         let mut f = Focus::default();
         let counts = [3, 1, 21, 1];
-        assert!(f.step(Action::Left, &counts));
+        assert!(f.step(Action::Left, &counts, false));
         assert_eq!(f.col(), 2, "See all of a 2-Game Shelf");
-        assert!(!f.step(Action::Right, &counts));
-        assert_eq!(f.col(), 2);
-        assert!(f.step(Action::Left, &counts));
-        assert!(f.step(Action::Left, &counts));
+        assert!(f.step(Action::Right, &counts, false));
+        assert_eq!(f.col(), 0, "a fresh Right on See all wraps to the first Game");
+        assert!(f.step(Action::Right, &counts, false));
+        assert!(f.step(Action::Left, &counts, false));
         assert_eq!(f.col(), 0);
-        f.step(Action::Down, &counts);
-        assert!(!f.step(Action::Left, &counts), "an empty Shelf's hint stays");
-        assert!(!f.step(Action::Right, &counts));
+        f.step(Action::Down, &counts, false);
+        assert!(
+            !f.step(Action::Left, &counts, false),
+            "an empty Shelf's hint stays"
+        );
+        assert!(!f.step(Action::Right, &counts, false));
+        assert!(!f.step(Action::Right, &counts, true));
+    }
+
+    #[test]
+    fn repeated_right_stops_on_see_all_and_repeated_left_stops_on_the_first_game() {
+        let mut f = Focus::default();
+        let counts = [4, 1, 1, 1];
+        f.step(Action::Right, &counts, false);
+        assert!(f.step(Action::Right, &counts, true));
+        assert!(f.step(Action::Right, &counts, true));
+        assert_eq!(f.col(), 3, "See all of a 3-Game Shelf");
+        assert!(!f.step(Action::Right, &counts, true), "a repeat does not wrap");
+        assert_eq!(f.col(), 3);
+        while f.step(Action::Left, &counts, true) {}
+        assert_eq!(f.col(), 0);
+        assert!(!f.step(Action::Left, &counts, true), "a repeat does not wrap");
+        assert_eq!(f.col(), 0);
+    }
+
+    #[test]
+    fn a_hold_that_starts_on_see_all_wraps_once_then_walks_back_to_it() {
+        let mut f = Focus::default();
+        let counts = [4, 1, 1, 1];
+        f.cols[0] = 3;
+        assert!(f.step(Action::Right, &counts, false));
+        assert_eq!(f.col(), 0);
+        while f.step(Action::Right, &counts, true) {}
+        assert_eq!(f.col(), 3);
+        assert!(!f.step(Action::Right, &counts, true));
     }
 
     /// Left on Recently added's first Game, on Home, reaches its See all and scrolls it into view.
@@ -929,12 +963,12 @@ mod tests {
     fn up_and_down_visit_every_shelf_in_order_including_empty_ones() {
         let mut f = Focus::default();
         let counts = [6, 1, 21, 1];
-        assert!(!f.step(Action::Up, &counts));
+        assert!(!f.step(Action::Up, &counts, false));
         for shelf in 1..SHELVES {
-            assert!(f.step(Action::Down, &counts));
+            assert!(f.step(Action::Down, &counts, false));
             assert_eq!(f.shelf, shelf);
         }
-        assert!(!f.step(Action::Down, &counts));
+        assert!(!f.step(Action::Down, &counts, false));
         assert_eq!(f.col(), 0, "an empty Shelf's hint");
     }
 
@@ -943,14 +977,14 @@ mod tests {
         let mut f = Focus::default();
         let counts = [6, 21, 21, 1];
         for _ in 0..4 {
-            f.step(Action::Right, &counts);
+            f.step(Action::Right, &counts, false);
         }
-        f.step(Action::Down, &counts);
+        f.step(Action::Down, &counts, false);
         assert_eq!(f.col(), 0, "a Shelf not visited yet starts at its first Game");
-        f.step(Action::Right, &counts);
-        f.step(Action::Up, &counts);
+        f.step(Action::Right, &counts, false);
+        f.step(Action::Up, &counts, false);
         assert_eq!((f.shelf, f.col()), (0, 4));
-        f.step(Action::Down, &counts);
+        f.step(Action::Down, &counts, false);
         assert_eq!((f.shelf, f.col()), (1, 1));
     }
 
@@ -960,7 +994,7 @@ mod tests {
             shelf: 0,
             cols: [0, 9, 0, 0],
         };
-        f.step(Action::Down, &[3, 4, 1, 1]);
+        f.step(Action::Down, &[3, 4, 1, 1], false);
         assert_eq!(f.col(), 3, "See all of the 3-Game Shelf");
     }
 

@@ -116,6 +116,10 @@ pub struct Ctx {
     /// The Config First-run Setup's Finish wrote (FR-CFG-4); `app.rs` takes it and switches to Home
     /// as if Game37 had started with it.
     pub setup_finished: Option<Config>,
+    /// Whether the input being handled is the auto-repeat of a held direction rather than a fresh
+    /// press; `app.rs` sets it around each repeated input. Screens treat a repeat as a press, except
+    /// where a held direction must stop at an end (Home's Shelves, FR-HOME-3).
+    pub repeat: bool,
     /// Settings moved the Games Root to `games_root` and rescanned there; `app.rs` takes it and
     /// restarts the watcher on the new root.
     pub games_root_changed: bool,
@@ -165,6 +169,7 @@ impl Ctx {
             launch: None,
             play: None,
             setup_finished: None,
+            repeat: false,
             games_root_changed: false,
             start_download: Box::new(Download::start),
             start_assets_download: Box::new(Download::start_assets),

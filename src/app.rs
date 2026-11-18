@@ -768,6 +768,7 @@ fn feed(
         controls.text = wants_text(nav);
         controls.raw = nav.top().raw_controller();
         controls.style = ctx.button_style;
+        let repeat = matches!(feed, Feed::Repeat(_));
         match feed {
             Feed::Quit => return Flow::Quit,
             Feed::Control(at, event) => controls.handle(at, event, &mut inputs),
@@ -815,7 +816,10 @@ fn feed(
                 }
                 continue;
             }
-            if nav.handle(input, hits, ctx) == Flow::Quit {
+            ctx.repeat = repeat;
+            let flow = nav.handle(input, hits, ctx);
+            ctx.repeat = false;
+            if flow == Flow::Quit {
                 return Flow::Quit;
             }
             started(nav, ctx);
@@ -1341,6 +1345,56 @@ mod tests {
         fn text_input(&self) -> bool {
             true
         }
+    }
+
+    /// A screen that records whether each `Input` it is handed was a repeat.
+    struct RepeatProbe(std::rc::Rc<std::cell::RefCell<Vec<(Input, bool)>>>);
+
+    impl crate::ui::nav::Screen for RepeatProbe {
+        fn title(&self) -> &str {
+            "RepeatProbe"
+        }
+        fn handle(&mut self, input: Input, ctx: &mut Ctx) -> crate::ui::nav::Transition {
+            self.0.borrow_mut().push((input, ctx.repeat));
+            crate::ui::nav::Transition::None
+        }
+        fn draw(&mut self, _: &mut Gfx<'_>, _: &Ctx) {}
+        fn hints(&self) -> Vec<crate::ui::nav::Hint> {
+            Vec::new()
+        }
+    }
+
+    /// A press reaches the screen with `ctx.repeat` off, the held direction's auto-repeat with it on,
+    /// and it is off again after the frame.
+    #[test]
+    fn feed_marks_the_auto_repeat_of_a_held_direction_as_a_repeat() {
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut nav = Nav::single(Box::new(RepeatProbe(log.clone())));
+        let mut ctx = Ctx::empty();
+        let mut controls = Controls::new(InputKind::Keyboard);
+        let down = ControlEvent::KeyDown {
+            key: Keycode::Right,
+            repeat: false,
+            ctrl: false,
+            shift: false,
+        };
+        let feeds = [
+            Feed::Control(0, down),
+            Feed::Repeat(crate::ui::input::REPEAT_DELAY_MS),
+        ];
+        let flow = feed(
+            &mut controls,
+            feeds,
+            &mut nav,
+            &Hits::default(),
+            &mut ctx,
+            String::new,
+            |_, _| {},
+        );
+        assert_eq!(flow, Flow::Continue);
+        let right = Input::Action(Action::Right);
+        assert_eq!(*log.borrow(), [(right, false), (right, true)]);
+        assert!(!ctx.repeat);
     }
 
     /// Ctrl+V arrives as a plain `Action::Paste`: `feed` reads the clipboard through the closure

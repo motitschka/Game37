@@ -35,6 +35,7 @@
 - **Show Playtime** in Settings → Display: Off, Grids (default) or Grids and Home.
 
 ### Changed
+- **Shelves wrap on a press, not while held:** Right on a Shelf's last item goes round to its first Game and Left on the first goes to the last, but holding Left or Right stops at the end.
 - **Artwork is searched by the file name, not the Display Title.** Renaming a Game in Game37 now only
   changes the name shown, and its cover and hero stay. To get different Artwork, rename the file, or
   pick it with Choose artwork. A year in parentheses stays in the title, so a remake can be told from
