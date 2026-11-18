@@ -88,7 +88,7 @@ The Switch controller in PlayStation Games is checked in section 5.
 
 - [ ] On a 1920×1200 screen, fullscreen: Home, the Carousel, a Console Page, Settings and First-run
       Setup fill the screen with the hint bar at the very bottom and no black bars; a Game started from
-      there keeps its aspect ratio with bars as before, and its Pause Menu looks as it did.
+      there fills the screen's height or width (section 12).
 - [ ] Switching F11 between windowed and fullscreen, and resizing the window, on a scrolled Console
       Page and in Settings → Hidden games: the focused item stays in view and nothing is cut off.
 
@@ -139,3 +139,15 @@ The Switch controller in PlayStation Games is checked in section 5.
 - [ ] Each of the 19 Carousel cards and its Console Page header shows that System's logo, readable on
       its background.
 
+## 12. Games fill the screen (ADR 0020)
+
+- [ ] On a 1920×1200 screen, fullscreen: a 4:3 Game (e.g. SNES, PS1) fills the whole height, with bars
+      only at the sides; its Pause Menu sits in the middle over a picture dimmed to every edge.
+- [ ] DS in Large and small on that screen: the large screen fills the height and the small one sits at
+      the bottom right, with no bars; R3 and Tab swap them, and the mouse and the right-stick cursor
+      touch the touch screen whether it is drawn large or small.
+- [ ] 3DS in Large and small: the top screen large with a small touch screen at the bottom right and
+      thin bars above and below; R3 and Tab swap them, and touch works on the touch screen either way.
+- [ ] Resizing the window and F11 during a DS or 3DS Game: the two screens follow at once, and nothing
+      overlaps or gets cut off.
+- [ ] Side by side and One screen look and swap as before, filling the width or the height.

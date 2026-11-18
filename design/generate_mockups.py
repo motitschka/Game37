@@ -950,6 +950,11 @@ def screen_3ds_layout_large_3():
                        "Touch screen is noticeably bigger than at proportion 4, at the cost of thicker bars.")
 
 
+def screen_3ds_layout_large_6():
+    _screen_3ds_large("43-3ds-layout-large-6", 6, "32px top & bottom",
+                       "As Game37 draws it on 16:9 (ADR 0020): the top screen as large as fits, the touch screen smallest.")
+
+
 def screen_3ds_layout_side():
     sv = Svg("41-3ds-layout-side", "3DS Layout - side by side")
     sv.add(rect(0, 0, W, H, "#06070A"))
@@ -1516,8 +1521,8 @@ def choice_value(sv, r, y, h, value):
 
 
 # The three screen layouts a two-screen System can show (FR-DS-1, FR-NEW-2), as Settings → Display names
-# them, each with its row's sub-line. Large and small is 08-ds-layout for DS and 40-3ds-layout-large-3
-# for 3DS; side by side is 41-3ds-layout-side; one screen is 42-3ds-layout-single.
+# them, each with its row's sub-line. Large and small is 08-ds-layout for DS and 43-3ds-layout-large-6
+# for 3DS (ADR 0020); side by side is 41-3ds-layout-side; one screen is 42-3ds-layout-single.
 SCREEN_LAYOUTS = {"Large and small": "One screen large, the other small · R3 or Tab swaps them",
                   "Side by side": "Both screens at the same size · R3 or Tab swaps them",
                   "One screen": "The top screen alone · R3 or Tab shows the touch screen"}
@@ -1971,6 +1976,7 @@ if __name__ == "__main__":
                screen_setup_systems, screen_setup_emulators, screen_setup_folders, screen_setup_cores,
                screen_setup_key, screen_settings_controls, screen_settings_about,
                screen_pause_restart_confirm, screen_3ds_layout_large, screen_3ds_layout_large_3,
+               screen_3ds_layout_large_6,
                screen_3ds_layout_side, screen_3ds_layout_single, screen_settings_display,
                screen_settings_home, screen_see_all, screen_sort_list, screen_release_note]:
         fn()

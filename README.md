@@ -459,7 +459,8 @@ eight sections, down the left:
   the next time Game37 starts; Motion (Full, or Reduced without fades, slides and gliding); Games per
   row (6 to 10) on Console Pages, "See all" and Search; Show Playtime under the selected cover (Off,
   Grids, or Grids and Home); and under Screens, a DS layout and a 3DS layout: Large and small (the
-  default, the large screen three times the small one), Side by side or One screen, which applies from
+  default: the large screen fills the height, the small one the width left over, three to six times
+  smaller), Side by side or One screen, which applies from
   the next Game started.
 - **About:** the version, the licence and the paths Game37 uses.
 
