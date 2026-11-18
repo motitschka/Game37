@@ -2635,6 +2635,28 @@ mod tests {
         );
         assert!(top_still_left(&session), "R3 leaves Azahar's frame as it was");
 
+        // A press on the touch screen now drawn large, a quarter in from its left and three
+        // quarters down, reaches the same point of the frame's touch screen: x 480 of 720, y 180
+        // of 240.
+        let drawn = gfx.to_logical_rect(touch_at);
+        let mouse = Mouse {
+            at: Some((drawn.x + drawn.w * 0.25, drawn.y + drawn.h * 0.75)),
+            left: true,
+        };
+        for _ in 0..10 {
+            assert!(!session.tick(&mut gfx, 1.0 / 60.0, &[], mouse, |_| false));
+        }
+        let queries = session.core.input_queries();
+        let asked = |id| queries.get(&(0, POINTER, 0, id)).copied();
+        let scale = |f: f32| ((f * 2.0 - 1.0) * 32767.0_f32).round() as i16;
+        assert_eq!(asked(PRESSED), Some(1), "the press on the large touch screen");
+        let (x, y) = (asked(X).unwrap_or_default(), asked(Y).unwrap_or_default());
+        assert!(
+            (x - scale(480.0 / 720.0)).abs() <= 2 && (y - scale(0.75)).abs() <= 2,
+            "({x}, {y}): x 480 of 720, y 180 of 240"
+        );
+        tick_n(&mut session, &mut gfx, 30);
+
         let tab = |key| key == input::SWAP_SCREENS_KEY;
         for _ in 0..5 {
             session.tick(&mut gfx, 1.0 / 60.0, &[], Mouse::default(), tab);
