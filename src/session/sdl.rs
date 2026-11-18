@@ -16,6 +16,7 @@ use sdl3::keyboard::Scancode;
 use sdl3::sys::video::SDL_GLContext;
 use sdl3::video::Window;
 
+use super::border::{self, BorderCut};
 use super::gl::SdlGl;
 use super::glx::GlxGl;
 use super::input::{self, FaceLetters, HeldOver, Mouse, PadState, PauseTrigger, TouchControls};
@@ -70,6 +71,9 @@ pub struct Session {
     /// The two screens of a Game in Large and small, which Game37 draws itself from the Core's
     /// side-by-side frame (ADR 0020); `None` in the other layouts and on one-screen Systems.
     large_and_small: Option<cores::Screens>,
+    /// The black border the Game draws around its picture, cut off when it is drawn, for a Core
+    /// that [cuts it](cores::CoreInfo::cuts_own_border) (ADR 0021).
+    border: Option<BorderCut>,
     /// Whether the left stick also presses the d-pad ([`cores::CoreInfo::stick_is_dpad`]).
     stick_dpad: bool,
     /// Whether the Core has Save States and a Resume State ([`cores::CoreInfo::has_states`]).
@@ -386,6 +390,7 @@ impl Session {
                 .touch
                 .map(|touch| TouchControls::new(touch.in_layout(layout))),
             large_and_small,
+            border: core_info.cuts_own_border().then(BorderCut::default),
             stick_dpad: core_info.stick_is_dpad(),
             has_states: core_info.has_states(),
             resets: core_info.resets(),
@@ -395,10 +400,17 @@ impl Session {
         })
     }
 
-    /// Where the Game's picture is drawn in a window `window` pixels big, in window pixels: fitted
-    /// to the window (ADR 0020). The mouse touches the touch screen from the same rect.
+    /// Where the Game's picture is drawn in a window `window` pixels big, in window pixels: the
+    /// [part](Session::part) of its frame drawn, fitted to the window (ADR 0020, ADR 0021). The
+    /// mouse touches the touch screen from the same rect.
     fn picture(&self, window: (f32, f32)) -> Rect {
-        timing::fit(self.core.av_info().aspect_ratio, window)
+        border::fit_part(self.core.av_info().aspect_ratio, self.part(), window)
+    }
+
+    /// The part of the Core's frame drawn as the Game's picture, in fractions of it: the frame
+    /// without the border the Game draws around its picture (ADR 0021), else the whole frame.
+    fn part(&self) -> Rect {
+        self.border.as_ref().map_or(input::WHOLE_FRAME, BorderCut::part)
     }
 
     /// In Large and small, where the top screen and the touch screen are drawn in a window
@@ -427,7 +439,7 @@ impl Session {
     fn touched(&self, window: (f32, f32)) -> (Rect, Rect) {
         match self.screens(window) {
             Some([_, (part, touch)]) => (touch, part),
-            None => (self.picture(window), input::WHOLE_FRAME),
+            None => (self.picture(window), self.part()),
         }
     }
 
@@ -525,6 +537,9 @@ impl Session {
             let out = self.core.run_frame(&input);
             if !out.duped {
                 gfx.upload_game_frame(out.video);
+            }
+            if let Some(border) = &mut self.border {
+                border.observe(out.video);
             }
             if let Some(audio) = &self.audio
                 && let Err(e) = audio.stream.put_data_i16(out.audio)
@@ -676,7 +691,7 @@ impl Screen for Session {
         let window = gfx.window_size();
         match self.screens(window) {
             Some(screens) => gfx.draw_game_parts(&screens),
-            None => gfx.draw_game_frame(self.picture(window)),
+            None => gfx.draw_game_parts(&[(self.part(), self.picture(window))]),
         }
     }
 

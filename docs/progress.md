@@ -101,7 +101,9 @@ The owner's `~/.config/game37/secrets.toml` holds a real SteamGridDB key (mode 6
   1080 to 1440 tall: the menus follow the window's shape (`ui::h()`, set each frame by `Gfx::fit`;
   FR-UI-6, ADR 0018), and so do the Pause Menu and messages over a running Game, while the Game's
   picture fills the window's height or width at its own aspect ratio, drawn in window pixels
-  independent of the canvas (ADR 0020). The
+  independent of the canvas (ADR 0020). An N64 Game's own black border is cut off first: every
+  15 Core frames `session::border` finds the rect outside which the frame is black, and once the same
+  one has held for 180 frames that part is drawn, at most a fifth off each side (ADR 0021). The
   font is Adwaita Sans, found via `fc-match`. Keyboard: arrows, Enter/Space confirm, Esc/Backspace
   back, Q/E/Tab switch tabs, F options, S sort, F11 fullscreen. The controller's Start is
   `Action::Start` (saves a text field).
@@ -191,7 +193,8 @@ The owner's `~/.config/game37/secrets.toml` holds a real SteamGridDB key (mode 6
 ## Known issues and checks only the owner can do
 
 - **N64:** the test demo stays black even in software mode; it doesn't boot on Mupen64Plus-Next. The
-  OpenGL path is proven by PSP, so N64 needs a real Game to confirm it renders.
+  OpenGL path is proven by PSP, so N64 needs a real Game to confirm it renders. For the same reason
+  the border cut (ADR 0021) is tested only on made-up frames; a Game with a border checks it.
 - **PS1:** can't run without the owner's BIOS. Only the missing-BIOS message is verified.
 - **Real covers (M5's first "done when"):** not seen yet. The sandbox blocks steamgriddb.com, so
   Artwork was only checked with fakes and with seeded cache files. The owner can run the test
