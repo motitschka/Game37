@@ -75,7 +75,9 @@ impl Area {
 
 /// The part of `frame` outside which every pixel is black, in its pixels, cutting at most a fifth
 /// of the frame from any side; `None` when the frame is black all over (or empty). Each row and
-/// column from the edges in is looked at, at about [`ALONG`] of its pixels.
+/// column of the outer fifth of the frame is looked at, at about [`ALONG`] of its pixels, and the
+/// rows between at every few: what lies beyond the fifth is cut to it anyway, so the cost does not
+/// grow with the resolution.
 pub fn content(frame: &Frame) -> Option<Area> {
     let (w, h) = (frame.width, frame.height);
     let bpp = frame.format.bytes_per_pixel();
@@ -88,15 +90,21 @@ pub fn content(frame: &Frame) -> Option<Area> {
     };
     let (step_x, step_y) = ((w / ALONG).max(1) as usize, (h / (ALONG * 3 / 4)).max(1) as usize);
     let row = |y: u32| (0..w).step_by(step_x).any(|x| lit(x, y));
-    let top = (0..h).find(|&y| row(y))?;
-    let bottom = (top..h).rev().find(|&y| row(y))? + 1;
-    // Row `top` is among the rows each column is looked at in, and it has a lit pixel.
-    let column = |x: u32| (top..bottom).step_by(step_y).any(|y| lit(x, y));
-    let left = (0..w).find(|&x| column(x))?;
-    let right = (left..w).rev().find(|&x| column(x))? + 1;
     let (most_x, most_y) = (w / MOST, h / MOST);
-    let (left, top) = (left.min(most_x), top.min(most_y));
-    let (right, bottom) = (right.max(w - most_x), bottom.max(h - most_y));
+    // Nothing lit in a side's outer fifth cuts that fifth.
+    let top = (0..most_y).find(|&y| row(y));
+    let bottom = (h - most_y..h).rev().find(|&y| row(y)).map(|y| y + 1);
+    if top.is_none() && bottom.is_none() && !(most_y..h - most_y).step_by(step_y).any(row) {
+        return None;
+    }
+    let (top, bottom) = (top.unwrap_or(most_y), bottom.unwrap_or(h - most_y));
+    // A column is looked at in every `step_y`th row from `top` to `bottom`.
+    let column = |x: u32| (top..bottom).step_by(step_y).any(|y| lit(x, y));
+    let left = (0..most_x).find(|&x| column(x)).unwrap_or(most_x);
+    let right = (w - most_x..w)
+        .rev()
+        .find(|&x| column(x))
+        .map_or(w - most_x, |x| x + 1);
     Some(Area {
         x: left,
         y: top,
@@ -131,7 +139,8 @@ pub fn fit_part(aspect: f32, part: Rect, window: (f32, f32)) -> Rect {
 
 /// The border a Game has drawn for a while, followed over its session (ADR 0021): every
 /// [`SAMPLE_EVERY`] Core frames the frame's [`content`] is looked at, and once the same one has
-/// held for [`HOLD_FRAMES`] it is the part drawn. A frame black all over changes nothing.
+/// been seen in [`HOLD_FRAMES`] worth of samples it is the part drawn. A frame black all over, or
+/// lit only in the middle, changes nothing: it neither counts nor resets.
 #[derive(Debug, Default)]
 pub struct BorderCut {
     /// Core frames seen.
@@ -150,8 +159,9 @@ struct Candidate {
     first: Area,
     /// All the samples' content together, which is what is cut: nothing drawn in any of them.
     seen: Area,
-    /// The Core frame it was first seen in.
-    since: u64,
+    /// How many samples after the first were the same border: black ones are not counted, so a
+    /// border is not held across a loading screen it was not drawn through.
+    held: u64,
 }
 
 impl BorderCut {
@@ -166,11 +176,20 @@ impl BorderCut {
             return;
         }
         let Some(area) = content(frame) else { return };
+        // A cut held to the limit on both sides of an axis is only what the Core drew in the middle
+        // (a logo, some text), not a border: it would be the same every time.
+        let (most_x, most_y) = (size.0 / MOST, size.1 / MOST);
+        if (area.x >= most_x && area.right() + most_x <= size.0)
+            || (area.y >= most_y && area.bottom() + most_y <= size.1)
+        {
+            return;
+        }
         match &mut self.candidate {
             Some(candidate) if candidate.first.close(area, size) => {
                 candidate.seen = candidate.seen.union(area);
+                candidate.held += 1;
                 // The same border back after a fade keeps its cut, rather than moving a pixel.
-                if self.frames - candidate.since >= HOLD_FRAMES
+                if candidate.held >= HOLD_FRAMES / SAMPLE_EVERY
                     && !self.cut.is_some_and(|cut| cut.close(candidate.seen, size))
                 {
                     self.cut = Some(candidate.seen);
@@ -180,7 +199,7 @@ impl BorderCut {
                 self.candidate = Some(Candidate {
                     first: area,
                     seen: area,
-                    since: self.frames,
+                    held: 0,
                 })
             }
         }
@@ -436,11 +455,139 @@ mod tests {
     fn a_black_frame_neither_adopts_nor_resets_a_border_being_held() {
         let mut cut = BorderCut::default();
         let frame = banjo(PixelFormat::Rgba32);
+        // The first sample and five more that are the same border.
         run(&mut cut, &frame, HOLD_FRAMES / 2);
         run(&mut cut, &black(PixelFormat::Rgba32), 4 * HOLD_FRAMES);
         assert_eq!(cut.part(), WHOLE_FRAME, "black adopts nothing");
+        // Elapsed time does not count: the rest of the samples are still needed.
+        run(&mut cut, &frame, 6 * SAMPLE_EVERY);
+        assert_eq!(cut.part(), WHOLE_FRAME, "not held in enough samples yet");
         run(&mut cut, &frame, SAMPLE_EVERY);
-        assert_eq!(cut.part(), banjo_part(), "held since before the black");
+        assert_eq!(
+            cut.part(),
+            banjo_part(),
+            "held in samples from before the black too"
+        );
+    }
+
+    #[test]
+    fn two_dim_samples_either_side_of_a_black_gap_are_not_a_held_border() {
+        let mut cut = BorderCut::default();
+        // A fade's dim frame, the left of it cut to the limit but not the right.
+        let area = Area {
+            x: 200,
+            y: 23,
+            w: 440,
+            h: 427,
+        };
+        let dim = framed(PixelFormat::Rgba32, (640, 480), area, 30, 0);
+        run(&mut cut, &dim, SAMPLE_EVERY);
+        run(&mut cut, &black(PixelFormat::Rgba32), 4 * HOLD_FRAMES);
+        run(&mut cut, &dim, SAMPLE_EVERY);
+        assert_eq!(cut.part(), WHOLE_FRAME);
+    }
+
+    #[test]
+    fn a_logo_in_the_middle_of_black_is_not_a_border() {
+        let mut cut = BorderCut::default();
+        let logo = Area {
+            x: 200,
+            y: 150,
+            w: 240,
+            h: 180,
+        };
+        run(
+            &mut cut,
+            &framed(PixelFormat::Rgba32, (640, 480), logo, 255, 0),
+            10 * 60,
+        );
+        assert_eq!(cut.part(), WHOLE_FRAME);
+        // A real border is still cut afterwards.
+        run(&mut cut, &banjo(PixelFormat::Rgba32), 2 * HOLD_FRAMES);
+        assert_eq!(cut.part(), banjo_part());
+    }
+
+    #[test]
+    fn a_new_border_within_a_pixel_of_the_cut_keeps_the_cut() {
+        let mut cut = BorderCut::default();
+        run(&mut cut, &banjo(PixelFormat::Rgba32), 2 * HOLD_FRAMES);
+        assert_eq!(cut.part(), banjo_part());
+        // Another border for a sample, so the next is a new candidate rather than the same one.
+        let whole = Area {
+            x: 0,
+            y: 0,
+            w: 640,
+            h: 480,
+        };
+        run(
+            &mut cut,
+            &framed(PixelFormat::Rgba32, (640, 480), whole, 128, 0),
+            SAMPLE_EVERY,
+        );
+        let nudged = Area {
+            x: BANJO.x + 1,
+            w: BANJO.w - 1,
+            ..BANJO
+        };
+        run(
+            &mut cut,
+            &framed(PixelFormat::Rgba32, (640, 480), nudged, 128, 0),
+            2 * HOLD_FRAMES,
+        );
+        assert_eq!(cut.part(), banjo_part());
+    }
+
+    #[test]
+    fn samples_a_pixel_or_two_apart_are_cut_as_their_union() {
+        let mut cut = BorderCut::default();
+        let b = Area {
+            x: BANJO.x - 2,
+            ..BANJO
+        };
+        let (a, b) = (
+            framed(PixelFormat::Rgba32, (640, 480), BANJO, 128, 0),
+            framed(PixelFormat::Rgba32, (640, 480), b, 128, 0),
+        );
+        for i in 0..=HOLD_FRAMES / SAMPLE_EVERY {
+            run(&mut cut, if i % 2 == 0 { &a } else { &b }, SAMPLE_EVERY);
+        }
+        let union = Area {
+            x: BANJO.x - 2,
+            w: BANJO.w + 2,
+            ..BANJO
+        };
+        assert_eq!(cut.part(), union.part((640, 480)));
+    }
+
+    #[test]
+    fn a_frame_with_padded_rows_is_read_by_its_pitch() {
+        let tight = banjo(PixelFormat::Xrgb8888);
+        let row = 640 * 4;
+        let mut data = Vec::new();
+        for line in tight.data.chunks(row) {
+            data.extend_from_slice(line);
+            data.extend_from_slice(&[0xFF; 32]);
+        }
+        let padded = Frame {
+            pitch: row + 32,
+            data,
+            ..tight
+        };
+        assert_eq!(content(&padded), Some(BANJO));
+    }
+
+    #[test]
+    fn the_unused_byte_of_an_xrgb8888_pixel_is_not_light() {
+        let mut frame = black(PixelFormat::Xrgb8888);
+        for px in frame.data.chunks_mut(4) {
+            px[3] = 0xFF;
+        }
+        assert_eq!(content(&frame), None);
+        let mut frame = banjo(PixelFormat::Xrgb8888);
+        for px in frame.data.chunks_mut(4) {
+            px[3] = 0xFF;
+        }
+        assert_eq!(content(&frame), Some(BANJO));
     }
 
     #[test]
