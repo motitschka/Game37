@@ -107,6 +107,31 @@ pub fn fit(aspect: f32, (w, h): (f32, f32)) -> Rect {
     }
 }
 
+/// The fewest and the most times the small screen's height the large screen is in Large and
+/// small (ADR 0020). Six is the largest proportion Azahar itself offers.
+const LARGE_AND_SMALL: (f32, f32) = (3.0, 6.0);
+
+/// Where Large and small draws a two-screen System's screens in a window `w`×`h` pixels, in window
+/// pixels (ADR 0020): `(large, small)`, of aspects `large` and `small` (width / height). The large
+/// screen is as tall as the window and the small one, at its bottom right, as wide as the width
+/// left over, so together they fill the window; but the large screen is never less than three
+/// times the small one's height (the pair fills the height, with bars at the sides) nor more than
+/// six (it fills the width, with bars above and below). The pair is centred.
+pub fn large_and_small(large: f32, small: f32, (w, h): (f32, f32)) -> (Rect, Rect) {
+    let (fewest, most) = LARGE_AND_SMALL;
+    let left = w - h * large;
+    let times = if left > 0.0 {
+        (h / (left / small)).clamp(fewest, most)
+    } else {
+        most
+    };
+    let ph = h.min(w / (large + small / times));
+    let (lw, sh) = (ph * large, ph / times);
+    let sw = sh * small;
+    let (x, y) = ((w - lw - sw) / 2.0, (h - ph) / 2.0);
+    (Rect::new(x, y, lw, ph), Rect::new(x + lw, y + ph - sh, sw, sh))
+}
+
 /// Playtime counted while the Game runs: not while the Pause Menu is open, nor while the window
 /// is hidden.
 #[derive(Debug, Clone)]
@@ -297,5 +322,96 @@ mod tests {
             fit(4.0 / 3.0, (2560.0, 1440.0)),
             Rect::new(320.0, 0.0, 1920.0, 1440.0)
         );
+    }
+
+    /// ADR 0020's table: Large and small on DS and 3DS, with either 3DS screen large, on 16:9,
+    /// 16:10 and 21:9; each `(x, y, w, h)` to the pixel.
+    #[test]
+    fn large_and_small_fills_the_height_or_the_width_at_three_to_six_times() {
+        let (ds, top, touch) = (4.0 / 3.0, 5.0 / 3.0, 4.0 / 3.0);
+        type Pair = ((f32, f32, f32, f32), (f32, f32, f32, f32));
+        let cases: [((f32, f32), f32, f32, Pair); 9] = [
+            // DS: the large screen fills the height, the small one the rest of the width.
+            (
+                (1920.0, 1080.0),
+                ds,
+                ds,
+                ((0.0, 0.0, 1440.0, 1080.0), (1440.0, 720.0, 480.0, 360.0)),
+            ),
+            (
+                (1920.0, 1200.0),
+                ds,
+                ds,
+                ((0.0, 0.0, 1600.0, 1200.0), (1600.0, 960.0, 320.0, 240.0)),
+            ),
+            // At three times on 21:9, with bars at the sides.
+            (
+                (2560.0, 1080.0),
+                ds,
+                ds,
+                ((320.0, 0.0, 1440.0, 1080.0), (1760.0, 720.0, 480.0, 360.0)),
+            ),
+            // 3DS, top screen large: at six times, filling the width, with bars above and below.
+            (
+                (1920.0, 1080.0),
+                top,
+                touch,
+                ((0.0, 32.0, 1694.0, 1016.0), (1694.0, 879.0, 226.0, 169.0)),
+            ),
+            (
+                (1920.0, 1200.0),
+                top,
+                touch,
+                ((0.0, 92.0, 1694.0, 1016.0), (1694.0, 939.0, 226.0, 169.0)),
+            ),
+            (
+                (2560.0, 1080.0),
+                top,
+                touch,
+                ((140.0, 0.0, 1800.0, 1080.0), (1940.0, 720.0, 480.0, 360.0)),
+            ),
+            // 3DS, touch screen large.
+            (
+                (1920.0, 1080.0),
+                touch,
+                top,
+                ((0.0, 0.0, 1440.0, 1080.0), (1440.0, 792.0, 480.0, 288.0)),
+            ),
+            (
+                (1920.0, 1200.0),
+                touch,
+                top,
+                ((0.0, 4.0, 1589.0, 1192.0), (1589.0, 997.0, 331.0, 199.0)),
+            ),
+            (
+                (2560.0, 1080.0),
+                touch,
+                top,
+                ((260.0, 0.0, 1440.0, 1080.0), (1700.0, 720.0, 600.0, 360.0)),
+            ),
+        ];
+        for (window, large, small, (want_large, want_small)) in cases {
+            let (l, s) = large_and_small(large, small, window);
+            for (got, want, which) in [(l, want_large, "large"), (s, want_small, "small")] {
+                let (x, y, w, h) = want;
+                assert!(
+                    (got.x - x).abs() <= 1.0
+                        && (got.y - y).abs() <= 1.0
+                        && (got.w - w).abs() <= 1.0
+                        && (got.h - h).abs() <= 1.0,
+                    "{window:?}, {large} beside {small}: the {which} screen is {got:?}, not {want:?}"
+                );
+            }
+            assert!(
+                (l.x + l.w - s.x).abs() < 1e-3,
+                "{window:?}: the small screen touches the large"
+            );
+            assert!((l.y + l.h - s.y - s.h).abs() < 1e-3, "{window:?}: at its bottom");
+            let ratio = l.h / s.h;
+            assert!(
+                (3.0 - 1e-3..=6.0 + 1e-3).contains(&ratio),
+                "{window:?}: {ratio} times"
+            );
+        }
     }
 }

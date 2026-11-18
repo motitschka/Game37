@@ -646,10 +646,21 @@ impl<'tc> Gfx<'tc> {
     /// Draws the game texture stretched over `r`, in window pixels: a Game's picture fills the
     /// window's height or width, past the logical canvas (ADR 0020).
     pub fn draw_game_frame(&mut self, r: Rect) {
+        self.draw_game_parts(&[(Rect::new(0.0, 0.0, 1.0, 1.0), r)]);
+    }
+
+    /// Draws each `(part, r)`: the `part` of the game texture, in fractions of its size, stretched
+    /// over `r`, in window pixels, as Large and small draws each of two screens from its part of
+    /// one frame (ADR 0020).
+    pub fn draw_game_parts(&mut self, parts: &[(Rect, Rect)]) {
         let Some(game) = &mut self.game else { return };
+        let (w, h) = (game.width as f32, game.height as f32);
         in_window_pixels(&mut self.canvas, self.layer, |canvas, layer| {
             game.texture.set_alpha_mod(layer.alpha(255));
-            let _ = canvas.copy(&game.texture, None, layer.rect(r));
+            for &(part, r) in parts {
+                let src = FRect::new(part.x * w, part.y * h, part.w * w, part.h * h);
+                let _ = canvas.copy(&game.texture, src, layer.rect(r));
+            }
             game.texture.set_alpha_mod(255);
         });
     }

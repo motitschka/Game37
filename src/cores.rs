@@ -62,9 +62,27 @@ pub struct TouchScreen {
     pub moves: &'static [(Button, Button)],
 }
 
-/// How Game37's swap control reaches a Core (FR-DS-2, FR-NEW-2).
+impl TouchScreen {
+    /// This touch screen as Game37 runs it in `layout`: in Large and small Game37 swaps the
+    /// screens itself ([`Swap::Drawn`], ADR 0020); in the others the Core's own swap.
+    pub fn in_layout(self, layout: ScreenLayout) -> TouchScreen {
+        match layout {
+            ScreenLayout::LargeAndSmall => TouchScreen {
+                swap: Swap::Drawn,
+                ..self
+            },
+            ScreenLayout::SideBySide | ScreenLayout::OneScreen => self,
+        }
+    }
+}
+
+/// How Game37's swap control reaches a Core (FR-DS-2, FR-NEW-2). A Core's own is for Side by side
+/// and One screen; in Large and small every Core's is [`Swap::Drawn`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Swap {
+    /// Nothing reaches the Core: Game37 swaps which screen it draws large, once per press of the
+    /// swap control (Large and small, ADR 0020).
+    Drawn,
     /// The Core swaps on this RetroPad button, held while the swap control is: melonDS DS's
     /// "Next Screen Layout", R3, which cycles its two layouts.
     Button(Button),
@@ -344,20 +362,18 @@ pub fn missing_ds_sysfiles(games_root: &Path) -> Vec<&'static str> {
         .collect()
 }
 
-/// Options chosen for FR-DS-1–3: two hybrid layouts (one large screen, one small), the touch
-/// pointer and joystick cursor both live, and a visible cursor for aiming it.
+/// Options chosen for FR-DS-1–3: the layout Large and small draws from (see [`DS_LAYOUTS`]), the
+/// touch pointer and joystick cursor both live, and a visible cursor for aiming it.
 pub static MELONDS_DS: CoreInfo = CoreInfo {
     name: "melonDS DS",
     file: "melondsds_libretro.so",
     options: &[
-        ("melonds_number_of_screen_layouts", "2"),
-        ("melonds_screen_layout1", "hybrid-top"),
-        ("melonds_screen_layout2", "hybrid-bottom"),
-        // The large screen three times the small one: the picture is 4 × 256 by 3 × 192, exactly
-        // 16:9, so on a 16:9 display the large screen fills the height and the small one the rest
-        // of the width (FR-DS-1).
-        ("melonds_hybrid_ratio", "3"),
-        ("melonds_hybrid_small_screen", "one"),
+        // Large and small (FR-DS-1, ADR 0020): Game37 draws each screen from its half of one frame
+        // with both screens side by side, the top screen on the left, with no gap between them.
+        // It is the Core's one layout, so nothing in the Core swaps it: Game37 does.
+        ("melonds_number_of_screen_layouts", "1"),
+        ("melonds_screen_layout1", "left-right"),
+        ("melonds_screen_gap", "0"),
         ("melonds_touch_mode", "auto"),
         ("melonds_show_cursor", "always"),
         // Game37 has no microphone to give the Core, so the microphone button (a pad's R2) blows
@@ -627,9 +643,19 @@ impl ScreenLayout {
 pub struct ScreenLayouts {
     /// Its Settings row, e.g. "DS layout".
     pub label: &'static str,
+    /// Its two screens. In Large and small the Core's frame has them side by side at the same
+    /// height, the top screen on the left, and Game37 draws each from its part (ADR 0020).
+    pub screens: Screens,
     pub large_and_small: &'static [(&'static str, &'static str)],
     pub side_by_side: &'static [(&'static str, &'static str)],
     pub one_screen: &'static [(&'static str, &'static str)],
+}
+
+/// A two-screen System's screens, each at its own size in pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Screens {
+    pub top: (u32, u32),
+    pub touch: (u32, u32),
 }
 
 impl ScreenLayouts {
@@ -642,16 +668,19 @@ impl ScreenLayouts {
     }
 }
 
-/// DS's layouts on melonDS DS, with its option values. Each has two layouts, so R3, its "next
-/// layout" binding, swaps the screens. Large and small is [`MELONDS_DS`]'s own (FR-DS-1).
+/// DS's layouts on melonDS DS, with its option values. Large and small is [`MELONDS_DS`]'s own
+/// (FR-DS-1): the Core's one side-by-side layout, which Game37 draws large and small. Side by side
+/// and One screen each have two layouts, so R3, its "next layout" binding, swaps the screens.
 static DS_LAYOUTS: ScreenLayouts = ScreenLayouts {
     label: "DS layout",
+    screens: Screens {
+        top: (256, 192),
+        touch: (256, 192),
+    },
     large_and_small: &[
-        ("melonds_number_of_screen_layouts", "2"),
-        ("melonds_screen_layout1", "hybrid-top"),
-        ("melonds_screen_layout2", "hybrid-bottom"),
-        ("melonds_hybrid_ratio", "3"),
-        ("melonds_hybrid_small_screen", "one"),
+        ("melonds_number_of_screen_layouts", "1"),
+        ("melonds_screen_layout1", "left-right"),
+        ("melonds_screen_gap", "0"),
     ],
     side_by_side: &[
         ("melonds_number_of_screen_layouts", "2"),
@@ -665,14 +694,17 @@ static DS_LAYOUTS: ScreenLayouts = ScreenLayouts {
     ],
 };
 
-/// 3DS's layouts on its Core (Azahar), with its option values (FR-NEW-2). Large and small has the
-/// large screen three times the small one, as on DS; Azahar's own default is four.
+/// 3DS's layouts on its Core (Azahar), with its option values (FR-NEW-2). Large and small is
+/// Azahar's side-by-side layout, which Game37 draws large and small (ADR 0020): its top screen
+/// stays on the left, as [`AZAHAR`]'s `citra_swap_screen` starts and Large and small never
+/// changes it.
 static THREE_DS_LAYOUTS: ScreenLayouts = ScreenLayouts {
     label: "3DS layout",
-    large_and_small: &[
-        ("citra_layout_option", "large_screen"),
-        ("citra_large_screen_proportion", "3.00"),
-    ],
+    screens: Screens {
+        top: (400, 240),
+        touch: (320, 240),
+    },
+    large_and_small: &[("citra_layout_option", "side_by_side")],
     side_by_side: &[("citra_layout_option", "side_by_side")],
     one_screen: &[("citra_layout_option", "single_screen")],
 };
@@ -1850,34 +1882,49 @@ mod tests {
         MELONDS_DS.options_for(by_id("nds").unwrap(), Path::new("/Games/nds/Game.nds"), layout)
     }
 
-    /// Each choice's layouts are melonDS DS's own values (as its `SET_VARIABLES` offers them), two
-    /// each so R3 swaps the screens; only the layout keys change, in place.
+    /// Each choice's layouts are melonDS DS's own values (as its `SET_VARIABLES` offers them).
+    /// Large and small is its one side-by-side layout, top screen left and no gap, which Game37
+    /// draws large and small itself (ADR 0020); Side by side and One screen have two each, so R3
+    /// swaps the screens. Only the layout keys change, in place or added after.
     #[test]
-    fn each_ds_layout_gives_melonds_ds_its_two_layouts() {
-        let with = |layout1, layout2| -> Vec<_> {
-            MELONDS_DS
+    fn each_ds_layout_gives_melonds_ds_its_layouts() {
+        let with = |count, layout1, layout2| -> Vec<_> {
+            let mut options: Vec<_> = MELONDS_DS
                 .options
                 .iter()
                 .map(|&(key, value)| match key {
+                    "melonds_number_of_screen_layouts" => (key, count),
                     "melonds_screen_layout1" => (key, layout1),
-                    "melonds_screen_layout2" => (key, layout2),
                     _ => (key, value),
                 })
-                .collect()
+                .collect();
+            options.push(("melonds_screen_layout2", layout2));
+            options
         };
         assert_eq!(
             ds_options(ScreenLayout::LargeAndSmall),
             MELONDS_DS.options,
             "FR-DS-1"
         );
+        for option in [
+            ("melonds_number_of_screen_layouts", "1"),
+            ("melonds_screen_layout1", "left-right"),
+            ("melonds_screen_gap", "0"),
+        ] {
+            assert!(MELONDS_DS.options.contains(&option), "{option:?}");
+        }
+        assert!(
+            !MELONDS_DS
+                .options
+                .iter()
+                .any(|(key, _)| *key == "melonds_screen_layout2"),
+            "one layout"
+        );
         assert_eq!(
             ds_options(ScreenLayout::SideBySide),
-            with("left-right", "right-left")
+            with("2", "left-right", "right-left")
         );
-        assert_eq!(ds_options(ScreenLayout::OneScreen), with("top", "bottom"));
-        for layout in ScreenLayout::ALL {
-            assert!(ds_options(layout).contains(&("melonds_number_of_screen_layouts", "2")));
-        }
+        assert_eq!(ds_options(ScreenLayout::OneScreen), with("2", "top", "bottom"));
     }
 
     /// 3DS's layouts as Azahar's options, whatever Core options they join.
@@ -1886,10 +1933,12 @@ mod tests {
         let layouts = screen_layouts(by_id("3ds").unwrap()).unwrap();
         assert_eq!(
             layouts.options(ScreenLayout::LargeAndSmall),
-            [
-                ("citra_layout_option", "large_screen"),
-                ("citra_large_screen_proportion", "3.00"),
-            ]
+            [("citra_layout_option", "side_by_side")],
+            "side by side, which Game37 draws large and small"
+        );
+        assert!(
+            AZAHAR.options.contains(&("citra_swap_screen", "Top")),
+            "the top screen on the left"
         );
         assert_eq!(
             layouts.options(ScreenLayout::SideBySide),
@@ -1918,9 +1967,8 @@ mod tests {
         assert_eq!(
             core.options_for(by_id("3ds").unwrap(), game, ScreenLayout::LargeAndSmall),
             [
-                ("citra_layout_option", "large_screen"),
+                ("citra_layout_option", "side_by_side"),
                 ("citra_graphics_api", "OpenGL"),
-                ("citra_large_screen_proportion", "3.00"),
             ]
         );
     }
@@ -1988,7 +2036,7 @@ mod tests {
 
     /// The option values are the ones Azahar's own list offers (read from its `SET_VARIABLES`).
     #[test]
-    fn azahar_renders_with_opengl_shares_its_saves_and_lays_out_large_and_small_at_3() {
+    fn azahar_renders_with_opengl_shares_its_saves_and_lays_out_large_and_small_side_by_side() {
         assert_eq!(
             AZAHAR.options,
             &[
@@ -2000,10 +2048,7 @@ mod tests {
         );
         assert_eq!(
             THREE_DS_LAYOUTS.large_and_small,
-            &[
-                ("citra_layout_option", "large_screen"),
-                ("citra_large_screen_proportion", "3.00"),
-            ]
+            &[("citra_layout_option", "side_by_side")]
         );
         assert_eq!(AZAHAR.file, "azahar_libretro.so");
         assert_eq!((AZAHAR.bios, AZAHAR.assets), (None, None));
@@ -2103,11 +2148,9 @@ mod tests {
         assert_eq!(
             MELONDS_DS.options,
             &[
-                ("melonds_number_of_screen_layouts", "2"),
-                ("melonds_screen_layout1", "hybrid-top"),
-                ("melonds_screen_layout2", "hybrid-bottom"),
-                ("melonds_hybrid_ratio", "3"),
-                ("melonds_hybrid_small_screen", "one"),
+                ("melonds_number_of_screen_layouts", "1"),
+                ("melonds_screen_layout1", "left-right"),
+                ("melonds_screen_gap", "0"),
                 ("melonds_touch_mode", "auto"),
                 ("melonds_show_cursor", "always"),
                 ("melonds_mic_input", "blow"),

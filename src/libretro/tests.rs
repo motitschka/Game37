@@ -205,16 +205,18 @@ fn libretro_only_one_core_at_a_time() {
     }
 }
 
-/// melonDS DS with its hybrid layout (FR-DS-1) reads the pointer: a press at the centre of the
-/// small touch screen is what it reads as `RETRO_DEVICE_POINTER` coordinates (FR-DS-3); through
+/// melonDS DS with its own options, Large and small's (FR-DS-1, ADR 0020): one frame with both
+/// screens side by side at their own size, the top screen on the left and no gap, which Game37
+/// draws large and small. It reads the pointer: a press at the centre of the touch screen, the
+/// frame's right half, is what it reads as `RETRO_DEVICE_POINTER` coordinates (FR-DS-3); through
 /// Game37's touch controls a pad's L3 reaches it as R2, its cursor's tap, and R2 as L3, its
-/// microphone, and the right stick moves its cursor (FR-DS-3); and R3 swaps the screens (FR-DS-2).
-/// Run with `cargo test -- --ignored ds`.
+/// microphone, and the right stick moves its cursor (FR-DS-3); and R3, Game37's swap (FR-DS-2),
+/// reaches it as nothing, so its frame stays as it is. Run with `cargo test -- --ignored ds`.
 #[test]
 #[ignore = "needs /home/matei/Game37/.testdata"]
-fn ds_touch_reaches_melonds_ds_and_r3_swaps_the_screens() {
+fn ds_touch_reaches_melonds_ds_side_by_side_and_r3_leaves_its_frame() {
     use super::{Button, Pointer, Stick, ffi};
-    use crate::cores::MELONDS_DS;
+    use crate::cores::{MELONDS_DS, ScreenLayout};
     use crate::session::input::TouchControls;
 
     let _serial = serial();
@@ -242,17 +244,19 @@ fn ds_touch_reaches_melonds_ds_and_r3_swaps_the_screens() {
     let (top, _) = run(&mut core, 120);
     eprintln!("frame {}x{}, {:?}", top.width, top.height, core.av_info());
     assert!(distinct_colours(&top) > 2, "hbmenu shows something");
-    // Hybrid, ratio 3: the large screen (768×576) on the left, the small one (256×192) below on
-    // its right, 16:9 in all.
     assert_eq!(
         (top.width, top.height),
-        (1024, 576),
-        "one large and one small screen"
+        (512, 192),
+        "the two screens side by side, with no gap"
+    );
+    assert!(
+        difference(&top_screen(&top), &touch_screen(&top)) > 1.0,
+        "hbmenu's two screens differ"
     );
 
     let centre = Pointer {
-        x: (896.0 / 1024.0 * 2.0 * 32767.0 - 32767.0_f64).round() as i16,
-        y: (480.0 / 576.0 * 2.0 * 32767.0 - 32767.0_f64).round() as i16,
+        x: (384.0 / 512.0 * 2.0 * 32767.0 - 32767.0_f64).round() as i16,
+        y: 0,
         pressed: true,
     };
     let mut input = InputState::default();
@@ -287,7 +291,7 @@ fn ds_touch_reaches_melonds_ds_and_r3_swaps_the_screens() {
     // A pad's L3 and R2 through Game37's touch controls: L3 reaches melonDS DS as R2, its Touch
     // Joystick, and R2 as L3, its microphone. melonDS DS reads the joypad as one mask, which
     // these read back as it was answered.
-    let mut controls = TouchControls::new(MELONDS_DS.touch.unwrap());
+    let mut controls = TouchControls::new(MELONDS_DS.touch.unwrap().in_layout(ScreenLayout::LargeAndSmall));
     let joypad = |core: &Core| {
         let queries = core.input_queries();
         let mask = queries.get(&(0, ffi::RETRO_DEVICE_JOYPAD, 0, ffi::RETRO_DEVICE_ID_JOYPAD_MASK));
@@ -316,13 +320,13 @@ fn ds_touch_reaches_melonds_ds_and_r3_swaps_the_screens() {
     }
     run(&mut core, 30);
 
-    // The right stick moves the cursor melonDS DS draws on the touch screen, still the small one:
-    // hbmenu's touch screen stands still on its own, so only the cursor changes it. (A tap, the
-    // pad's L3 above, changes nothing hbmenu shows, so the mask is what shows it reached the Core.)
+    // The right stick moves the cursor melonDS DS draws on the touch screen: hbmenu's touch screen
+    // stands still on its own, so only the cursor changes it. (A tap, the pad's L3 above, changes
+    // nothing hbmenu shows, so the mask is what shows it reached the Core.)
     let still = core.frame().clone();
     let (later, _) = run(&mut core, 30);
     let changed = |a: &Frame, b: &Frame| {
-        let (a, b) = (small_screen(a), small_screen(b));
+        let (a, b) = (touch_screen(a), touch_screen(b));
         a.chunks(3).zip(b.chunks(3)).filter(|(x, y)| x != y).count()
     };
     assert_eq!(changed(&still, &later), 0, "hbmenu's touch screen stands still");
@@ -335,22 +339,27 @@ fn ds_touch_reaches_melonds_ds_and_r3_swaps_the_screens() {
     eprintln!("the right stick changed {moved} pixels of the touch screen");
     assert!(moved > 0, "the right stick moves the cursor");
 
-    // R3 for a few frames, then released: the other hybrid layout, whose large screen shows the
-    // touch screen (the small one before) and whose small one, now at the bottom right, shows the
-    // top screen. Comparing the screens (rather than frames) keeps hbmenu's own animation from
-    // passing for a swap.
+    // R3 through the touch controls for a few frames, then released: Game37 swaps the screens it
+    // draws, and the Core sees no R3, so its frame keeps the top screen on the left.
     let before = core.frame().clone();
-    let mut r3 = InputState::default();
-    r3.set(0, Button::R3, true);
     for _ in 0..5 {
+        let mut r3 = pad(&[Button::R3], (0, 0));
+        controls.apply(&mut r3, false);
         core.run_frame(&r3);
+        assert_eq!(
+            joypad(&core) & bit(Button::R3),
+            0,
+            "R3 reaches melonDS DS as nothing"
+        );
     }
+    assert!(controls.swapped(), "Game37 swapped the screens");
     let (after, _) = run(&mut core, 30);
-    assert_eq!((after.width, after.height), (1024, 576), "still hybrid");
-    let (large, small, now_large) = (large_screen(&before), small_screen(&before), large_screen(&after));
-    let (to_small, to_large) = (difference(&now_large, &small), difference(&now_large, &large));
-    eprintln!("the large screen now differs from the small one by {to_small}, from itself by {to_large}");
-    assert!(to_small < to_large, "R3 put the touch screen on the large one");
+    assert_eq!((after.width, after.height), (512, 192), "still side by side");
+    let (left, top, touch) = (top_screen(&after), top_screen(&before), touch_screen(&before));
+    assert!(
+        difference(&left, &top) < difference(&left, &touch),
+        "the top screen still on the left"
+    );
 }
 
 /// melonDS DS in each DS layout of Settings → Display, with the options a DS Game gets in it
@@ -429,8 +438,8 @@ fn each_ds_layout_shows_its_screens_and_r3_swaps_them() {
     );
 }
 
-/// One DS screen's 256×192 RGB bytes, from a 1024×576 hybrid frame (in `Xrgb8888`) at `(x, y)`,
-/// every `step`th pixel.
+/// One DS screen's 256×192 RGB bytes, from a frame (in `Xrgb8888`) at `(x, y)`, every `step`th
+/// pixel.
 fn ds_screen(frame: &Frame, x: usize, y: usize, step: usize) -> Vec<u8> {
     let bpp = frame.format.bytes_per_pixel();
     let mut screen = Vec::with_capacity(256 * 192 * 3);
@@ -444,14 +453,14 @@ fn ds_screen(frame: &Frame, x: usize, y: usize, step: usize) -> Vec<u8> {
     screen
 }
 
-/// The hybrid layout's large screen, 768×576 at the left, sampled at a third of its size.
-fn large_screen(frame: &Frame) -> Vec<u8> {
-    ds_screen(frame, 0, 0, 3)
+/// The top screen of a side-by-side frame, its left half.
+fn top_screen(frame: &Frame) -> Vec<u8> {
+    ds_screen(frame, 0, 0, 1)
 }
 
-/// The hybrid layout's small screen, 256×192 at the bottom right.
-fn small_screen(frame: &Frame) -> Vec<u8> {
-    ds_screen(frame, 768, 384, 1)
+/// The touch screen of a side-by-side frame, its right half.
+fn touch_screen(frame: &Frame) -> Vec<u8> {
+    ds_screen(frame, 256, 0, 1)
 }
 
 /// The mean difference per colour byte of two screens.

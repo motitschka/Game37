@@ -253,7 +253,8 @@ pub struct TouchControls {
     touch: TouchScreen,
     /// Whether the swap control was held at the last frame.
     held: bool,
-    /// For a Core that swaps through an option: whether it has `values[1]` now.
+    /// With [`Swap::Drawn`], whether the touch screen is drawn large; with [`Swap::Option`],
+    /// whether the Core has `values[1]` now.
     swapped: bool,
 }
 
@@ -277,7 +278,8 @@ impl TouchControls {
     /// let go and the button it moves to held instead while it is; R3 is let go, and with
     /// [`Swap::Button`] that button held while the swap control is. With [`Swap::Option`], returns
     /// the option and its new value once per press of the swap control, however long it is held,
-    /// for the Core to change.
+    /// for the Core to change. With [`Swap::Drawn`], a press flips [`TouchControls::swapped`] and
+    /// nothing of the swap reaches the Core.
     pub fn apply(&mut self, input: &mut InputState, tab: bool) -> Option<(&'static str, &'static str)> {
         let mut held = false;
         let pad = *input;
@@ -307,8 +309,18 @@ impl TouchControls {
                 self.swapped = !self.swapped;
                 Some((key, values[usize::from(self.swapped)]))
             }
+            Swap::Drawn if pressed => {
+                self.swapped = !self.swapped;
+                None
+            }
             _ => None,
         }
+    }
+
+    /// With [`Swap::Drawn`], whether Game37 draws the touch screen large: the swap control was
+    /// pressed an odd number of times.
+    pub fn swapped(&self) -> bool {
+        self.swapped
     }
 }
 
@@ -341,9 +353,19 @@ pub struct Mouse {
     pub left: bool,
 }
 
+/// The whole of a Core's frame, as a [`touch_part`] in fractions of it.
+pub const WHOLE_FRAME: Rect = Rect::new(0.0, 0.0, 1.0, 1.0);
+
 /// The pointer the Core reads for `mouse` over the Game's `picture` (where its frame is drawn):
 /// the left button touches. `None` when the mouse is off the picture.
 pub fn touch(picture: Rect, mouse: Mouse) -> Option<Pointer> {
+    touch_part(picture, WHOLE_FRAME, mouse)
+}
+
+/// The pointer the Core reads for `mouse` over `picture`, where `part` of its frame (in fractions
+/// of it) is drawn, as Large and small draws each screen from its part (ADR 0020): the pointer
+/// is relative to the whole frame. `None` when the mouse is off the picture.
+pub fn touch_part(picture: Rect, part: Rect, mouse: Mouse) -> Option<Pointer> {
     let (x, y) = mouse.at?;
     let (fx, fy) = ((x - picture.x) / picture.w, (y - picture.y) / picture.h);
     if !(0.0..=1.0).contains(&fx) || !(0.0..=1.0).contains(&fy) {
@@ -351,8 +373,8 @@ pub fn touch(picture: Rect, mouse: Mouse) -> Option<Pointer> {
     }
     let scale = |f: f32| ((f * 2.0 - 1.0) * f32::from(i16::MAX)).round() as i16;
     Some(Pointer {
-        x: scale(fx),
-        y: scale(fy),
+        x: scale(part.x + fx * part.w),
+        y: scale(part.y + fy * part.h),
         pressed: mouse.left,
     })
 }
@@ -1011,6 +1033,61 @@ mod tests {
         assert_eq!((input, change), (holding(0, &[Button::R3]), None), "Tab");
     }
 
+    /// Large and small on both Systems (FR-DS-2, FR-NEW-2, ADR 0020): R3 and Tab swap which
+    /// screen Game37 draws large, once per press, however long held, and not again for a press
+    /// held over a pause; nothing of the swap reaches the Core (no R3 for melonDS DS, no
+    /// `citra_swap_screen` for Azahar), while the button moves still do. The other layouts keep
+    /// the Core's own swap.
+    #[test]
+    fn in_large_and_small_r3_and_tab_swap_the_drawn_screens_and_reach_no_core() {
+        use crate::cores::{AZAHAR, MELONDS_DS, ScreenLayout};
+        for (core, l3_taps_as) in [(&MELONDS_DS, Button::R2), (&AZAHAR, Button::R3)] {
+            let touch = core.touch.unwrap();
+            let mut controls = TouchControls::new(touch.in_layout(ScreenLayout::LargeAndSmall));
+            let name = core.name;
+            assert!(!controls.swapped(), "{name}: the top screen starts large");
+
+            let frame = touch_frame(&mut controls, holding(1, &[Button::R3, Button::A]), false);
+            assert_eq!(
+                frame,
+                (holding(1, &[Button::A]), None),
+                "{name}: R3 reaches no Core"
+            );
+            assert!(controls.swapped(), "{name}: the press swaps");
+            for _ in 0..3 {
+                let frame = touch_frame(&mut controls, holding(1, &[Button::R3]), false);
+                assert_eq!(frame, (InputState::default(), None), "{name}: held");
+                assert!(controls.swapped(), "{name}: a held R3 is one swap");
+            }
+            touch_frame(&mut controls, InputState::default(), false);
+            assert!(controls.swapped(), "{name}: letting go swaps nothing");
+
+            let frame = touch_frame(&mut controls, holding(0, &[Button::L3]), true);
+            assert_eq!(
+                frame,
+                (holding(0, &[l3_taps_as]), None),
+                "{name}: Tab, and L3 taps"
+            );
+            assert!(!controls.swapped(), "{name}: Tab swaps back");
+            touch_frame(&mut controls, InputState::default(), false);
+
+            controls.resume();
+            touch_frame(&mut controls, holding(0, &[Button::R3]), false);
+            assert!(!controls.swapped(), "{name}: held over a pause");
+            touch_frame(&mut controls, InputState::default(), false);
+            touch_frame(&mut controls, holding(0, &[Button::R3]), false);
+            assert!(controls.swapped(), "{name}: a new press swaps");
+
+            for layout in [ScreenLayout::SideBySide, ScreenLayout::OneScreen] {
+                assert_eq!(
+                    touch.in_layout(layout),
+                    touch,
+                    "{name}: {layout:?} keeps its own swap"
+                );
+            }
+        }
+    }
+
     /// DS on melonDS DS (FR-DS-3): a pad's L3 taps with the right-stick cursor, reaching melonDS
     /// DS as R2, its Touch Joystick, and never as L3, its microphone; a pad's R2 reaches it as L3,
     /// the microphone, and never taps; both together are both. On every port, beside other
@@ -1096,6 +1173,50 @@ mod tests {
         assert_eq!(touch(PICTURE, at(1680.0, 1080.0, true)), p(0x7fff, 0x7fff, true));
         assert_eq!(touch(PICTURE, at(1680.0, 0.0, false)), p(0x7fff, -0x7fff, false));
         assert_eq!(touch(PICTURE, at(600.0, 810.0, false)), p(-0x4000, 0x4000, false));
+    }
+
+    /// Large and small draws each screen from its part of the frame (ADR 0020): a click on the
+    /// drawn touch screen, the right half of a DS frame here, wherever it is drawn, reaches the
+    /// Core relative to the whole frame; one off it touches nothing.
+    #[test]
+    fn the_mouse_on_a_part_of_the_frame_touches_that_part() {
+        let p = |x, y, pressed| Some(Pointer { x, y, pressed });
+        let right_half = Rect::new(0.5, 0.0, 0.5, 1.0);
+        let small = Rect::new(1440.0, 720.0, 480.0, 360.0);
+        assert_eq!(
+            touch_part(small, right_half, at(1680.0, 900.0, true)),
+            p(0x4000, 0, true),
+            "the touch screen's centre, three quarters across the frame"
+        );
+        assert_eq!(
+            touch_part(small, right_half, at(1440.0, 720.0, false)),
+            p(0, -0x7fff, false),
+            "its top left, the frame's top middle"
+        );
+        assert_eq!(
+            touch_part(small, right_half, at(1920.0, 1080.0, true)),
+            p(0x7fff, 0x7fff, true)
+        );
+        assert_eq!(
+            touch_part(small, right_half, at(1000.0, 540.0, true)),
+            None,
+            "on the large screen"
+        );
+        assert_eq!(
+            touch_part(small, right_half, at(1680.0, 700.0, true)),
+            None,
+            "above it"
+        );
+        let large = Rect::new(0.0, 0.0, 1440.0, 1080.0);
+        assert_eq!(
+            touch_part(large, right_half, at(720.0, 540.0, true)),
+            p(0x4000, 0, true),
+            "the touch screen drawn large"
+        );
+        assert_eq!(
+            touch(PICTURE, at(600.0, 810.0, false)),
+            touch_part(PICTURE, WHOLE_FRAME, at(600.0, 810.0, false))
+        );
     }
 
     #[test]

@@ -67,6 +67,9 @@ pub struct Session {
     /// and Tab swap screens, a pad button taps with the right-stick cursor, and the mouse cursor
     /// shows.
     touch: Option<TouchControls>,
+    /// The two screens of a Game in Large and small, which Game37 draws itself from the Core's
+    /// side-by-side frame (ADR 0020); `None` in the other layouts and on one-screen Systems.
+    large_and_small: Option<cores::Screens>,
     /// Whether the left stick also presses the d-pad ([`cores::CoreInfo::stick_is_dpad`]).
     stick_dpad: bool,
     /// Whether the Core has Save States and a Resume State ([`cores::CoreInfo::has_states`]).
@@ -351,6 +354,10 @@ impl Session {
         } else {
             None
         };
+        let layout = ctx.screen_layout(system);
+        let large_and_small = cores::screen_layouts(system)
+            .filter(|_| core_info.touch.is_some() && layout == cores::ScreenLayout::LargeAndSmall)
+            .map(|layouts| layouts.screens);
         let av = core.av_info();
         let audio = audio.and_then(|a| {
             Audio::open(a, av.sample_rate)
@@ -375,7 +382,10 @@ impl Session {
             timer: PlayTimer::start(Instant::now()),
             shown: true,
             paused: false,
-            touch: core_info.touch.map(TouchControls::new),
+            touch: core_info
+                .touch
+                .map(|touch| TouchControls::new(touch.in_layout(layout))),
+            large_and_small,
             stick_dpad: core_info.stick_is_dpad(),
             has_states: core_info.has_states(),
             resets: core_info.resets(),
@@ -389,6 +399,36 @@ impl Session {
     /// to the window (ADR 0020). The mouse touches the touch screen from the same rect.
     fn picture(&self, window: (f32, f32)) -> Rect {
         timing::fit(self.core.av_info().aspect_ratio, window)
+    }
+
+    /// In Large and small, where the top screen and the touch screen are drawn in a window
+    /// `window` pixels big: each one's part of the Core's side-by-side frame, in fractions of it,
+    /// and its rect in window pixels (ADR 0020). The touch screen is large once swapped.
+    fn screens(&self, window: (f32, f32)) -> Option<[(Rect, Rect); 2]> {
+        let cores::Screens { top, touch } = self.large_and_small?;
+        let aspect = |(w, h): (u32, u32)| w as f32 / h as f32;
+        let swapped = self.touch.is_some_and(|controls| controls.swapped());
+        let (top_rect, touch_rect) = if swapped {
+            let (large, small) = timing::large_and_small(aspect(touch), aspect(top), window);
+            (small, large)
+        } else {
+            timing::large_and_small(aspect(top), aspect(touch), window)
+        };
+        // Side by side at the same height, so each screen's share of the width is its own width's.
+        let split = top.0 as f32 / (top.0 + touch.0) as f32;
+        Some([
+            (Rect::new(0.0, 0.0, split, 1.0), top_rect),
+            (Rect::new(split, 0.0, 1.0 - split, 1.0), touch_rect),
+        ])
+    }
+
+    /// Where the mouse touches the touch screen in a window `window` pixels big: the rect it is
+    /// drawn in, in window pixels, and the part of the Core's frame that shows there.
+    fn touched(&self, window: (f32, f32)) -> (Rect, Rect) {
+        match self.screens(window) {
+            Some([_, (part, touch)]) => (touch, part),
+            None => (self.picture(window), input::WHOLE_FRAME),
+        }
     }
 
     /// Whether the Game has a touch screen the mouse touches, so the mouse cursor shows.
@@ -473,9 +513,9 @@ impl Session {
         self.held.mask(&mut input);
         self.follow_av_info();
         if self.touch.is_some() {
-            // Where `draw` puts the frame, in the mouse's logical coordinates.
-            let picture = gfx.to_logical_rect(self.picture(gfx.window_size()));
-            input.set_pointer(input::touch(picture, mouse));
+            // Where `draw` puts the touch screen, in the mouse's logical coordinates.
+            let (picture, part) = self.touched(gfx.window_size());
+            input.set_pointer(input::touch_part(gfx.to_logical_rect(picture), part, mouse));
         }
         let frames = self.scheduler.frames(dt);
         self.pace.ticks += 1;
@@ -633,7 +673,11 @@ impl Screen for Session {
     }
 
     fn draw(&mut self, gfx: &mut Gfx<'_>, _: &Ctx) {
-        gfx.draw_game_frame(self.picture(gfx.window_size()));
+        let window = gfx.window_size();
+        match self.screens(window) {
+            Some(screens) => gfx.draw_game_parts(&screens),
+            None => gfx.draw_game_frame(self.picture(window)),
+        }
     }
 
     fn hints(&self) -> Vec<Hint> {
