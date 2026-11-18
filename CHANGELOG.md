@@ -44,6 +44,10 @@
   small one sits at its bottom right in the width left over, three to six times smaller, following the
   window as it is resized or goes fullscreen. On a 1920×1200 screen a DS's large screen is 1600×1200.
   R3 and Tab swap which screen is large, and a click on the touch screen touches it wherever it is.
+- **N64 Games fill the screen:** Game37 cuts off the black border a Game draws around its picture. It
+  waits until the border has stayed the same for a few seconds, so fades and black loading screens
+  don't make the picture jump, and never cuts more than a fifth from any side. On a 1920×1200 screen
+  Banjo-Kazooie's picture is 1602×1200 instead of 1427×1069 inside black.
 - **Shelves wrap on a press, not while held:** Right on a Shelf's last item goes round to its first Game and Left on the first goes to the last, but holding Left or Right stops at the end.
 - **Artwork is searched by the file name, not the Display Title.** Renaming a Game in Game37 now only
   changes the name shown, and its cover and hero stay. To get different Artwork, rename the file, or

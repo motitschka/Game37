@@ -151,3 +151,6 @@ The Switch controller in PlayStation Games is checked in section 5.
 - [ ] Resizing the window and F11 during a DS or 3DS Game: the two screens follow at once, and nothing
       overlaps or gets cut off.
 - [ ] Side by side and One screen look and swap as before, filling the width or the height.
+- [ ] An N64 Game that draws a black border of its own (e.g. Banjo-Kazooie) on that screen: a few
+      seconds after its picture appears, the picture grows once to fill the whole height, not
+      stretched, and stays that size through fades and black loading screens (ADR 0021).

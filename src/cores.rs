@@ -790,6 +790,13 @@ impl CoreInfo {
         std::ptr::eq(self, &DOLPHIN)
     }
 
+    /// Whether Game37 finds the black border the Game draws around its picture and cuts it off
+    /// when it draws the picture (ADR 0021): many N64 Games draw one, each its own, and Games on
+    /// the other Systems fill their frame.
+    pub fn cuts_own_border(&self) -> bool {
+        std::ptr::eq(self, &MUPEN64PLUS_NEXT)
+    }
+
     /// Whether Game37 downloads this Core from the libretro build server. suyu isn't there: it is
     /// built from source with Game37's patches (`scripts/build-suyu-core.sh`, ADR 0019).
     pub fn downloads(&self) -> bool {
@@ -1714,6 +1721,17 @@ mod tests {
         assert!(!AZAHAR.stick_is_dpad());
         for core in [&MESEN, &BSNES, &SAMEBOY, &MGBA, &BEETLE_PSX_HW, &MELONDS_DS] {
             assert!(core.stick_is_dpad(), "{}", core.name);
+        }
+    }
+
+    #[test]
+    fn only_n64_games_lose_their_own_border() {
+        for system in SYSTEMS
+            .iter()
+            .filter(|s| s.kind == crate::systems::Kind::Embedded)
+        {
+            let core = for_system(system).unwrap();
+            assert_eq!(core.cuts_own_border(), system.id == "n64", "{}", system.id);
         }
     }
 
