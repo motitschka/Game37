@@ -9,8 +9,9 @@ allows: it always fills the whole height or the whole width, with bars only on t
 **The picture is fitted to the window, not to the 16:9 frame.** It is the largest rect of the Game's
 aspect ratio that fits the window's drawable size, centred, drawn in window pixels outside the 1920-wide
 logical canvas. A 4:3 Game on 1920×1200 is 1600×1200; on a 16:9 screen every Game looks as it does now.
-The mouse on a touch screen maps from the same rect. The Pause Menu and the messages over a Game keep
-their 1920×1080 layout, centred in the window; their dimmed backdrop covers the whole window.
+The mouse on a touch screen maps from the same rect. The Pause Menu and the messages over a Game are
+laid out like every other menu (ADR 0018): 1920 wide and as tall as the window's shape needs, up to 4:3,
+so on 1920×1200 they fill the screen too; their dimmed backdrop covers the whole window.
 
 **DS and 3DS Large and small: the large screen fills the height, the small one takes the width that is
 left**, even when that makes it small. The owner chose this over keeping the large screen three times the
@@ -57,8 +58,11 @@ window like any other picture.
 
 ## Consequences
 
-- FR-UI-6, FR-DS-1 and FR-NEW-2 now describe this. ADR 0018's "a running Game stays at 1080" now holds
-  for the Pause Menu and messages over a Game, not for the Game's picture.
+- FR-UI-6, FR-DS-1 and FR-NEW-2 now describe this. ADR 0018's "a running Game stays at 1080" no longer
+  holds: neither the picture nor what is drawn over it stays at 1080.
+- First built with the Pause Menu kept at 1920×1080, centred. On the owner's 16:10 screen its panel and
+  hint bar then stopped short of the top and bottom edges, so it now follows the window like the menus.
+- An N64 Game's own black border inside its frame is cut separately (ADR 0021).
 - On a 16:9 screen nothing changes for single-screen Systems, nor for DS's Large and small.
 - In Large and small each screen is scaled from the Core's side-by-side frame. If the large screen looks
   softer than in the Core's own large-screen layout, the Core's render resolution has to go up.

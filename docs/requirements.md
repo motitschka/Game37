@@ -108,7 +108,7 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 - **FR-EMB-10** In-game buttons map by position to the original console's controller. The exception: on PS1, PS2 and PSP, a controller with Nintendo letters on its face buttons (Switch Pro Controller, Joy-Con pair, or a single Joy-Con held sideways: A on the right, B at the bottom) maps them by letter, A to ✕, B to ○, X to □ and Y to △, so its A confirms as on an Xbox controller. Its other buttons, and every other controller, still map by position.
 - **FR-EMB-11** There is no fast-forward.
 - **FR-EMB-12** If a required BIOS is missing, Game37 says which file to place in which folder instead of failing silently.
-- **FR-EMB-13** European (PAL) N64 Games are cropped to their picture, without the PAL frame's black borders.
+- **FR-EMB-13** N64 Games are cropped to their picture: European (PAL) ones without the PAL frame's black borders, and every N64 Game without the black border it draws around its own picture, found automatically (ADR 0021).
 - **FR-EMB-14** When a Core reports why it couldn't start or run a Game (a missing BIOS, an encrypted dump), Game37 shows that reason instead of only saying the Game couldn't start.
 - **FR-EMB-15** Cores that keep their own In-game Saves (memory cards, NAND, SD card files) write them under `<Games Root>/saves/<system>/`. Delete save data removes a Game's own save file where the Core keeps one per Game, and otherwise says the In-game Save is kept by the Core.
 
@@ -145,10 +145,9 @@ Built in milestone 8 (ADR 0016, research in [research/m8-newer-cores.md](researc
 - **FR-UI-6** The menus fill a screen taller than 16:9, such as a 16:10 laptop screen: they are laid out
   1920 wide and as tall as the screen's shape needs (up to 4:3), with nothing stretched. The extra
   height goes to the lists and grids, and whatever sits at the bottom (the hint bar, Setup's buttons)
-  stays at the bottom. The Pause Menu and anything else shown over a running Game keep their 16:9
-  frame, centred on the screen. The Game's picture itself, in its own aspect ratio,
-  fills the whole screen's height or its whole width, on a screen of any shape (ADR 0020). Menus on a
-  screen wider than 16:9 show bars at the sides.
+  stays at the bottom. The Pause Menu and anything else shown over a running Game are laid out the same
+  way. The Game's picture itself, in its own aspect ratio, fills the whole screen's height or its whole
+  width, on a screen of any shape (ADR 0020). Menus on a screen wider than 16:9 show bars at the sides.
 - **FR-UI-7** Every grid of covers (Console Pages, "See all", Search results) shows the same number of
   Games per row, which the player sets from 6 to 10 (default 8) in Settings → Display. The grid is
   centred and runs from margin to margin: the gaps between covers stay the same, and the covers grow
