@@ -372,8 +372,8 @@ fn interactive(
         }
         let keys = events.keyboard_state();
         let pads = input.pad_states();
-        // A Game's first frame maps its touch screen with the Game's own presentation.
-        gfx.fit(!nav.base().chrome());
+        // The mouse converts at this frame's logical size, should the window have changed shape.
+        gfx.fit();
         gfx.set_animate(ctx.animate);
         let state = events.mouse_state();
         let mouse = Mouse {
@@ -644,9 +644,8 @@ const RISE: f32 = 16.0;
 
 /// Draws a frame (without presenting it) and returns where its clickable chrome went.
 fn draw(gfx: &mut Gfx<'_>, nav: &mut Nav, ctx: &Ctx, view: &View, clock: &str) -> Hits {
-    // Over a running Game (no chrome) the canvas stays at 1080, the Game's picture filling the
-    // window around it; the menus fill the window.
-    gfx.fit(!nav.base().chrome());
+    // The menus, and what is drawn over a running Game, fill the window's shape (ADR 0018, 0020).
+    gfx.fit();
     if !nav.base().chrome() {
         gfx.clear(BLACK);
         nav.base().draw(gfx, ctx);

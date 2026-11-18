@@ -11,7 +11,7 @@ use crate::ui::input::{Action, Input, Pointer};
 use crate::ui::nav::{Hint, Screen, Transition};
 use crate::ui::text::Weight;
 use crate::ui::theme::{ACCENT, Colour, DANGER, DIM, LINE, MUTED, SURFACE, SURFACE2, TEXT, WARN};
-use crate::ui::{H, M, Rect, W, hit};
+use crate::ui::{self, M, Rect, W, hit};
 
 /// What the player asked the session to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -277,7 +277,12 @@ impl PauseMenu {
             + 48.0
             + CONFIRM_BUTTON_H
             + CONFIRM_PAD;
-        let p = Rect::new((W - CONFIRM_PANEL_W) / 2.0, (H - h) / 2.0, CONFIRM_PANEL_W, h);
+        let p = Rect::new(
+            (W - CONFIRM_PANEL_W) / 2.0,
+            (ui::h() - h) / 2.0,
+            CONFIRM_PANEL_W,
+            h,
+        );
         gfx.fill_round_rect(p, 20.0, SURFACE);
         gfx.stroke_round_rect(p, 20.0, 1.0, LINE);
         let x = p.x + CONFIRM_PAD;
@@ -376,7 +381,8 @@ impl Screen for PauseMenu {
         }
         self.appear.set(1.0);
         let t = self.appear.step(ctx.animate, FADE_TAU);
-        // The whole window: the Game's picture reaches past the 1920×1080 canvas (ADR 0020).
+        // The whole window: the Game's picture can reach past the canvas, as on a window wider
+        // than 16:9 (ADR 0020).
         gfx.fill_window(Colour::hex(0x000000).alpha(BACKDROP * t));
         let layer = Layer {
             dx: -(1.0 - t) * SLIDE_IN,
@@ -410,12 +416,16 @@ const SLIDE_IN: f32 = 72.0;
 /// Where the list's first row is, and the distance between rows.
 const LIST_Y: f32 = 320.0;
 const LIST_PITCH: f32 = 84.0;
+/// How far above the bottom the "Opens with…" footer's baseline is: at 960 on a 1080 canvas.
+const FOOTER_FROM_BOTTOM: f32 = 120.0;
 
 impl PauseMenu {
-    /// Everything but the dimmed Game behind: the panel and what the current view shows.
+    /// Everything but the dimmed Game behind: the panel, full height (`ui::h`), and what the
+    /// current view shows. The list and the slots hang from the top, the footer keeps its distance
+    /// from the bottom and the restart dialog stays centred (ADR 0018).
     fn draw_panel(&mut self, gfx: &mut Gfx<'_>) {
-        gfx.fill_rect(Rect::new(0.0, 0.0, 600.0, H), SURFACE.alpha(0.94));
-        gfx.fill_rect(Rect::new(600.0, 0.0, 1.0, H), LINE);
+        gfx.fill_rect(Rect::new(0.0, 0.0, 600.0, ui::h()), SURFACE.alpha(0.94));
+        gfx.fill_rect(Rect::new(600.0, 0.0, 1.0, ui::h()), LINE);
         let mut x = M;
         for c in "PAUSED".chars() {
             let style = TextStyle::new(15, Weight::Bold, ACCENT);
@@ -454,7 +464,7 @@ impl PauseMenu {
         let footer = TextStyle::new(16, Weight::Medium, DIM);
         gfx.text(
             M,
-            960.0,
+            ui::h() - FOOTER_FROM_BOTTOM,
             "Opens with Guide, Select + Start, or Esc",
             footer,
             Align::Left,
@@ -667,11 +677,14 @@ mod tests {
         assert_eq!(menu.unavailable_note, None);
     }
 
-    /// ADR 0020: over a Game on a 1920×1200 window, the Pause Menu keeps its 1920×1080 layout,
-    /// centred, and its backdrop dims the whole window, the picture above and below the canvas too.
+    /// ADR 0020: over a Game on a 1920×1200 window, the Pause Menu fills the screen like every
+    /// other menu (ADR 0018): its backdrop dims the whole window, its side panel runs from the top
+    /// to the hint bar, and the hint bar sits at the very bottom.
     #[test]
-    fn the_pause_menus_backdrop_dims_the_whole_window_over_a_tall_game() {
+    fn the_pause_menu_fills_a_tall_window_over_a_game() {
+        use crate::ui::chrome::{self, HINTBAR_H};
         use crate::ui::gfx::tests::{Shot, offscreen_canvas};
+        use crate::ui::input::{ButtonStyle, InputKind};
         use crate::ui::text::Fonts;
 
         let _serial = crate::libretro::tests::serial();
@@ -679,25 +692,48 @@ mod tests {
         let (_sdl, canvas) = offscreen_canvas(1920, 1200);
         let creator = canvas.texture_creator();
         let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
-        gfx.fit(true);
-        // The picture of a Game filling the window.
+        gfx.fit();
+        assert_eq!(ui::h(), 1200.0, "the canvas is as tall as the window");
+        // The picture of a Game filling the window, then the Pause Menu and its hint bar, as
+        // `app.rs` draws them.
         gfx.clear(Colour::hex(0xffffff));
         let mut menu = PauseMenu::new("Chrono Trigger", "SNES · 0h 01m played".into(), vec![None]);
         menu.draw(&mut gfx, &Ctx::empty());
+        let hints = menu.hints();
+        chrome::hintbar(
+            &mut gfx,
+            &hints,
+            InputKind::Keyboard,
+            ButtonStyle::default(),
+            None,
+        );
         let shot = Shot::take(&mut gfx, dir.path());
+        assert_eq!((shot.w, shot.h), (1920, 1200), "the shot is the whole window");
         let dimmed = Colour::hex(0xffffff).r as f32 * (1.0 - BACKDROP);
-        for (x, y) in [(1000, 0), (1000, 30), (1919, 1199), (1000, 1170), (1000, 600)] {
-            let [r, g, b] = shot.at(x, y);
-            assert!(
-                [r, g, b].iter().all(|&c| (c as f32 - dimmed).abs() <= 2.0),
-                "dimmed at ({x}, {y}): {:?}",
-                [r, g, b]
-            );
+        let is_dimmed = |x, y| shot.at(x, y).iter().all(|&c| (c as f32 - dimmed).abs() <= 2.0);
+        let above_bar = 1199 - HINTBAR_H as u32 - 2;
+        for (x, y) in [(1000, 0), (1919, 0), (1000, 600), (1919, above_bar)] {
+            assert!(is_dimmed(x, y), "dimmed at ({x}, {y}): {:?}", shot.at(x, y));
         }
-        // The side panel spans the 1080-tall canvas, 60 pixels down, not the whole window.
+        // The side panel runs the whole height, from the window's top to the hint bar.
         let panel = shot.at(300, 600);
         assert_ne!(panel, shot.at(1000, 600), "the panel");
-        assert_eq!(shot.at(300, 61), panel, "the panel's top, on the canvas");
-        assert_ne!(shot.at(300, 30), panel, "above the canvas, no panel");
+        for y in [0, 30, 1100, above_bar] {
+            assert_eq!(shot.at(300, y), panel, "the panel at y {y}");
+        }
+        // The hint bar at the very bottom of the window, across its width.
+        for (x, y) in [
+            (300, 1199),
+            (1000, 1199),
+            (1919, 1199),
+            (1000, 1199 - HINTBAR_H as u32 + 4),
+        ] {
+            assert!(
+                !is_dimmed(x, y),
+                "the hint bar at ({x}, {y}): {:?}",
+                shot.at(x, y)
+            );
+            assert_ne!(shot.at(x, y), panel, "the hint bar, not the panel, at ({x}, {y})");
+        }
     }
 }

@@ -216,7 +216,8 @@ shot m6-settings-key "$root/cfg.toml" "settings,down,right,confirm,text:abcdef01
 shot m6-settings-games-root "$root/cfg.toml" "settings,right,confirm"
 
 # 16:10: the menus fill a 1920x1200 window (as on a 1920x1200 laptop); each shot repeats the 1080
-# shot named in its comment. A running Game's picture fills the window's height or width (ADR 0020),
+# shot named in its comment. A running Game's picture fills the window's height or width and its
+# Pause Menu fills the window like the menus (ADR 0020),
 # DS and 3DS Large and small laid out by Game37. Last, so the shared games dir is as the shots above left it (the Pause Menu shot
 # overwrites slot 1, which m3-pause-saved already filled).
 tall=(--size 1920x1200)
@@ -257,8 +258,8 @@ shot tall-ds "$root/cfg.toml" "nexttab,right,right,right,right,right,right,right
 shot tall-3ds "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..9}),confirm,confirm,confirm" --frames 600 \
     "${tall[@]}"                                                                         # m8-3ds
 [ ! -e "$root/missing.toml" ] || echo "FAIL $root/missing.toml exists, so the no-Config shots had a Config"
-# The menus take the window's height, and a Game's shot is the whole window, its picture filling the
-# height past the 1920x1080 Pause Menu (FR-UI-6, ADR 0020): the PNGs are half size.
+# The menus take the window's height, and so does the Pause Menu over a Game, whose picture fills the
+# height too (FR-UI-6, ADR 0020): the PNGs are half size.
 size_is() { [ "$(magick identify -format '%wx%h' "$out/$1.png" 2>/dev/null)" = "$2" ] || echo "FAIL $1 is not $2"; }
 size_is tall-home 960x600
 size_is tall-pause-saved 960x600

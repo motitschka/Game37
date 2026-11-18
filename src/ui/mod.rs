@@ -1,8 +1,8 @@
 //! The custom-drawn, controller-first UI (ADR 0002): drawing, text, input and screen navigation.
 //!
-//! All layout uses the logical coordinates of the mockups in `design/mockups/`: 1920 wide and, for
-//! the menus, as tall as the window's shape asks ([`h`], 1080 to 1440), so they fill a 16:10 screen.
-//! A running Game and what is drawn over it stay at 1920×1080.
+//! All layout uses the logical coordinates of the mockups in `design/mockups/`: 1920 wide and as
+//! tall as the window's shape asks ([`h`], 1080 to 1440), so the menus, and the Pause Menu and
+//! messages over a running Game, fill a 16:10 screen. A Game's picture is drawn in window pixels.
 
 pub mod anim;
 pub mod chrome;
@@ -22,7 +22,7 @@ use std::cell::Cell;
 
 /// Logical screen width.
 pub const W: f32 = 1920.0;
-/// Logical screen height of the mockups and of a running Game, and the least the menus get: see [`h`].
+/// Logical screen height of the mockups, and the least the menus get: see [`h`].
 pub const H: f32 = 1080.0;
 /// The tallest the menus get (4:3); a taller window is letterboxed.
 pub const MAX_H: f32 = 1440.0;
@@ -35,9 +35,9 @@ thread_local! {
     static HEIGHT: Cell<f32> = const { Cell::new(H) };
 }
 
-/// The logical height of the canvas this frame: [`H`] for a running Game and what is drawn over
-/// it, and for the menus as tall as the window's shape asks ([`logical_height`]). Bottom-anchored
-/// layout follows it; top-anchored layout stays at the mockups' coordinates.
+/// The logical height of the canvas this frame: as tall as the window's shape asks
+/// ([`logical_height`]), for the menus and for what is drawn over a running Game alike.
+/// Bottom-anchored layout follows it; top-anchored layout stays at the mockups' coordinates.
 pub fn h() -> f32 {
     HEIGHT.with(Cell::get)
 }

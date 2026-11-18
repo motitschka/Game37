@@ -142,7 +142,8 @@ The Switch controller in PlayStation Games is checked in section 5.
 ## 12. Games fill the screen (ADR 0020)
 
 - [ ] On a 1920×1200 screen, fullscreen: a 4:3 Game (e.g. SNES, PS1) fills the whole height, with bars
-      only at the sides; its Pause Menu sits in the middle over a picture dimmed to every edge.
+      only at the sides; its Pause Menu fills the screen, the side panel from top to bottom and the
+      hint bar at the very bottom, over a picture dimmed to every edge.
 - [ ] DS in Large and small on that screen: the large screen fills the height and the small one sits at
       the bottom right, with no bars; R3 and Tab swap them, and the mouse and the right-stick cursor
       touch the touch screen whether it is drawn large or small.

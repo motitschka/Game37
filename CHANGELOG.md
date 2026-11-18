@@ -38,8 +38,9 @@
 - **Games fill the screen's height or its width:** a Game's picture is now as large as the screen
   allows at its own aspect ratio, with bars only on the other two sides. On a 1920×1200 screen a 4:3
   Game is 1600×1200 instead of 1440×1080 with bars all round, and on a screen wider than 16:9 a wide
-  picture (DS side by side) fills the width. The Pause Menu and messages keep their size, centred, and
-  dim the whole screen. On a 16:9 screen Games look as before.
+  picture (DS side by side) fills the width. The Pause Menu and messages over a Game fill the screen
+  like every other menu, its side panel full height and the hint bar at the very bottom, and dim the
+  whole screen. On a 16:9 screen Games look as before.
 - **DS and 3DS Large and small fill the screen too:** the large screen is as tall as the screen and the
   small one sits at its bottom right in the width left over, three to six times smaller, following the
   window as it is resized or goes fullscreen. On a 1920×1200 screen a DS's large screen is 1600×1200.

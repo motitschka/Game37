@@ -345,7 +345,7 @@ pub fn keyboard_stick(down: impl Fn(Scancode) -> bool, stick_dpad: bool) -> (i16
     )
 }
 
-/// The mouse this frame: where it is, in logical 1920×1080 coordinates, and whether its left
+/// The mouse this frame: where it is, in logical coordinates (1920 wide, `ui::h` tall), and whether its left
 /// button is held.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Mouse {

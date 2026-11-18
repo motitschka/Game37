@@ -331,17 +331,6 @@ impl FullscreenRequest {
     }
 }
 
-/// The logical height to draw at in a window `pixel_w`×`pixel_h` pixels: what is drawn over a
-/// running Game keeps the mockups' 1080 (the Game's picture is drawn in window pixels), the menus
-/// fill the window's shape.
-fn fit_height(game: bool, pixel_w: u32, pixel_h: u32) -> u32 {
-    if game {
-        super::H as u32
-    } else {
-        super::logical_height(pixel_w, pixel_h)
-    }
-}
-
 /// `r`, in window pixels, in logical coordinates, for a logical canvas drawn at `canvas` (window
 /// pixels, 1920 logical pixels wide): as SDL converts the mouse ([`Gfx::to_logical`]). Outside the
 /// canvas that is below 0 or past its width and height.
@@ -561,14 +550,14 @@ impl<'tc> Gfx<'tc> {
         }
     }
 
-    /// Sets the logical size for this frame from the window's size in pixels: 1920×1080 for a
-    /// running Game (`game`), so the Pause Menu and messages over it look as on a 16:9 screen (the
-    /// Game's picture fills the window: [`Gfx::draw_game_frame`]); for the menus 1920
-    /// wide and as tall as the window's shape asks, so they fill a 16:10 screen. Sets `ui::h` to
-    /// match. Call it before drawing a frame and before converting the mouse.
-    pub fn fit(&mut self, game: bool) {
+    /// Sets the logical size for this frame from the window's size in pixels: 1920 wide and as
+    /// tall as the window's shape asks ([`super::logical_height`]), so the menus fill a 16:10
+    /// screen, and so do the Pause Menu and the messages over a running Game, whose picture is
+    /// drawn in window pixels ([`Gfx::draw_game_frame`]). Sets `ui::h` to match. Call it before
+    /// drawing a frame and before converting the mouse.
+    pub fn fit(&mut self) {
         let (w, h) = self.output_size();
-        let logical_h = fit_height(game, w, h);
+        let logical_h = super::logical_height(w, h);
         if logical_h != self.logical_h
             && self
                 .canvas
@@ -1305,14 +1294,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_running_game_keeps_1080_and_the_menus_fill_the_window() {
-        assert_eq!(fit_height(true, 1920, 1200), 1080);
-        assert_eq!(fit_height(true, 1024, 768), 1080);
-        assert_eq!(fit_height(false, 1920, 1200), 1200);
-        assert_eq!(fit_height(false, 1920, 1080), 1080);
-    }
-
-    #[test]
     fn window_modes_cycle_both_ways_and_wrap() {
         use WindowMode::{AlwaysFullscreen, AlwaysWindowed, RememberLast};
         let all = [RememberLast, AlwaysFullscreen, AlwaysWindowed];
@@ -1575,8 +1556,8 @@ pub(crate) mod tests {
         assert_eq!(window_to_logical(picture, Rect::new(0.0, 0.0, 0.0, 0.0)), picture);
     }
 
-    /// ADR 0020 on a 1920×1200 window: a 4:3 Game's picture is 1600×1200, past the 1920×1080
-    /// canvas, as the renderer shows it; a click anywhere on it touches, mapped from the same rect.
+    /// ADR 0020 on a 1920×1200 window: a 4:3 Game's picture is 1600×1200, top to bottom, as the
+    /// renderer shows it; a click anywhere on it touches, mapped from the same rect.
     #[test]
     fn a_games_picture_fills_a_tall_window_and_the_mouse_touches_all_of_it() {
         use crate::session::input::{Mouse, touch};
@@ -1587,8 +1568,8 @@ pub(crate) mod tests {
         let (_sdl, canvas) = offscreen_canvas(1920, 1200);
         let creator = canvas.texture_creator();
         let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
-        gfx.fit(true);
-        assert_eq!((gfx.h(), gfx.window_size()), (1080.0, (1920.0, 1200.0)));
+        gfx.fit();
+        assert_eq!((gfx.h(), gfx.window_size()), (1200.0, (1920.0, 1200.0)));
 
         // A red 4:3 frame (XRGB8888: B, G, R, X).
         let frame = libretro::Frame {
@@ -1629,18 +1610,10 @@ pub(crate) mod tests {
             touch(logical_picture, mouse).map(|p| (p.x, p.y))
         };
         assert_eq!(click(960.0, 600.0), Some((0, 0)), "the window's centre");
-        assert_eq!(
-            click(160.0, 0.0),
-            Some((-0x7fff, -0x7fff)),
-            "the top left, above the canvas"
-        );
-        assert_eq!(
-            click(1760.0, 1200.0),
-            Some((0x7fff, 0x7fff)),
-            "the bottom right, below it"
-        );
+        assert_eq!(click(160.0, 0.0), Some((-0x7fff, -0x7fff)), "the top left");
+        assert_eq!(click(1760.0, 1200.0), Some((0x7fff, 0x7fff)), "the bottom right");
         assert_eq!(click(560.0, 900.0), Some((-0x4000, 0x4000)));
-        assert!(click(960.0, 30.0).is_some(), "above the canvas, on the picture");
+        assert!(click(960.0, 30.0).is_some(), "near the top, on the picture");
         assert_eq!(click(100.0, 600.0), None, "in the black bar");
         assert_eq!(click(1800.0, 30.0), None, "the other bar");
     }
