@@ -99,7 +99,9 @@ The owner's `~/.config/game37/secrets.toml` holds a real SteamGridDB key (mode 6
   folder's name as its Display Title.
 - **UI:** everything is drawn by hand on SDL_Renderer (OpenGL backend) at a logical 1920 wide and
   1080 to 1440 tall: the menus follow the window's shape (`ui::h()`, set each frame by `Gfx::fit`;
-  FR-UI-6, ADR 0018), a running Game stays at 1920×1080. The
+  FR-UI-6, ADR 0018); the Pause Menu and messages over a running Game stay at 1920×1080, centred,
+  while the Game's picture fills the window's height or width at its own aspect ratio, drawn in
+  window pixels past that canvas (ADR 0020). The
   font is Adwaita Sans, found via `fc-match`. Keyboard: arrows, Enter/Space confirm, Esc/Backspace
   back, Q/E/Tab switch tabs, F options, S sort, F11 fullscreen. The controller's Start is
   `Action::Start` (saves a text field).

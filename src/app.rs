@@ -644,7 +644,8 @@ const RISE: f32 = 16.0;
 
 /// Draws a frame (without presenting it) and returns where its clickable chrome went.
 fn draw(gfx: &mut Gfx<'_>, nav: &mut Nav, ctx: &Ctx, view: &View, clock: &str) -> Hits {
-    // A running Game (no chrome) stays at 1080; the menus fill the window.
+    // Over a running Game (no chrome) the canvas stays at 1080, the Game's picture filling the
+    // window around it; the menus fill the window.
     gfx.fit(!nav.base().chrome());
     if !nav.base().chrome() {
         gfx.clear(BLACK);

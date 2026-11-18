@@ -253,9 +253,10 @@ shot tall-pause-saved "$root/cfg.toml" \
     "nexttab,right,right,confirm,confirm,confirm,wait:120,back,down,confirm,confirm,confirm" \
     "${tall[@]}"                                                                         # m3-pause-saved
 [ ! -e "$root/missing.toml" ] || echo "FAIL $root/missing.toml exists, so the no-Config shots had a Config"
-# The menus take the window's height, a Game keeps 1920x1080 (FR-UI-6): the PNGs are half size.
+# The menus take the window's height, and a Game's shot is the whole window, its picture filling the
+# height past the 1920x1080 Pause Menu (FR-UI-6, ADR 0020): the PNGs are half size.
 size_is() { [ "$(magick identify -format '%wx%h' "$out/$1.png" 2>/dev/null)" = "$2" ] || echo "FAIL $1 is not $2"; }
 size_is tall-home 960x600
-size_is tall-pause-saved 960x540
+size_is tall-pause-saved 960x600
 
 echo "screenshots in $out"

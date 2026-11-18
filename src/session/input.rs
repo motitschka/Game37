@@ -1078,7 +1078,7 @@ mod tests {
         assert_eq!(input.stick(0, Stick::Right), (0, 0));
     }
 
-    /// A 4:3 picture pillarboxed in the logical screen, as `timing::fit` places it.
+    /// A 4:3 picture pillarboxed in a 1920×1080 window, as `timing::fit` places it.
     const PICTURE: Rect = Rect::new(240.0, 0.0, 1440.0, 1080.0);
 
     fn at(x: f32, y: f32, left: bool) -> Mouse {

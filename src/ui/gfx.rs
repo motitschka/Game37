@@ -1,6 +1,7 @@
 //! All drawing goes through [`Gfx`], so the SDL_Renderer backend can be swapped without touching
 //! screens. Coordinates are logical pixels, 1920 wide and [`Gfx::h`] tall, letterboxed into the
-//! window: see [`Gfx::fit`].
+//! window: see [`Gfx::fit`]. A running Game's picture and the backdrops over it are drawn in window
+//! pixels instead, so they reach past the logical canvas to the window's edges (ADR 0020).
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -330,14 +331,65 @@ impl FullscreenRequest {
     }
 }
 
-/// The logical height to draw at in a window `pixel_w`×`pixel_h` pixels: a running Game (and what
-/// is drawn over it) keeps the mockups' 1080, the menus fill the window's shape.
+/// The logical height to draw at in a window `pixel_w`×`pixel_h` pixels: what is drawn over a
+/// running Game keeps the mockups' 1080 (the Game's picture is drawn in window pixels), the menus
+/// fill the window's shape.
 fn fit_height(game: bool, pixel_w: u32, pixel_h: u32) -> u32 {
     if game {
         super::H as u32
     } else {
         super::logical_height(pixel_w, pixel_h)
     }
+}
+
+/// `r`, in window pixels, in logical coordinates, for a logical canvas drawn at `canvas` (window
+/// pixels, 1920 logical pixels wide): as SDL converts the mouse ([`Gfx::to_logical`]). Outside the
+/// canvas that is below 0 or past its width and height.
+fn window_to_logical(r: Rect, canvas: Rect) -> Rect {
+    if canvas.w <= 0.0 {
+        return r;
+    }
+    let scale = canvas.w / super::W;
+    Rect::new(
+        (r.x - canvas.x) / scale,
+        (r.y - canvas.y) / scale,
+        r.w / scale,
+        r.h / scale,
+    )
+}
+
+/// Where `canvas`'s logical canvas is drawn in its window, in window pixels.
+fn canvas_rect(canvas: &WindowCanvas) -> Rect {
+    let mut r = sdl3::sys::rect::SDL_FRect {
+        x: 0.0,
+        y: 0.0,
+        w: 0.0,
+        h: 0.0,
+    };
+    // SAFETY: the renderer is alive for as long as `canvas`.
+    unsafe { sdl3::sys::render::SDL_GetRenderLogicalPresentationRect(canvas.raw(), &mut r) };
+    Rect::new(r.x, r.y, r.w, r.h)
+}
+
+/// Runs `f` on `canvas` drawing in window pixels: SDL clips what is drawn in logical coordinates to
+/// the logical canvas, so its logical presentation is off while `f` runs and back as it was after.
+/// `f` gets `layer` in window pixels.
+fn in_window_pixels<T>(
+    canvas: &mut WindowCanvas,
+    layer: Layer,
+    f: impl FnOnce(&mut WindowCanvas, Layer) -> T,
+) -> T {
+    let scale = canvas_rect(canvas).w / super::W;
+    let layer = Layer {
+        dx: layer.dx * scale,
+        dy: layer.dy * scale,
+        opacity: layer.opacity,
+    };
+    let (w, h, mode) = canvas.logical_size();
+    let _ = canvas.set_logical_size(0, 0, SDL_RendererLogicalPresentation::DISABLED);
+    let out = f(canvas, layer);
+    let _ = canvas.set_logical_size(w, h, mode);
+    out
 }
 
 struct GameTexture<'tc> {
@@ -485,15 +537,13 @@ impl<'tc> Gfx<'tc> {
     }
 
     /// Sets the logical size for this frame from the window's size in pixels: 1920×1080 for a
-    /// running Game (`game`), so it and the Pause Menu look as on a 16:9 screen; for the menus 1920
+    /// running Game (`game`), so the Pause Menu and messages over it look as on a 16:9 screen (the
+    /// Game's picture fills the window: [`Gfx::draw_game_frame`]); for the menus 1920
     /// wide and as tall as the window's shape asks, so they fill a 16:10 screen. Sets `ui::h` to
     /// match. Call it before drawing a frame and before converting the mouse.
     pub fn fit(&mut self, game: bool) {
-        let (mut w, mut h) = (0, 0);
-        // SAFETY: the renderer is alive for as long as `self.canvas`. Not the "Current" variant,
-        // which follows a render target: the window's own size is wanted.
-        unsafe { sdl3::sys::render::SDL_GetRenderOutputSize(self.canvas.raw(), &mut w, &mut h) };
-        let logical_h = fit_height(game, w.max(0) as u32, h.max(0) as u32);
+        let (w, h) = self.output_size();
+        let logical_h = fit_height(game, w, h);
         if logical_h != self.logical_h
             && self
                 .canvas
@@ -508,6 +558,27 @@ impl<'tc> Gfx<'tc> {
     /// The logical height this frame is drawn at (`ui::h`).
     pub fn h(&self) -> f32 {
         self.logical_h as f32
+    }
+
+    /// The window's size in pixels.
+    fn output_size(&self) -> (u32, u32) {
+        let (mut w, mut h) = (0, 0);
+        // SAFETY: the renderer is alive for as long as `self.canvas`. Not the "Current" variant,
+        // which follows a render target: the window's own size is wanted.
+        unsafe { sdl3::sys::render::SDL_GetRenderOutputSize(self.canvas.raw(), &mut w, &mut h) };
+        (w.max(0) as u32, h.max(0) as u32)
+    }
+
+    /// The window's size in pixels, which a running Game's picture is fitted to (ADR 0020).
+    pub fn window_size(&self) -> (f32, f32) {
+        let (w, h) = self.output_size();
+        (w as f32, h as f32)
+    }
+
+    /// Converts a rect in window pixels, such as a Game's picture, to logical coordinates, as
+    /// [`Gfx::to_logical`] converts the mouse.
+    pub fn to_logical_rect(&self, r: Rect) -> Rect {
+        window_to_logical(r, canvas_rect(&self.canvas))
     }
 
     /// Copies a Core's video frame into the game texture, remaking it when the frame's size or
@@ -572,14 +643,15 @@ impl<'tc> Gfx<'tc> {
         (!context.is_null()).then(|| (self.canvas.window().clone(), context))
     }
 
-    /// Draws the game texture stretched over `r`.
+    /// Draws the game texture stretched over `r`, in window pixels: a Game's picture fills the
+    /// window's height or width, past the logical canvas (ADR 0020).
     pub fn draw_game_frame(&mut self, r: Rect) {
-        let layer = self.layer;
-        if let Some(game) = &mut self.game {
+        let Some(game) = &mut self.game else { return };
+        in_window_pixels(&mut self.canvas, self.layer, |canvas, layer| {
             game.texture.set_alpha_mod(layer.alpha(255));
-            let _ = self.canvas.copy(&game.texture, None, layer.rect(r));
+            let _ = canvas.copy(&game.texture, None, layer.rect(r));
             game.texture.set_alpha_mod(255);
-        }
+        });
     }
 
     /// Sets the image drawn for `key` from RGB pixels, or forgets it for `None`.
@@ -756,6 +828,16 @@ impl<'tc> Gfx<'tc> {
         self.canvas
             .set_draw_color(sdl3::pixels::Color::RGBA(c.r, c.g, c.b, c.a));
         self.canvas.clear();
+    }
+
+    /// Fills the whole window with `c`, past the logical canvas too: a backdrop over everything
+    /// drawn so far, a running Game's picture included wherever it shows (ADR 0020).
+    pub fn fill_window(&mut self, c: Colour) {
+        let (w, h) = self.window_size();
+        in_window_pixels(&mut self.canvas, self.layer, |canvas, layer| {
+            canvas.set_draw_color(sdl3::pixels::Color::RGBA(c.r, c.g, c.b, layer.alpha(c.a)));
+            let _ = canvas.fill_rect(FRect::new(layer.dx, layer.dy, w, h));
+        });
     }
 
     pub fn fill_rect(&mut self, r: Rect, c: Colour) {
@@ -1080,9 +1162,11 @@ impl<'tc> Gfx<'tc> {
         self.pictures.end_frame();
     }
 
-    /// Writes the current frame (before `present`) as a BMP.
-    pub fn save_bmp(&self, path: &Path) -> Result<(), String> {
-        let surface = self.canvas.read_pixels(None).map_err(|e| e.to_string())?;
+    /// Writes the current frame (before `present`) as a BMP: the whole window, a running Game's
+    /// picture past the logical canvas included.
+    pub fn save_bmp(&mut self, path: &Path) -> Result<(), String> {
+        let surface = in_window_pixels(&mut self.canvas, self.layer, |canvas, _| canvas.read_pixels(None))
+            .map_err(|e| e.to_string())?;
         surface.save_bmp(path).map_err(|e| e.to_string())
     }
 
@@ -1148,7 +1232,7 @@ impl<'tc> Gfx<'tc> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// #50: two F11 presses before the window follows the first end where they started, and a
@@ -1354,5 +1438,141 @@ mod tests {
         assert_eq!((y, h), (0.0, 620.0));
         assert!((w - 620.0 * 16.0 / 9.0).abs() < 1e-2, "{w}");
         assert!((x + w / 2.0 - 960.0).abs() < 1e-2, "{x}");
+    }
+
+    /// A hidden offscreen window `w`×`h` pixels with a software renderer drawing in logical
+    /// 1920×1080, as `app::canvas` sets it up. SDL must outlive the canvas. Hold
+    /// `libretro::tests::serial()` while it lives, so no other test has SDL up at the same time.
+    pub(crate) fn offscreen_canvas(w: u32, h: u32) -> (sdl3::Sdl, WindowCanvas) {
+        sdl3::hint::set("SDL_VIDEO_DRIVER", "offscreen");
+        let sdl = sdl3::init().unwrap();
+        let window = sdl.video().unwrap().window("gfx", w, h).hidden().build().unwrap();
+        let mut canvas = sdl3::render::create_renderer(window, Some(c"software")).unwrap();
+        canvas
+            .set_logical_size(1920, 1080, SDL_RendererLogicalPresentation::LETTERBOX)
+            .unwrap();
+        canvas.set_blend_mode(BlendMode::Blend);
+        (sdl, canvas)
+    }
+
+    /// The window `gfx` shows, read back as RGB.
+    pub(crate) struct Shot {
+        pub w: u32,
+        pub h: u32,
+        pitch: usize,
+        rgb: Vec<u8>,
+    }
+
+    impl Shot {
+        /// Saves what `gfx` shows as a BMP in `dir` and reads it back.
+        pub(crate) fn take(gfx: &mut Gfx<'_>, dir: &Path) -> Shot {
+            let at = dir.join("shot.bmp");
+            gfx.save_bmp(&at).unwrap();
+            let shot = sdl3::surface::Surface::load_bmp(&at)
+                .unwrap()
+                .convert_format(sdl3::pixels::PixelFormat::RGB24)
+                .unwrap();
+            Shot {
+                w: shot.width(),
+                h: shot.height(),
+                pitch: shot.pitch() as usize,
+                rgb: shot.with_lock(<[u8]>::to_vec),
+            }
+        }
+
+        pub(crate) fn at(&self, x: u32, y: u32) -> [u8; 3] {
+            let i = y as usize * self.pitch + x as usize * 3;
+            [self.rgb[i], self.rgb[i + 1], self.rgb[i + 2]]
+        }
+    }
+
+    #[test]
+    fn a_rect_in_window_pixels_converts_to_logical_coordinates() {
+        // 1920×1200: the 1920×1080 canvas 60 pixels down.
+        let canvas = Rect::new(0.0, 60.0, 1920.0, 1080.0);
+        let picture = Rect::new(160.0, 0.0, 1600.0, 1200.0);
+        assert_eq!(
+            window_to_logical(picture, canvas),
+            Rect::new(160.0, -60.0, 1600.0, 1200.0)
+        );
+        // 1280×720: the canvas fills the window at 2/3 scale.
+        let canvas = Rect::new(0.0, 0.0, 1280.0, 720.0);
+        let picture = Rect::new(160.0, 0.0, 960.0, 720.0);
+        assert_eq!(
+            window_to_logical(picture, canvas),
+            Rect::new(240.0, 0.0, 1440.0, 1080.0)
+        );
+        // A minimized window has no canvas.
+        assert_eq!(window_to_logical(picture, Rect::new(0.0, 0.0, 0.0, 0.0)), picture);
+    }
+
+    /// ADR 0020 on a 1920×1200 window: a 4:3 Game's picture is 1600×1200, past the 1920×1080
+    /// canvas, as the renderer shows it; a click anywhere on it touches, mapped from the same rect.
+    #[test]
+    fn a_games_picture_fills_a_tall_window_and_the_mouse_touches_all_of_it() {
+        use crate::session::input::{Mouse, touch};
+        use crate::session::timing;
+
+        let _serial = crate::libretro::tests::serial();
+        let dir = tempfile::TempDir::new().unwrap();
+        let (_sdl, canvas) = offscreen_canvas(1920, 1200);
+        let creator = canvas.texture_creator();
+        let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
+        gfx.fit(true);
+        assert_eq!((gfx.h(), gfx.window_size()), (1080.0, (1920.0, 1200.0)));
+
+        // A red 4:3 frame (XRGB8888: B, G, R, X).
+        let frame = libretro::Frame {
+            width: 4,
+            height: 3,
+            pitch: 16,
+            format: libretro::PixelFormat::Xrgb8888,
+            data: [0x00, 0x00, 0xff, 0xff].repeat(12),
+        };
+        gfx.upload_game_frame(&frame);
+        gfx.clear(Colour::hex(0x000000));
+        let picture = timing::fit(4.0 / 3.0, gfx.window_size());
+        gfx.draw_game_frame(picture);
+        let shot = Shot::take(&mut gfx, dir.path());
+        assert_eq!((shot.w, shot.h), (1920, 1200), "the shot is the whole window");
+        let (red, black) = ([0xff, 0, 0], [0, 0, 0]);
+        for (x, y) in [
+            (160, 0),
+            (1759, 0),
+            (160, 1199),
+            (1759, 1199),
+            (960, 30),
+            (960, 1170),
+        ] {
+            assert_eq!(shot.at(x, y), red, "the picture at ({x}, {y})");
+        }
+        for (x, y) in [(159, 600), (1760, 600), (0, 0), (1919, 1199)] {
+            assert_eq!(shot.at(x, y), black, "the bar at ({x}, {y})");
+        }
+
+        // The mouse, in window coordinates as SDL reports it, converted as `app.rs` converts it.
+        let logical_picture = gfx.to_logical_rect(picture);
+        let click = |x, y| {
+            let mouse = Mouse {
+                at: Some(gfx.to_logical(x, y)),
+                left: true,
+            };
+            touch(logical_picture, mouse).map(|p| (p.x, p.y))
+        };
+        assert_eq!(click(960.0, 600.0), Some((0, 0)), "the window's centre");
+        assert_eq!(
+            click(160.0, 0.0),
+            Some((-0x7fff, -0x7fff)),
+            "the top left, above the canvas"
+        );
+        assert_eq!(
+            click(1760.0, 1200.0),
+            Some((0x7fff, 0x7fff)),
+            "the bottom right, below it"
+        );
+        assert_eq!(click(560.0, 900.0), Some((-0x4000, 0x4000)));
+        assert!(click(960.0, 30.0).is_some(), "above the canvas, on the picture");
+        assert_eq!(click(100.0, 600.0), None, "in the black bar");
+        assert_eq!(click(1800.0, 30.0), None, "the other bar");
     }
 }

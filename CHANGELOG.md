@@ -35,6 +35,11 @@
 - **Show Playtime** in Settings → Display: Off, Grids (default) or Grids and Home.
 
 ### Changed
+- **Games fill the screen's height or its width:** a Game's picture is now as large as the screen
+  allows at its own aspect ratio, with bars only on the other two sides. On a 1920×1200 screen a 4:3
+  Game is 1600×1200 instead of 1440×1080 with bars all round, and on a screen wider than 16:9 a wide
+  picture (DS side by side) fills the width. The Pause Menu and messages keep their size, centred, and
+  dim the whole screen. On a 16:9 screen Games look as before.
 - **Shelves wrap on a press, not while held:** Right on a Shelf's last item goes round to its first Game and Left on the first goes to the last, but holding Left or Right stops at the end.
 - **Artwork is searched by the file name, not the Display Title.** Renaming a Game in Game37 now only
   changes the name shown, and its cover and hero stay. To get different Artwork, rename the file, or

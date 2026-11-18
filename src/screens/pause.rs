@@ -266,7 +266,7 @@ impl PauseMenu {
     /// The "Restart the Game?" dialog, over the Pause Menu's list, laid out like
     /// `screens::confirm::Confirm`.
     fn draw_restart_confirm(&mut self, gfx: &mut Gfx<'_>) {
-        gfx.fill_rect(Rect::new(0.0, 0.0, W, H), Colour::hex(0x000000).alpha(0.62));
+        gfx.fill_window(Colour::hex(0x000000).alpha(0.62));
         let title_style = TextStyle::new(34, Weight::Bold, TEXT);
         let body_style = TextStyle::new(22, Weight::Regular, MUTED);
         let lines = gfx.wrap(RESTART_TITLE, title_style, CONFIRM_PANEL_W - 2.0 * CONFIRM_PAD);
@@ -376,10 +376,8 @@ impl Screen for PauseMenu {
         }
         self.appear.set(1.0);
         let t = self.appear.step(ctx.animate, FADE_TAU);
-        gfx.fill_rect(
-            Rect::new(0.0, 0.0, W, H),
-            Colour::hex(0x000000).alpha(BACKDROP * t),
-        );
+        // The whole window: the Game's picture reaches past the 1920×1080 canvas (ADR 0020).
+        gfx.fill_window(Colour::hex(0x000000).alpha(BACKDROP * t));
         let layer = Layer {
             dx: -(1.0 - t) * SLIDE_IN,
             dy: 0.0,
@@ -667,5 +665,39 @@ mod tests {
         let menu = PauseMenu::new("T", String::new(), vec![None, None, None]);
         assert_eq!(menu.available, [true; 5]);
         assert_eq!(menu.unavailable_note, None);
+    }
+
+    /// ADR 0020: over a Game on a 1920×1200 window, the Pause Menu keeps its 1920×1080 layout,
+    /// centred, and its backdrop dims the whole window, the picture above and below the canvas too.
+    #[test]
+    fn the_pause_menus_backdrop_dims_the_whole_window_over_a_tall_game() {
+        use crate::ui::gfx::tests::{Shot, offscreen_canvas};
+        use crate::ui::text::Fonts;
+
+        let _serial = crate::libretro::tests::serial();
+        let dir = tempfile::TempDir::new().unwrap();
+        let (_sdl, canvas) = offscreen_canvas(1920, 1200);
+        let creator = canvas.texture_creator();
+        let mut gfx = Gfx::new(canvas, &creator, Fonts::new().unwrap());
+        gfx.fit(true);
+        // The picture of a Game filling the window.
+        gfx.clear(Colour::hex(0xffffff));
+        let mut menu = PauseMenu::new("Chrono Trigger", "SNES · 0h 01m played".into(), vec![None]);
+        menu.draw(&mut gfx, &Ctx::empty());
+        let shot = Shot::take(&mut gfx, dir.path());
+        let dimmed = Colour::hex(0xffffff).r as f32 * (1.0 - BACKDROP);
+        for (x, y) in [(1000, 0), (1000, 30), (1919, 1199), (1000, 1170), (1000, 600)] {
+            let [r, g, b] = shot.at(x, y);
+            assert!(
+                [r, g, b].iter().all(|&c| (c as f32 - dimmed).abs() <= 2.0),
+                "dimmed at ({x}, {y}): {:?}",
+                [r, g, b]
+            );
+        }
+        // The side panel spans the 1080-tall canvas, 60 pixels down, not the whole window.
+        let panel = shot.at(300, 600);
+        assert_ne!(panel, shot.at(1000, 600), "the panel");
+        assert_eq!(shot.at(300, 61), panel, "the panel's top, on the canvas");
+        assert_ne!(shot.at(300, 30), panel, "above the canvas, no panel");
     }
 }

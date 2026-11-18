@@ -15,9 +15,10 @@ const LINE_H: f32 = 34.0;
 const BUTTON_W: f32 = 200.0;
 const BUTTON_H: f32 = 64.0;
 
-/// Dims everything drawn so far, top bar included, as `dim` does in `design/generate_mockups.py`.
+/// Dims everything drawn so far, top bar included, as `dim` does in `design/generate_mockups.py`:
+/// the whole window, so also a running Game's picture past the logical canvas (ADR 0020).
 pub fn dim(gfx: &mut Gfx<'_>) {
-    gfx.fill_rect(Rect::new(0.0, 0.0, W, ui::h()), Colour::hex(0x000000).alpha(0.62));
+    gfx.fill_window(Colour::hex(0x000000).alpha(0.62));
 }
 
 /// Where a panel `h` tall goes: centred on the canvas, however tall (`ui::h`).

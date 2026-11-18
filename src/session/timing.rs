@@ -93,16 +93,17 @@ pub fn audio_ratio(base: f64, queued: f64) -> f64 {
     base * (1.0 + MAX_DEVIATION * error)
 }
 
-/// The largest rect of `aspect` (width / height) centred in the logical screen; the rest is
-/// black bars.
-pub fn fit(aspect: f32) -> Rect {
+/// Where a Game's picture goes: the largest rect of `aspect` (width / height) centred in a window
+/// `w`×`h` pixels, in window pixels (ADR 0020). It fills the window's height or its width; the
+/// rest is black bars. An unknown aspect (0) is taken as 16:9.
+pub fn fit(aspect: f32, (w, h): (f32, f32)) -> Rect {
     let aspect = if aspect > 0.0 { aspect } else { W / H };
-    if aspect > W / H {
-        let h = W / aspect;
-        Rect::new(0.0, (H - h) / 2.0, W, h)
+    if aspect > w / h {
+        let ph = w / aspect;
+        Rect::new(0.0, (h - ph) / 2.0, w, ph)
     } else {
-        let w = H * aspect;
-        Rect::new((W - w) / 2.0, 0.0, w, H)
+        let pw = h * aspect;
+        Rect::new((w - pw) / 2.0, 0.0, pw, h)
     }
 }
 
@@ -258,9 +259,43 @@ mod tests {
 
     #[test]
     fn the_picture_fits_at_its_aspect_with_bars() {
-        assert_eq!(fit(4.0 / 3.0), Rect::new(240.0, 0.0, 1440.0, 1080.0));
-        assert_eq!(fit(10.0 / 9.0), Rect::new(360.0, 0.0, 1200.0, 1080.0));
-        assert_eq!(fit(16.0 / 9.0), Rect::new(0.0, 0.0, 1920.0, 1080.0));
-        assert_eq!(fit(3.2), Rect::new(0.0, 240.0, 1920.0, 600.0));
+        let hd = (1920.0, 1080.0);
+        assert_eq!(fit(4.0 / 3.0, hd), Rect::new(240.0, 0.0, 1440.0, 1080.0));
+        assert_eq!(fit(10.0 / 9.0, hd), Rect::new(360.0, 0.0, 1200.0, 1080.0));
+        assert_eq!(
+            fit(16.0 / 9.0, hd),
+            Rect::new(0.0, 0.0, 1920.0, 1080.0),
+            "the whole window"
+        );
+        assert_eq!(fit(3.2, hd), Rect::new(0.0, 240.0, 1920.0, 600.0));
+        assert_eq!(fit(0.0, hd), Rect::new(0.0, 0.0, 1920.0, 1080.0), "unknown: 16:9");
+    }
+
+    /// ADR 0020: the picture is fitted to the window, not to the 16:9 frame.
+    #[test]
+    fn the_picture_fills_the_windows_height_or_its_width() {
+        assert_eq!(
+            fit(4.0 / 3.0, (1920.0, 1200.0)),
+            Rect::new(160.0, 0.0, 1600.0, 1200.0),
+            "4:3 on 16:10 fills the height"
+        );
+        let ds = fit(8.0 / 3.0, (2560.0, 1080.0));
+        assert_eq!(
+            (ds.x, ds.w),
+            (0.0, 2560.0),
+            "DS side by side on 21:9 fills the width"
+        );
+        assert!(
+            (ds.y - 60.0).abs() < 1e-3 && (ds.h - 960.0).abs() < 1e-3,
+            "{ds:?}"
+        );
+        assert_eq!(
+            fit(16.0 / 9.0, (1280.0, 720.0)),
+            Rect::new(0.0, 0.0, 1280.0, 720.0)
+        );
+        assert_eq!(
+            fit(4.0 / 3.0, (2560.0, 1440.0)),
+            Rect::new(320.0, 0.0, 1920.0, 1440.0)
+        );
     }
 }

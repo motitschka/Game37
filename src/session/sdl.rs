@@ -30,6 +30,7 @@ use crate::libretro::{Core, CoreDirs, CoreSetup, Frame, GlHost, PortDevice, Stic
 use crate::screens::message::Message;
 use crate::screens::pause::{PauseMenu, Request, SlotInfo};
 use crate::systems::{self, System};
+use crate::ui::Rect;
 use crate::ui::cover::playtime_label;
 use crate::ui::gfx::Gfx;
 use crate::ui::input::Input;
@@ -148,11 +149,23 @@ impl Audio {
 /// Where a running Game's new frames go: the [`Gfx`] it is drawn with, or nowhere in tests.
 pub trait GameFrames {
     fn upload_game_frame(&mut self, frame: &Frame);
+    /// The window's size in pixels, which the picture is fitted to.
+    fn window_size(&self) -> (f32, f32);
+    /// A rect in window pixels in the mouse's logical coordinates.
+    fn to_logical_rect(&self, r: Rect) -> Rect;
 }
 
 impl GameFrames for Gfx<'_> {
     fn upload_game_frame(&mut self, frame: &Frame) {
         Gfx::upload_game_frame(self, frame);
+    }
+
+    fn window_size(&self) -> (f32, f32) {
+        Gfx::window_size(self)
+    }
+
+    fn to_logical_rect(&self, r: Rect) -> Rect {
+        Gfx::to_logical_rect(self, r)
     }
 }
 
@@ -372,6 +385,12 @@ impl Session {
         })
     }
 
+    /// Where the Game's picture is drawn in a window `window` pixels big, in window pixels: fitted
+    /// to the window (ADR 0020). The mouse touches the touch screen from the same rect.
+    fn picture(&self, window: (f32, f32)) -> Rect {
+        timing::fit(self.core.av_info().aspect_ratio, window)
+    }
+
     /// Whether the Game has a touch screen the mouse touches, so the mouse cursor shows.
     pub fn touch_screen(&self) -> bool {
         self.touch.is_some()
@@ -454,8 +473,9 @@ impl Session {
         self.held.mask(&mut input);
         self.follow_av_info();
         if self.touch.is_some() {
-            // Where `draw` puts the frame.
-            input.set_pointer(input::touch(timing::fit(self.core.av_info().aspect_ratio), mouse));
+            // Where `draw` puts the frame, in the mouse's logical coordinates.
+            let picture = gfx.to_logical_rect(self.picture(gfx.window_size()));
+            input.set_pointer(input::touch(picture, mouse));
         }
         let frames = self.scheduler.frames(dt);
         self.pace.ticks += 1;
@@ -613,7 +633,7 @@ impl Screen for Session {
     }
 
     fn draw(&mut self, gfx: &mut Gfx<'_>, _: &Ctx) {
-        gfx.draw_game_frame(timing::fit(self.core.av_info().aspect_ratio));
+        gfx.draw_game_frame(self.picture(gfx.window_size()));
     }
 
     fn hints(&self) -> Vec<Hint> {
@@ -1404,6 +1424,14 @@ mod tests {
 
     impl GameFrames for NoPicture {
         fn upload_game_frame(&mut self, _: &Frame) {}
+
+        fn window_size(&self) -> (f32, f32) {
+            (1920.0, 1080.0)
+        }
+
+        fn to_logical_rect(&self, r: Rect) -> Rect {
+            r
+        }
     }
 
     /// A whole session driven through the functions `app.rs` uses (FR-EMB-3 to FR-EMB-6, US-4):
@@ -2355,7 +2383,7 @@ mod tests {
         assert_eq!((frame.width, frame.height), (1920, 960), "large and small at 3");
 
         // The mouse pressed at the small screen's centre, in Game37's logical coordinates.
-        let picture = timing::fit(session.core.av_info().aspect_ratio);
+        let picture = gfx.to_logical_rect(session.picture(gfx.window_size()));
         let (x, y, w, h) = AZAHAR_SMALL;
         let at = (
             picture.x + (x + w / 2) as f32 * picture.w / 1920.0,
