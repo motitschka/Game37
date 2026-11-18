@@ -34,3 +34,5 @@ the 0.2.0-beta.2 ones, and only the clock and on-screen temp paths differed. Not
 - Screenshot mode takes `--size WxH`, and the smoke script renders the main menus at 1920×1200 as well.
 - The mockups in `design/` stay 1920×1080: the 1080 layout is the design, and taller screens add room at
   the bottom of lists.
+- ADR 0020 sizes a Game's picture to the whole window instead; the Pause Menu and messages over a
+  Game keep the 1920×1080 frame.

@@ -117,14 +117,14 @@ The table is in **System Order**: Nintendo first, then Sony, each by European re
 Built in milestone 8 (ADR 0016, research in [research/m8-newer-cores.md](research/m8-newer-cores.md)).
 
 - **FR-NEW-1** PS2 Games run with the LRPS2 Core, rendering with OpenGL. It needs the player's PS2 BIOS dump, any file name, in `<Games Root>/bios/pcsx2/bios/`; without one, Game37 says so and names that folder (FR-EMB-12). Each Game gets its own memory card.
-- **FR-NEW-2** 3DS Games run with the Azahar Core, rendering with OpenGL: homebrew and decrypted Games. How the two screens are shown is a choice in Settings → Display, with the same three layouts as DS (FR-DS-1): Large and small (the default, the large screen three times the small one), Side by side, or One screen. R3 (Tab on the keyboard) swaps the screens, as on DS, and the touch screen takes the mouse and a right-stick cursor, which L3 taps with, as on DS (FR-DS-3). An encrypted dump gets a message saying it must be decrypted.
+- **FR-NEW-2** 3DS Games run with the Azahar Core, rendering with OpenGL: homebrew and decrypted Games. How the two screens are shown is a choice in Settings → Display, with the same three layouts as DS (FR-DS-1): Large and small (the default, laid out as on DS), Side by side, or One screen. R3 (Tab on the keyboard) swaps the screens, as on DS, and the touch screen takes the mouse and a right-stick cursor, which L3 taps with, as on DS (FR-DS-3). An encrypted dump gets a message saying it must be decrypted.
 - **FR-NEW-3** GameCube and Wii Games run with the Dolphin Core, rendering with OpenGL. Game37 downloads Dolphin's system files with the Core. On Wii, the controller stands in for a Wii Remote with a Nunchuk or, for a Game set to it in its Options Menu (FR-DET-4), a Classic Controller; the choice is kept per Game and applies from the Game's next start.
 - **FR-NEW-4** These Systems also take homebrew in the form their Cores load directly: `.elf` for PS2, `.3dsx` for 3DS, `.dol` and `.elf` for GameCube and Wii.
 - **FR-NEW-5** Switch Games run with the suyu Core (ADR 0019), which Game37 builds from suyu's pinned source with its own patches (`scripts/build-suyu-core.sh`) rather than downloading it; Play before it is built says how to build it. Encrypted Games (`.nsp`, `.xci`) need the player's own `prod.keys` in `<Games Root>/bios/switch/`, copied to the Core before each start; without them, Game37 says so and names that folder. Homebrew (`.nro`) needs none. The Core has no Save States, Resume State or Restart: the Pause Menu shows those items greyed with a note, and the Options Menu and Details Page leave them out. In-game Saves go in `<Games Root>/saves/switch/`.
 
 ### Nintendo DS
 
-- **FR-DS-1** How DS shows its two screens is a choice in Settings → Display, one of three layouts: Large and small (the default), one large screen and one small screen, the large one three times the size of the small one: together 16:9, so on a 16:9 display the large screen fills the height and the small one the rest of the width; Side by side, both screens next to each other at the same size; or One screen, the top screen alone, filling the display. The choice applies from the next Game started.
+- **FR-DS-1** How DS shows its two screens is a choice in Settings → Display, one of three layouts: Large and small (the default), one large screen and one small screen beside it at the bottom right: the large screen fills the display's height and the small one the width left over, so the large one is three times the small one on a 16:9 display and five times on 16:10; it is never less than three times nor more than six times the small one, and where that limit applies the pair fills the width or the height instead (ADR 0020); Side by side, both screens next to each other at the same size; or One screen, the top screen alone, filling the display. The choice applies from the next Game started.
 - **FR-DS-2** R3 (Tab on the keyboard) swaps the screens in every layout: which one is large, which one is on the left, or which one is shown.
 - **FR-DS-3** The touch screen accepts mouse clicks, and a right-stick cursor that L3 taps with. Holding R2 blows into the microphone.
 
@@ -146,8 +146,9 @@ Built in milestone 8 (ADR 0016, research in [research/m8-newer-cores.md](researc
   1920 wide and as tall as the screen's shape needs (up to 4:3), with nothing stretched. The extra
   height goes to the lists and grids, and whatever sits at the bottom (the hint bar, Setup's buttons)
   stays at the bottom. A Game's picture, the Pause Menu and anything else shown over a running Game
-  keep their 16:9 frame, with the Game in its own aspect ratio inside it. A screen wider than 16:9
-  shows bars at the sides.
+  keep their 16:9 frame, centred on the screen. The Game's picture itself, in its own aspect ratio,
+  fills the whole screen's height or its whole width, on a screen of any shape (ADR 0020). Menus on a
+  screen wider than 16:9 show bars at the sides.
 - **FR-UI-7** Every grid of covers (Console Pages, "See all", Search results) shows the same number of
   Games per row, which the player sets from 6 to 10 (default 8) in Settings → Display. The grid is
   centred and runs from margin to margin: the gaps between covers stay the same, and the covers grow
