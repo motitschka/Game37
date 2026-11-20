@@ -8,6 +8,9 @@
   `scripts/build-suyu-core.sh` once to build it (Settings → BIOS shows whether it's there). Encrypted
   Games (`.nsp`, `.xci`) need your own `prod.keys` in `~/Games/bios/switch/`; homebrew (`.nro`) needs
   none. Switch has no Save States, Resume State or Restart game. Ryubing is no longer used.
+- **The Switch Core is built from Game37's own copy of suyu,** `swigino/`, instead of a download of
+  suyu's source: suyu renamed its release, so the old pinned download no longer exists. Run
+  `scripts/build-suyu-core.sh` from a git checkout as before; the Core it builds is the same.
 - **Switch 2 Games in `.nup` files are listed** in `switch2/`, next to `.nsp` and `.xci`. Like every
   Switch 2 Game they can't be played yet: Play says "Not playable yet" and starts nothing.
 - **Home shows two Shelves per screen, with bigger covers.** Up, down and the mouse wheel move one whole

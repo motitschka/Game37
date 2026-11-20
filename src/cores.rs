@@ -473,7 +473,7 @@ pub static DOLPHIN: CoreInfo = CoreInfo {
 
 /// suyu (ADR 0019), for Switch: a yuzu-derived emulator whose libretro Core renders with its own
 /// Vulkan device and hands Game37 finished frames, so it needs no OpenGL host. It isn't on the
-/// build server: Game37 uses it built from suyu's pinned source with Game37's patches
+/// build server: Game37 builds it from `swigino/`, its own fork of suyu's libretro Core
 /// (`scripts/build-suyu-core.sh`, [`CoreInfo::downloads`]). Its sound goes through Game37, its
 /// on-screen frame counter is off, and the Switch plays docked. It keeps its NAND (which holds
 /// In-game Saves) under the System's save folder and its config and caches in its own system
@@ -798,7 +798,7 @@ impl CoreInfo {
     }
 
     /// Whether Game37 downloads this Core from the libretro build server. suyu isn't there: it is
-    /// built from source with Game37's patches (`scripts/build-suyu-core.sh`, ADR 0019).
+    /// built from `swigino/`, Game37's own fork of it (`scripts/build-suyu-core.sh`, ADR 0019).
     pub fn downloads(&self) -> bool {
         !std::ptr::eq(self, &SUYU)
     }

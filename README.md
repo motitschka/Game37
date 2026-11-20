@@ -400,9 +400,9 @@ After Setup, or once it's done:
   `title.keys`, if you have it) from your own Switch and put them in the Games Root's `bios/switch/`
   folder. Game37 copies them to the suyu Core before each start. Homebrew (`.nro`) needs no keys.
 - **The suyu Core for Switch, built once.** It isn't on the libretro build server, so run
-  `scripts/build-suyu-core.sh` from the Game37 folder. It downloads suyu's pinned source, applies
-  Game37's patches and installs the Core; the first build takes a while, and needs no sudo. Settings →
-  BIOS shows whether it's built. It never downloads keys, firmware or games.
+  `scripts/build-suyu-core.sh` from the Game37 folder (a git checkout). It builds `swigino/`, Game37's
+  own fork of suyu's libretro Core, and installs it; the first build takes a while, and needs no sudo.
+  Settings → BIOS shows whether it's built. It never downloads keys, firmware or games.
 - **Emulators that need files from your own console**, set up inside the emulator itself rather than in
   the Games Root: the PS3 firmware for RPCS3, and the PS4 modules for shadPS4.
 
