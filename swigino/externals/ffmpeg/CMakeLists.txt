@@ -34,8 +34,8 @@ if (NOT YUZU_USE_BUNDLED_FFMPEG)
     # User attempts to do a FFmpeg cross compilation because...
     # Here we just quickly test against host/system processors not matching
     # TODO: Test for versions not matching as well?
-    elseif (NOT (CMAKE_HOST_SYSTEM_PROCESSOR MATCHES CMAKE_SYSTEM_PROCESSOR
-    AND CMAKE_HOST_SYSTEM_NAME MATCHES CMAKE_SYSTEM_NAME))
+    elseif (NOT (CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "${CMAKE_SYSTEM_PROCESSOR}"
+    AND CMAKE_HOST_SYSTEM_NAME STREQUAL "${CMAKE_SYSTEM_NAME}"))
         string(TOLOWER "${CMAKE_SYSTEM_NAME}" FFmpeg_SYSTEM_NAME)
         if (FFmpeg_SYSTEM_NAME STREQUAL "openorbis" OR FFmpeg_SYSTEM_NAME STREQUAL "managarm")
             set(FFmpeg_SYSTEM_NAME "none")
@@ -274,7 +274,7 @@ else()
                 --enable-pic
                 --cc=${FFmpeg_CC}
                 --cxx=${FFmpeg_CXX}
-                --ld=${CMAKE_LINKER}
+                --ld=${CMAKE_C_COMPILER}
                 --extra-cflags=${CMAKE_C_FLAGS}
                 --extra-cxxflags=${CMAKE_CXX_FLAGS}
                 --extra-ldflags=${CMAKE_C_LINK_FLAGS}
