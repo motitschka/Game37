@@ -16,7 +16,7 @@ Cores: [roadmap-external-systems.md](roadmap-external-systems.md),
 | M10 | PS3 inside Game37 | Not started | `m10-ps3` |
 | M11 | PS4 inside Game37 | Not started | `m11-ps4` |
 | M12 | Wii U inside Game37 | Not started | `m12-wiiu` |
-| M13 | Switch: a Core of our own | F1 and F2 done; F3 waits on D4 | `m13-switch-core` |
+| M13 | Switch: a Core of our own | F1 and F2 done, F3 in progress | `m13-switch-core` |
 
 The owner's order for the new Systems is PS3, then PS4, then Wii U. M9 doesn't depend on them, and
 they don't depend on it. M10 to M12 don't depend on each other either: what they share, Embedded
@@ -297,7 +297,7 @@ history, review or tests of its own. And every player pays for the build: suyu's
 its general fixes back (M9 S5). Game37 never ships keys, firmware or Games (NFR-6). The Core still
 renders with its own Vulkan device, so ADR 0003 stands.
 
-**Decisions for the owner** (D1 to D3 before F1, D4 before F3)
+**Decisions for the owner** (all taken)
 - **D1 Where the fork lives — decided (owner, 2026-11-20): inside Game37's repository, as
   `swigino/`.** suyu's release source is imported once, without suyu's history (about 21 MB
   compressed; all of it 419 MB). Its 26 submodules stay links to their own projects in the root
@@ -315,9 +315,10 @@ renders with its own Vulkan device, so ADR 0003 stands.
   between two of its commits are applied to `swigino/` with a three-way merge when Game37 moves to a
   newer suyu, and general fixes are offered back. If suyu stops releasing, or the Save State work
   makes each update cost more than it brings, a hard fork gets its own ADR.
-- **D4 Who builds the published Core.** Game37's GitHub Actions, or the owner's machine.
-  *Recommended:* Actions, in a container of an older distribution so the Core loads on every current
-  one, with the recipe in the repository so anyone can rebuild the published file from its source.
+- **D4 Who builds the published Core — decided (owner, 2026-11-20): Game37's GitHub Actions**, in the
+  manylinux_2_28 container (glibc 2.28) so the Core loads on every current distribution, with the
+  recipe in the repository (`scripts/ci/build-swigino-portable.sh`) so anyone can rebuild the published
+  file from its source.
 
 **Scope**
 - **F1 swigino/:** suyu's release source imported into `swigino/` in one commit that names its
@@ -328,7 +329,7 @@ renders with its own Vulkan device, so ADR 0003 stands.
 - **F2 Game37 builds swigino/:** the build script fetches the submodules (shallow), builds
   `swigino/` out of tree in the build cache and installs the Core. `patches/suyu/` is deleted. The
   real-Core tests (`cargo test -- --ignored`) and the smoke shots pass on the Core it builds.
-- **F3 A Core that loads anywhere (needs D4):** a GitHub Actions workflow builds the libretro Core
+- **F3 A Core that loads anywhere:** a GitHub Actions workflow builds the libretro Core
   from `swigino/` in an older-distribution container, with Boost, FFmpeg (built PIC, only the
   decoders suyu uses) and libstdc++ linked in statically. A check fails the build if the Core needs
   any shared library outside glibc's. Each Core release is published on Game37's GitHub releases,
@@ -392,5 +393,19 @@ commits in `swigino/` rather than added to a patch file. F3 and F4 don't block M
   `hw_suyu_boots_homebrew_keeps_its_files_in_game37s_folders_and_quits` passes on it. That Core is
   now the one in `.testdata/data/cores/`. Not yet re-run on it: the smoke shots, which don't load a
   Core.
+- **F3 (2026-11-20), built and checked locally, not yet on Actions:**
+  `scripts/ci/build-swigino-portable.sh` builds in `quay.io/pypa/manylinux_2_28_x86_64` (AlmaLinux 8,
+  glibc 2.28, GCC 14) with `CPMUTIL_FORCE_BUNDLED`, so OpenSSL, Boost, Opus, zlib, zstd, lz4 and
+  FFmpeg (`YUZU_USE_EXTERNAL_FFMPEG`) are built from source and linked in; SDL3 and libusb are off.
+  It needed: glslangValidator built from Khronos' 16.6.0 tag (EL8 has none); two fixes in suyu's
+  `externals/ffmpeg` (a swigino commit: it always took the cross-build path, and gave configure bare
+  `ld`); X11 and `libdrm-devel` kept out of FFmpeg's reach; `-Wl,-Bsymbolic` for FFmpeg's x86
+  assembly; `-lanl` for cpp-httplib's `getaddrinfo_a`. The Core is 52 MB, needs only glibc's
+  libraries (nothing newer than GLIBC_2.28) and libstdc++ (GLIBCXX_3.4.22), passes
+  `hw_suyu_boots_…` on Arch, and `ldd -r` resolves every symbol in Ubuntu 20.04 and 22.04, Debian
+  12, Fedora 41 and Arch containers. The script checks the libraries, loads the Core with
+  `RTLD_NOW` (plain `ldd` missed an undefined libdrm symbol) and checks the 64 MiB limit.
+  `.github/workflows/swigino-core.yml` runs it on every push touching `swigino/` and keeps the Core
+  as an artifact. A tag `swigino-<version>` also publishes a release. Nothing is published yet.
 - If this works, M11's shadPS4 Core, now planned as `patches/shadps4/`, could follow the same route.
   That is M11's call.

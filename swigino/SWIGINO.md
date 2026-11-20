@@ -30,6 +30,10 @@ One Game37 commit each, all listed by `git log -- swigino`:
   under `<system>/suyu`, the emulated NAND and SD card (the Game saves) under `<save>/suyu`
 - the emulated Switch pauses when the frontend stops calling `retro_run`
 - a GCC 16 false-positive warning is silenced
+- FFmpeg builds from source natively (`YUZU_USE_EXTERNAL_FFMPEG`), instead of always as a cross
+  build
+- `game37/nx_tzdb/230326/` holds the time zone data suyu would download from `git.eden-emu.dev`;
+  the build scripts pass it as `YUZU_TZDB_PATH`
 
 The changes are meant to go back to suyu as pull requests. Once suyu carries one, Game37's own
 change drops out at the next update.
@@ -41,7 +45,9 @@ Games need keys dumped from your own Switch.
 
 `scripts/build-suyu-core.sh` fetches the submodules (shallow), builds the Core in
 `~/.cache/game37/suyu-build/swigino` and installs it where Game37 looks for Cores. See its header for
-what it needs.
+what it needs. `scripts/ci/build-swigino-portable.sh` builds the Core Game37 publishes, one that loads
+on any current distribution, in the manylinux_2_28 container; GitHub Actions runs it
+(`.github/workflows/swigino-core.yml`).
 
 ## Moving to a newer suyu
 

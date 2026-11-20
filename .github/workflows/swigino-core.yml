@@ -1,0 +1,76 @@
+# Builds the Switch Core from swigino/ so that it loads on any current Linux distribution (M13 F3),
+# in the manylinux_2_28 container with scripts/ci/build-swigino-portable.sh, which also checks it.
+# Every run keeps the Core as an artifact. A tag swigino-<version> also publishes it as a release,
+# zipped, with its SHA-256, for Game37 to download.
+name: swigino Core
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "swigino/**"
+      - ".gitmodules"
+      - "scripts/ci/build-swigino-portable.sh"
+      - ".github/workflows/swigino-core.yml"
+    tags: ["swigino-*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Cache suyu's downloaded dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/build/cpm
+          key: swigino-cpm-${{ hashFiles('swigino/cpmfile.json', 'swigino/**/cpmfile.json') }}
+
+      - name: Build and check the Core
+        run: |
+          mkdir -p "$RUNNER_TEMP/build" "$RUNNER_TEMP/out"
+          docker run --rm -v "$PWD:/src:ro" -v "$RUNNER_TEMP/build:/build" -v "$RUNNER_TEMP/out:/out" \
+            quay.io/pypa/manylinux_2_28_x86_64 /src/scripts/ci/build-swigino-portable.sh /src /build /out
+
+      - name: Zip the Core
+        run: |
+          cd "$RUNNER_TEMP/out"
+          sudo chown "$(id -u)" .
+          zip -j -X suyu_libretro.so.zip suyu_libretro.so
+          sha256sum suyu_libretro.so.zip > suyu_libretro.so.zip.sha256
+          cat suyu_libretro.so.sha256 suyu_libretro.so.zip.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swigino-core
+          path: |
+            ${{ runner.temp }}/out/suyu_libretro.so.zip
+            ${{ runner.temp }}/out/suyu_libretro.so.zip.sha256
+            ${{ runner.temp }}/out/suyu_libretro.so.sha256
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/swigino-')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: swigino-core
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --title "swigino Core ${GITHUB_REF_NAME#swigino-}" \
+            --notes "The Switch Core Game37 downloads, built from swigino/ at ${GITHUB_SHA}. Never contains keys, firmware or Games." \
+            suyu_libretro.so.zip suyu_libretro.so.zip.sha256
