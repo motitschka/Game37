@@ -49,19 +49,18 @@ if ! command -v cmake >/dev/null || ! command -v ninja >/dev/null; then
 fi
 
 build=$cache/swigino
-if [ ! -f "$build/build.ninja" ]; then
-    echo "Configuring (fetches suyu's bundled dependencies the first time)"
-    # suyu's downloaded dependencies go in the build cache, not in swigino/.cache inside the checkout.
-    cmake -S "$repo/swigino" -B "$build" -GNinja \
-        -DCMAKE_BUILD_TYPE=Release -DCPM_SOURCE_CACHE="$cache/cpm" \
-        -DENABLE_QT=OFF -DYUZU_CMD=OFF -DYUZU_TESTS=OFF \
-        -DYUZU_ROOM=OFF -DYUZU_ROOM_STANDALONE=OFF \
-        -DENABLE_WEB_SERVICE=OFF -DUSE_DISCORD_PRESENCE=OFF \
-        -DSUYU_BUILD_LIBRETRO_CORE=ON \
-        -Dfmt_FORCE_BUNDLED=ON \
-        -DVulkanHeaders_FORCE_BUNDLED=ON -DVulkanUtilityLibraries_FORCE_BUNDLED=ON \
-        -DYUZU_USE_BUNDLED_FFMPEG=OFF
-fi
+echo "Configuring (fetches suyu's bundled dependencies the first time)"
+# suyu's downloaded dependencies go in the build cache, not in swigino/.cache inside the checkout.
+cmake -S "$repo/swigino" -B "$build" -GNinja \
+    -DCMAKE_BUILD_TYPE=Release -DCPM_SOURCE_CACHE="$cache/cpm" \
+    -DYUZU_TZDB_PATH="$repo/swigino/game37/nx_tzdb/230326" \
+    -DENABLE_QT=OFF -DYUZU_CMD=OFF -DYUZU_TESTS=OFF \
+    -DYUZU_ROOM=OFF -DYUZU_ROOM_STANDALONE=OFF \
+    -DENABLE_WEB_SERVICE=OFF -DUSE_DISCORD_PRESENCE=OFF \
+    -DSUYU_BUILD_LIBRETRO_CORE=ON \
+    -Dfmt_FORCE_BUNDLED=ON \
+    -DVulkanHeaders_FORCE_BUNDLED=ON -DVulkanUtilityLibraries_FORCE_BUNDLED=ON \
+    -DYUZU_USE_BUNDLED_FFMPEG=OFF
 echo "Building (the first build takes a while)"
 cmake --build "$build" --target suyu_libretro -j "$jobs"
 
