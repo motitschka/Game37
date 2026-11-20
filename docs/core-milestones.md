@@ -17,10 +17,12 @@ updates this line.
 | M10 | PS3 inside Game37 | Not started | `m10-ps3` |
 | M11 | PS4 inside Game37 | Not started | `m11-ps4` |
 | M12 | Wii U inside Game37 | Not started | `m12-wiiu` |
+| M13 | Switch: a Core of our own | Not started, waits on the `swigino` repository | `m13-switch-core` |
 
 The owner's order for the new Systems is PS3, then PS4, then Wii U. M9 doesn't depend on them, and
 they don't depend on it. M10 to M12 don't depend on each other either: what they share, Embedded
-Systems whose Core has no Save States, already exists for Switch (ADR 0019).
+Systems whose Core has no Save States, already exists for Switch (ADR 0019). M13's first two stages
+are best done before M9, so M9's Core changes land in the fork (see M13).
 
 ## How to work on a milestone
 
@@ -275,3 +277,100 @@ touch weren't tried.
 
 **Notes**
 - None yet.
+
+---
+
+## M13 — Switch on a Core of our own
+
+**Goal:** Game37's Switch Core lives in a repository of its own: a fork of suyu in which Game37's
+libretro changes are commits instead of a patch file, which follows suyu's releases, and which
+publishes a ready-built Core that loads on any distribution. Players download it on first use like
+every other Core instead of building suyu themselves. `scripts/build-suyu-core.sh` stays for
+development and offline use.
+
+**Why.** `patches/suyu/` is one 235-line patch today (input on port 0, the frontend's folders, the
+pause watchdog, a GCC 16 fix). M9 adds `retro_reset` and Save States, which reach into suyu's CPU,
+kernel, GPU and audio code. A patch set that size has to be rebased by hand on every suyu release,
+with no history, review or tests of its own. And every player pays for the build: about 90 MB of
+source, about 700 MB of dependencies, a C++20 compiler and Vulkan, SDL3 and FFmpeg development files.
+
+**What stays.** suyu remains upstream: the fork takes the suyu releases the owner chooses and offers
+its general fixes back (M9 S5). Game37 never ships keys, firmware or Games (NFR-6). The Core still
+renders with its own Vulkan device, so ADR 0003 stands.
+
+**Decisions for the owner** (D1 to D3 before F1, D4 before F3)
+- **D1 Where the fork lives — decided (owner, 2026-11-20): public, on GitHub**, next to Game37 under
+  the owner's account. GPL-3.0 needs a published Core's source published with it, which this does.
+  The owner accepts the takedown risk (Nintendo has had Switch emulators and their forks taken down,
+  on GitHub too: yuzu's forks in 2024). What softens it: Game37 pins the fork by full commit hash, so
+  any mirror with that commit serves the same source without trust questions, and a Core already
+  installed keeps working if the repository goes.
+- **D2 Its name — decided (owner, 2026-11-20): a name of its own: swigino**, file
+  `swigino_libretro.so`, without Nintendo's trademarks (no "Switch", "NX", "Nintendo"). It says the
+  Core isn't suyu's release Core, and stops a copy of upstream's `suyu_libretro.so` in the Cores folder
+  from being taken for it. The folders it writes keep their names (`<save dir>/suyu/`,
+  `<system dir>/suyu/`), so nobody's In-game Saves or keys move.
+- **D3 How closely it follows suyu — decided (owner, 2026-11-20): a soft fork.** A `game37` branch
+  whose commits sit on suyu's release tags and are merged forward when Game37 moves to a newer suyu, and
+  general fixes are offered back. If suyu stops releasing, or the Save State work makes each merge cost
+  more than it brings, a hard fork gets its own ADR.
+- **D4 Who builds the published Core.** The fork host's CI, or the owner's machine. *Recommended:*
+  CI, in a container of an older distribution so the Core loads on every current one, with the
+  recipe in the fork so anyone can rebuild the published file from its source.
+
+**Scope**
+- **F1 The fork (needs the owner to create the GitHub repository `swigino`):** based on
+  suyu's git history at tag `v14.1.0`, the version Game37 pins today, so later suyu releases merge
+  in. First check that the tag's tree with its submodules matches the pinned source archive (SHA-256
+  `773fc0b3…` in the build script), and note any difference here. Then split
+  `0001-game37-libretro.patch` into one commit per change: the controller on port 0, the frontend's
+  folders, the pause watchdog, the GCC 16 fix. The fork's README says what it is (a libretro Core
+  for Game37, based on suyu), how to build it, and that it never holds keys, firmware or Games.
+  Check: the `game37` branch's tree equals the pinned archive with today's patch applied
+  (`diff -r`), so the split changed nothing.
+- **F2 Game37 builds from the fork:** the build script fetches the pinned fork commit by its full
+  hash, which is its own checksum (GitHub's generated archives aren't byte-stable, so no archive
+  checksum), builds it as today and installs it. `patches/suyu/` is deleted. The real-Core tests
+  (`cargo test -- --ignored`) and the smoke shots pass on the Core it builds.
+- **F3 A Core that loads anywhere:** the fork's CI builds the libretro Core in an older-distribution
+  container, with Boost, FFmpeg (built PIC, only the decoders suyu uses) and libstdc++ linked in
+  statically. A CI check fails the build if the Core needs any shared library outside glibc's. Each
+  release publishes the zipped Core and its SHA-256. The Core stays under `MAX_CORE_BYTES` (64 MiB
+  in `src/cores.rs`; today's build is 39 MB without FFmpeg inside). If it can't, the limit grows
+  for this Core alone, with the reason in a comment.
+- **F4 Game37 downloads it:** the Switch `CoreInfo` gets the new name, swigino (D2), and a pinned
+  source: the fork's release URL, version and SHA-256. `CoreInfo::downloads` becomes true, so Setup's
+  Cores step and Settings → Cores list it with progress like the others. Play before it is there offers
+  the download instead of the build command (`src/launch.rs`, `src/screens/settings/bios.rs`). The build
+  script installs the same file name, so a Core built locally is used as is. A leftover
+  `suyu_libretro.so` is no longer loaded. Tests drive the download from a local copy of a release, never
+  the network.
+- **F5 Following suyu:** a written routine in the fork's README for moving to a newer suyu: merge
+  its tag into `game37`, build, run Game37's real-Core tests, smoke shots and the Switch manual
+  checks, then publish and move Game37's pin in one commit. General fixes are offered to suyu as
+  pull requests. Once suyu carries one, the fork's own commit for it drops out at the next merge.
+- **F6 Docs:** an ADR (the Switch Core is Game37's own fork of suyu: it replaces ADR 0019's "built
+  from suyu's pinned source with patches" and amends ADR 0004, whose Cores come from the buildbot),
+  FR-NEW-5, README's Switch section, CHANGELOG, a [manual-checks.md](manual-checks.md) section
+  (download on a fresh setup, the build script as fallback), the comments in `src/cores.rs`, and
+  M9's and M11's mentions of `patches/suyu/`.
+
+**Order with M9.** F1 and F2 come before M9 S1, so `retro_reset` and Save States are written as
+commits in the fork rather than added to the patch file. F3 and F4 don't block M9 and can follow it.
+If M9 goes first anyway, F1 imports whatever patches it left.
+
+**Delivers:** a rewritten FR-NEW-5 · Setup's Cores step covers every Embedded System again
+
+**Done when**
+- The fork exists on GitHub (D1): a `game37` branch on suyu's history, one commit per change, its
+  tree equal to the pinned archive with today's patch (the check's result in the Notes).
+- `patches/suyu/` is gone, the build script builds the fork's pinned commit, and the real-Core tests
+  pass on it.
+- On a fresh data dir, Setup downloads the Switch Core, checks its SHA-256, and Space NX plays.
+- The published Core loads in containers of at least two other current distributions (manual check,
+  steps in [manual-checks.md](manual-checks.md)).
+- Every earlier check still passes (tests, real-Core tests, smoke shots).
+
+**Notes**
+- If this works, M11's shadPS4 Core, now planned as `patches/shadps4/`, could follow the same route.
+  That is M11's call.
