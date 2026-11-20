@@ -16,7 +16,7 @@ Cores: [roadmap-external-systems.md](roadmap-external-systems.md),
 | M10 | PS3 inside Game37 | Not started | `m10-ps3` |
 | M11 | PS4 inside Game37 | Not started | `m11-ps4` |
 | M12 | Wii U inside Game37 | Not started | `m12-wiiu` |
-| M13 | Switch: a Core of our own | F1 and F2 done, F3 in progress | `m13-switch-core` |
+| M13 | Switch: a Core of our own | F1 to F3 done; first release waits on the owner | `m13-switch-core` |
 
 The owner's order for the new Systems is PS3, then PS4, then Wii U. M9 doesn't depend on them, and
 they don't depend on it. M10 to M12 don't depend on each other either: what they share, Embedded
@@ -306,8 +306,7 @@ renders with its own Vulkan device, so ADR 0003 stands.
   the Switch code would reach Game37's own repository (Nintendo has had Switch emulators and their
   forks taken down, on GitHub too: yuzu's forks in 2024). This replaces an earlier choice the same
   day of a separate `swigino` repository on GitHub.
-- **D2 Its name — decided (owner, 2026-11-20): a name of its own: swigino**, file
-  `swigino_libretro.so`, without Nintendo's trademarks (no "Switch", "NX", "Nintendo"). It says the
+- **D2 Its name — decided (owner, 2026-11-20): a name of its own: swigino**, fil  `swigino_libretro.so`, without Nintendo's trademarks (no "Switch", "NX", "Nintendo"). It says the
   Core isn't suyu's release Core, and stops a copy of upstream's `suyu_libretro.so` in the Cores folder
   from being taken for it. The folders it writes keep their names (`<save dir>/suyu/`,
   `<system dir>/suyu/`), so nobody's In-game Saves or keys move.
@@ -393,7 +392,7 @@ commits in `swigino/` rather than added to a patch file. F3 and F4 don't block M
   `hw_suyu_boots_homebrew_keeps_its_files_in_game37s_folders_and_quits` passes on it. That Core is
   now the one in `.testdata/data/cores/`. Not yet re-run on it: the smoke shots, which don't load a
   Core.
-- **F3 (2026-11-20), built and checked locally, not yet on Actions:**
+- **F3 (2026-11-20), built and checked locally and on Actions:**
   `scripts/ci/build-swigino-portable.sh` builds in `quay.io/pypa/manylinux_2_28_x86_64` (AlmaLinux 8,
   glibc 2.28, GCC 14) with `CPMUTIL_FORCE_BUNDLED`, so OpenSSL, Boost, Opus, zlib, zstd, lz4 and
   FFmpeg (`YUZU_USE_EXTERNAL_FFMPEG`) are built from source and linked in; SDL3 and libusb are off.
@@ -407,5 +406,9 @@ commits in `swigino/` rather than added to a patch file. F3 and F4 don't block M
   `RTLD_NOW` (plain `ldd` missed an undefined libdrm symbol) and checks the 64 MiB limit.
   `.github/workflows/swigino-core.yml` runs it on every push touching `swigino/` and keeps the Core
   as an artifact. A tag `swigino-<version>` also publishes a release. Nothing is published yet.
+  The first Actions run (44704169920) took 31 minutes from cold; its Core (16.7 MB zipped) passes
+  the same checks and `hw_suyu_boots_…`. It isn't byte-identical to a local build of the same
+  source (different SHA-256), so "anyone can rebuild the published file" means the same recipe,
+  not yet the same bytes.
 - If this works, M11's shadPS4 Core, now planned as `patches/shadps4/`, could follow the same route.
   That is M11's call.
