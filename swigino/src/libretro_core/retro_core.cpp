@@ -512,6 +512,24 @@ constexpr RetroToVirtual kButtonMap[] = {
 bool g_prev_buttons[20] = {};
 } // namespace
 
+// The emulated controller the RetroPad drives: player 1's Pro Controller when
+// docked, the handheld console's own controls (npad slot 8) when not.
+static std::size_t FrontendPort() {
+    return Settings::IsDockedMode() ? 0 : 8;
+}
+
+static void ConnectFrontendController() {
+    auto& players = Settings::values.players.GetValue();
+    const bool docked = Settings::IsDockedMode();
+    players[0].connected = docked;
+    players[0].controller_type = Settings::ControllerType::ProController;
+    players[8].connected = !docked;
+    players[8].controller_type = Settings::ControllerType::Handheld;
+    g_system->HIDCore().ReloadInputDevices();
+    LOG_INFO(Frontend, "libretro: frontend controller connected as {}",
+             docked ? "player 1 Pro Controller" : "handheld");
+}
+
 RETRO_API void retro_run() {
     // This frontend is the sole periodic consumer of the destructive stats read.
     // Sample guest rendering/timing, independently of retro_run's frontend FPS.
@@ -598,17 +616,17 @@ RETRO_API void retro_run() {
                 const int idx = static_cast<int>(m.virtual_button);
                 if (pressed != g_prev_buttons[idx]) {
                     g_prev_buttons[idx] = pressed;
-                    vgp->SetButtonState(0, m.virtual_button, pressed);
+                    vgp->SetButtonState(FrontendPort(), m.virtual_button, pressed);
                 }
             }
             // Left analog stick
             const float lx = g_input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X) / 32768.0f;
             const float ly = g_input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y) / -32768.0f;
-            vgp->SetStickPosition(0, InputCommon::VirtualGamepad::VirtualStick::Left, lx, ly);
+            vgp->SetStickPosition(FrontendPort(), InputCommon::VirtualGamepad::VirtualStick::Left, lx, ly);
             // Right analog stick
             const float rx = g_input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_X) / 32768.0f;
             const float ry = g_input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y) / -32768.0f;
-            vgp->SetStickPosition(0, InputCommon::VirtualGamepad::VirtualStick::Right, rx, ry);
+            vgp->SetStickPosition(FrontendPort(), InputCommon::VirtualGamepad::VirtualStick::Right, rx, ry);
         }
     }
 
@@ -979,6 +997,11 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game) {
 
     Service::AM::FrontendAppletParameters load_parameters{};
     load_parameters.applet_id = Service::AM::AppletId::Application;
+
+    // Connect the controller the frontend's RetroPad drives. Without a connected
+    // controller the guest sees no input at all: the Qt and SDL frontends connect
+    // player 1 from their configs, and this core has none.
+    ConnectFrontendController();
 
     const Core::SystemResultStatus result =
         g_system->Load(*g_emu_window, g_game_path, load_parameters);
