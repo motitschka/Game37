@@ -16,7 +16,7 @@ Cores: [roadmap-external-systems.md](roadmap-external-systems.md),
 | M10 | PS3 inside Game37 | Not started | `m10-ps3` |
 | M11 | PS4 inside Game37 | Not started | `m11-ps4` |
 | M12 | Wii U inside Game37 | Not started | `m12-wiiu` |
-| M13 | Switch: a Core of our own | F1 to F3 done; first release waits on the owner | `m13-switch-core` |
+| M13 | Switch: a Core of our own | F1 to F4 done, `swigino-1` published; manual checks left | `m13-switch-core` |
 
 The owner's order for the new Systems is PS3, then PS4, then Wii U. M9 doesn't depend on them, and
 they don't depend on it. M10 to M12 don't depend on each other either: what they share, Embedded
@@ -419,5 +419,12 @@ commits in `swigino/` rather than added to a patch file. F3 and F4 don't block M
   → BIOS's Switch row shows only the keys. Settings → Cores now has the twelve rows its layout was
   made for, so its test no longer asks for room for a thirteenth: **the next Core (M10 to M12) needs
   a new layout for that page.** ADR 0022 records all of it.
+- **First release (2026-11-20): `swigino-1`** (tag on `7df310e`), built and published by Actions run
+  44710144020: `swigino_libretro.so.zip`, 16.7 MB, SHA-256 `35e4f108…035d`, now pinned in
+  `src/cores.rs`. GitHub answers the download with one 302 to `release-assets.githubusercontent.com`.
+  Game37's own downloader (`Download::start` with the real fetcher, in a throwaway test) followed it,
+  checked the checksum and installed the 52 MB Core in 2.3 s; `hw_swigino_boots_…` passes on that
+  exact Core. Left for the owner's machine: the Setup and Play download screens with the real network
+  (manual checks, section 10).
 - If this works, M11's shadPS4 Core, now planned as `patches/shadps4/`, could follow the same route.
   That is M11's call.

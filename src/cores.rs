@@ -528,7 +528,7 @@ pub static SWIGINO: CoreInfo = CoreInfo {
 const SWIGINO_RELEASE_URL: &str =
     "https://github.com/motitschka/Game37/releases/download/swigino-1/swigino_libretro.so.zip";
 /// The SHA-256 of [`SWIGINO_RELEASE_URL`]'s zip, as its release's `.sha256` file gives it.
-const SWIGINO_RELEASE_SHA256: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+const SWIGINO_RELEASE_SHA256: &str = "35e4f10811e9a5218fe9803f2a1ec724a6b8f649d3588de4fccca506cfb2035d";
 
 /// The player's own Switch keys (FR-NEW-5): `prod.keys`, and `title.keys` if they have one, in
 /// `<Games Root>/bios/switch/`. Only encrypted Games (`.nsp`, `.xci`) need them; homebrew
