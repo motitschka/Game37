@@ -298,6 +298,61 @@ RETRO_API void retro_set_input_state(retro_input_state_t cb) {
     g_input_state_cb = cb;
 }
 
+#ifndef SUYU_ANDROID_LIBRETRO
+// Keep everything the core writes in the frontend's folders instead of the
+// user's own suyu folders: config, cache, logs and keys under
+// <system>/suyu, and the emulated NAND and SD card (which hold the game
+// saves) under <save>/suyu. A frontend that gives no system directory keeps
+// suyu's usual folders.
+static void UseFrontendDirectories() {
+    const char* system_directory = nullptr;
+    if (!g_environ_cb ||
+        !g_environ_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &system_directory) ||
+        !system_directory || !*system_directory) {
+        return;
+    }
+    const auto user_directory = std::filesystem::path{system_directory} / "suyu";
+    std::error_code error;
+    std::filesystem::create_directories(user_directory, error);
+    if (error) {
+        return;
+    }
+    // On desktop Linux SetAppDirectory keeps the XDG folders, so every path is set here.
+    using Common::FS::SuyuPath;
+    const std::pair<SuyuPath, const char*> own[] = {
+        {SuyuPath::AmiiboDir, "amiibo"},      {SuyuPath::CacheDir, "cache"},
+        {SuyuPath::ConfigDir, "config"},      {SuyuPath::CrashDumpsDir, "crash_dumps"},
+        {SuyuPath::DumpDir, "dump"},          {SuyuPath::KeysDir, "keys"},
+        {SuyuPath::LoadDir, "load"},          {SuyuPath::LogDir, "log"},
+        {SuyuPath::PlayTimeDir, "play_time"}, {SuyuPath::ScreenshotsDir, "screenshots"},
+        {SuyuPath::TASDir, "tas"},            {SuyuPath::IconsDir, "icons"},
+        {SuyuPath::ThemesDir, "themes"},      {SuyuPath::NANDDir, "nand"},
+        {SuyuPath::SaveDir, "nand"},          {SuyuPath::SDMCDir, "sdmc"},
+    };
+    // SetSuyuPath ignores a folder that doesn't exist yet, so each is made first.
+    const auto set = [](SuyuPath path, const std::filesystem::path& dir) {
+        std::error_code ignored;
+        std::filesystem::create_directories(dir, ignored);
+        Common::FS::SetSuyuPath(path, dir);
+    };
+    set(SuyuPath::EdenDir, user_directory);
+    for (const auto& [path, name] : own) {
+        set(path, user_directory / name);
+    }
+    set(SuyuPath::ShaderDir, user_directory / "cache" / "shader");
+    // The emulated NAND and SD card hold the game saves: they go in the frontend's save folder.
+    const char* save_directory = nullptr;
+    if (g_environ_cb(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &save_directory) && save_directory &&
+        *save_directory) {
+        const auto saves = std::filesystem::path{save_directory} / "suyu";
+        set(SuyuPath::NANDDir, saves / "nand");
+        set(SuyuPath::SaveDir, saves / "nand");
+        set(SuyuPath::SDMCDir, saves / "sdmc");
+    }
+    Common::FS::CreateSuyuPaths();
+}
+#endif
+
 RETRO_API void retro_init() {
 #ifdef SUYU_ANDROID_LIBRETRO
     // RetroArch owns Android storage; establish a writable core directory before
@@ -316,6 +371,8 @@ RETRO_API void retro_init() {
     }
     Common::FS::SetAppDirectory(user_directory.string());
     Common::FS::CreateSuyuPaths();
+#else
+    UseFrontendDirectories();
 #endif
     Common::Log::Initialize();
     Common::Log::Start();
