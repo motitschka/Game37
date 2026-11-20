@@ -462,7 +462,7 @@ RETRO_API void retro_get_system_info(struct retro_system_info* info) {
         }
         return text;
     }();
-    info->library_name = "suyu";
+    info->library_name = "swigino";
     info->library_version = version.c_str();
     info->valid_extensions = "nsp|xci|nca|nro";
     info->need_fullpath = true;

@@ -17,7 +17,7 @@ endif()
 
 set_target_properties(suyu_libretro PROPERTIES
     PREFIX ""
-    OUTPUT_NAME "suyu_libretro"
+    OUTPUT_NAME "swigino_libretro"
 )
 
 create_target_directory_groups(suyu_libretro)
