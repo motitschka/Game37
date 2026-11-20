@@ -1367,7 +1367,7 @@ def screen_settings_bios():
 CORES = [("Mesen", ["nes"], "Installed"), ("SameBoy", ["gb", "gbc"], "Installed"), ("bsnes", ["snes"], "Installed"),
          ("Mupen64Plus-Next", ["n64"], 45), ("mGBA", ["gba"], "Installed"),
          ("Dolphin", ["gc", "wii"], "Not downloaded"), ("melonDS DS", ["nds"], "Not downloaded"),
-         ("Azahar", ["3ds"], "Not downloaded"),
+         ("Azahar", ["3ds"], "Not downloaded"), ("swigino", ["switch"], "Not downloaded"),
          ("Beetle PSX HW", ["ps1"], "Failed"),
          ("LRPS2", ["ps2"], "Not downloaded"), ("PPSSPP", ["psp"], "Not downloaded")]
 # The Core rows' pitch and height: twelve fit between Update all and the hint bar.
@@ -1591,7 +1591,8 @@ def screen_settings_about():
                text(vx, y + 48 + i * 40, value, 20, 500, font=MONO))
     y += 48 + 3 * 40 + 48
     sv.add(text(x, y, "Credits", 22, 700))
-    for i, line in enumerate(["Cores from the libretro buildbot", "Artwork from SteamGridDB"]):
+    for i, line in enumerate(["Cores from the libretro buildbot", "Switch Core: swigino, Game37's fork of suyu",
+                              "Artwork from SteamGridDB"]):
         sv.add(text(x, y + 48 + i * 40, line, 20, 500, fill=C["muted"]))
     hintbar(sv, [(["B"], "Back")])
     sv.save()
@@ -1890,7 +1891,8 @@ def screen_setup_folders():
 def screen_setup_cores():
     sv = Svg("29-setup-cores", "First-run Setup: Cores")
     setup_frame(sv, 4, "Download the Cores",
-                "Embedded Systems play inside Game37 with a libretro Core from the libretro buildbot.")
+                "Embedded Systems play inside Game37 with a libretro Core from the libretro buildbot, "
+                "Switch's from Game37's own releases.")
     rows = [("nes", "Mesen", "installed"), ("snes", "bsnes", "downloaded"), ("gba", "mGBA", 0.45),
             ("ps1", "Beetle PSX HW", "waiting"), ("ps2", "LRPS2", "waiting"),
             ("psp", "PPSSPP  ·  plus PPSSPP's assets", "waiting")]

@@ -49,7 +49,11 @@ impl Section for About {
         }
         y += 48.0 + 3.0 * 40.0 + 48.0;
         gfx.text(x, y, "Credits", heading, Align::Left);
-        let credits = ["Cores from the libretro buildbot", "Artwork from SteamGridDB"];
+        let credits = [
+            "Cores from the libretro buildbot",
+            "Switch Core: swigino, Game37's fork of suyu",
+            "Artwork from SteamGridDB",
+        ];
         for (i, line) in credits.iter().enumerate() {
             gfx.text(x, y + 48.0 + i as f32 * 40.0, line, muted, Align::Left);
         }

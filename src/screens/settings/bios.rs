@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use super::{RW, RX, Row, Section, TOP};
-use crate::cores::{self, BiosRule, CoreInfo};
+use crate::cores::{self, BiosRule};
 use crate::ctx::Ctx;
 use crate::emulators;
 use crate::screens::home::tilde;
@@ -59,8 +59,8 @@ impl Status {
         if cores::for_system(system).is_some_and(|core| std::ptr::eq(core, &cores::MELONDS_DS)) {
             return Status::of_ds(&ctx.games_root);
         }
-        if let Some(core) = cores::for_system(system).filter(|core| !core.downloads()) {
-            return Status::of_built(core, ctx);
+        if cores::for_system(system).is_some_and(|core| std::ptr::eq(core, &cores::SWIGINO)) {
+            return Status::of_switch(&ctx.games_root);
         }
         match cores::for_system(system).and_then(|core| core.bios) {
             Some(rule) => match rule.found(&ctx.games_root) {
@@ -71,20 +71,13 @@ impl Status {
         }
     }
 
-    /// A System whose Core Game37 builds rather than downloads (Switch's suyu, ADR 0019): whether
-    /// it is built, then its player's keys, which only encrypted Games need.
-    fn of_built(core: &CoreInfo, ctx: &Ctx) -> Status {
-        if !cores::is_installed(&ctx.data_dir, core) {
-            return Status::Missing(format!(
-                "{} Core not built: run scripts/build-suyu-core.sh",
-                core.name
-            ));
-        }
+    /// Switch's: the player's keys, which only encrypted Games need (homebrew runs without).
+    fn of_switch(games_root: &Path) -> Status {
         let rule = &cores::SWITCH_KEYS;
-        match rule.found(&ctx.games_root) {
+        match rule.found(games_root) {
             Some(file) => Status::Found(file),
             None => {
-                let dir = tilde(&rule.dir(&ctx.games_root), dirs::home_dir().as_deref());
+                let dir = tilde(&rule.dir(games_root), dirs::home_dir().as_deref());
                 Status::Optional(format!("Optional: put {} in {dir}/", rule.wording.ask_for))
             }
         }

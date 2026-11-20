@@ -63,13 +63,13 @@ cmake -S "$src/swigino" -B "$build/core" -GNinja \
     -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-Bsymbolic -lanl"
 cmake --build "$build/core" --target suyu_libretro -j "$(nproc)"
 
-core=$build/core/src/libretro_core/suyu_libretro.so
+core=$build/core/src/libretro_core/swigino_libretro.so
 mkdir -p "$out"
-strip --strip-debug -o "$out/suyu_libretro.so" "$core"
+strip --strip-debug -o "$out/swigino_libretro.so" "$core"
 
 # Only these may come from the system: glibc's libraries and the C++ runtime every distribution has.
 allowed='^(libc\.so\.6|libm\.so\.6|libdl\.so\.2|libpthread\.so\.0|librt\.so\.1|libanl\.so\.1|ld-linux-x86-64\.so\.2|libstdc\+\+\.so\.6|libgcc_s\.so\.1)$'
-needed=$(readelf -d "$out/suyu_libretro.so" | sed -n 's/.*Shared library: \[\(.*\)\]/\1/p')
+needed=$(readelf -d "$out/swigino_libretro.so" | sed -n 's/.*Shared library: \[\(.*\)\]/\1/p')
 echo "The Core needs: $(echo "$needed" | tr '\n' ' ')"
 if extra=$(echo "$needed" | grep -Ev "$allowed"); then
     echo "The Core needs shared libraries a distribution may not have: $(echo "$extra" | tr '\n' ' ')" >&2
@@ -77,16 +77,16 @@ if extra=$(echo "$needed" | grep -Ev "$allowed"); then
 fi
 # Load it the way a frontend does, so a symbol nothing provides fails here rather than in Game37.
 /opt/python/cp312-cp312/bin/python3 -c 'import ctypes, sys; ctypes.CDLL(sys.argv[1], mode=2)' \
-    "$out/suyu_libretro.so"
+    "$out/swigino_libretro.so"
 echo "The Core loads (dlopen with RTLD_NOW)."
-glibc=$(objdump -T "$out/suyu_libretro.so" | grep -oE 'GLIBC_[0-9.]+' | sort -Vu | tail -1)
+glibc=$(objdump -T "$out/swigino_libretro.so" | grep -oE 'GLIBC_[0-9.]+' | sort -Vu | tail -1)
 echo "Newest glibc symbol: $glibc"
 
-size=$(stat -c %s "$out/suyu_libretro.so")
+size=$(stat -c %s "$out/swigino_libretro.so")
 echo "Size: $size bytes"
 if [ "$size" -gt $((64 * 1024 * 1024)) ]; then
     echo "The Core is over Game37's 64 MiB limit for Cores (MAX_CORE_BYTES)." >&2
     exit 1
 fi
-(cd "$out" && sha256sum suyu_libretro.so > suyu_libretro.so.sha256)
-cat "$out/suyu_libretro.so.sha256"
+(cd "$out" && sha256sum swigino_libretro.so > swigino_libretro.so.sha256)
+cat "$out/swigino_libretro.so.sha256"

@@ -187,6 +187,7 @@ dependencies = [
  "libloading",
  "notify",
  "png",
+ "ring",
  "rusqlite",
  "sdl3",
  "serde",

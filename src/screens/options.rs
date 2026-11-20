@@ -1509,7 +1509,7 @@ mod tests {
         assert_eq!(
             OptionsMenu::new(game, &ctx).items(),
             [Favorite, DeleteSaveData, ChooseArtwork, Rename, Hide, ShowFile],
-            "suyu has no states: no Load save state, and no Resume State to skip"
+            "swigino has no states: no Load save state, and no Resume State to skip"
         );
     }
 

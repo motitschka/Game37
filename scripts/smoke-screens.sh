@@ -108,8 +108,8 @@ shot m8-ps2-no-bios "$root/cfg.toml" "nexttab,left,left,left,left,left,confirm,c
 shot m8-3ds "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..9}),confirm,confirm,confirm" --frames 600
 shot m8-gc "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..6}),confirm,confirm,confirm" --frames 600
 shot m8-wii "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..8}),confirm,confirm,confirm" --frames 600
-# Switch on the suyu Core (ADR 0019): Space NX, then the Pause Menu with Save state, Load state and
-# Restart game greyed, as suyu has no states and can't restart.
+# Switch on the swigino Core (ADR 0019, ADR 0022): Space NX, then the Pause Menu with Save state, Load
+# state and Restart game greyed, as swigino has no states and can't restart.
 shot m10-switch-pause "$root/cfg.toml" "nexttab$(printf ',right%.0s' {1..11}),confirm,confirm,confirm,wait:300,back" --frames 30
 # A Wii Game's Options Menu with its Controller row switched to the Classic Controller (m8-wii left
 # a Resume State, so Delete save data is enabled and three downs reach the row)

@@ -106,7 +106,7 @@ Listed in System Order: Nintendo first, then Sony, each by European release date
 | Wii | `wii` | Dolphin Core | `.iso` `.wbfs` `.rvz` `.wia` `.ciso` `.gcz` `.dol` `.elf` |
 | 3DS | `3ds` | Azahar Core | `.3ds` `.cci` `.cxi` `.3dsx` `.app` `.elf` `.axf` `.zcci` `.zcxi` `.z3dsx` `.bcci` `.bcxi` |
 | Wii U | `wiiu` | Cemu | `.wua` `.wud` `.wux`, or a game folder with `code/`, `content/` and `meta/` |
-| Switch | `switch` | suyu Core (built once, see below) | `.nsp` `.xci` `.nro` |
+| Switch | `switch` | swigino Core (Game37's fork of suyu) | `.nsp` `.xci` `.nro` |
 | Switch 2 | `switch2` | not playable yet | `.nsp` `.xci` `.nup` |
 | PlayStation | `ps1` | Beetle PSX HW Core | `.cue` (with its `.bin`) `.chd` `.pbp` `.m3u` |
 | PlayStation 2 | `ps2` | LRPS2 Core | `.iso` `.chd` `.cso` `.zso` `.ciso` `.cue` (with its `.bin`) `.elf` |
@@ -398,11 +398,7 @@ After Setup, or once it's done:
   folder. Game37 uses them only when all three are there; Settings → BIOS says which are missing.
 - **Switch keys (for `.nsp` and `.xci`).** Switch Games are encrypted: dump `prod.keys` (and
   `title.keys`, if you have it) from your own Switch and put them in the Games Root's `bios/switch/`
-  folder. Game37 copies them to the suyu Core before each start. Homebrew (`.nro`) needs no keys.
-- **The suyu Core for Switch, built once.** It isn't on the libretro build server, so run
-  `scripts/build-suyu-core.sh` from the Game37 folder (a git checkout). It builds `swigino/`, Game37's
-  own fork of suyu's libretro Core, and installs it; the first build takes a while, and needs no sudo.
-  Settings → BIOS shows whether it's built. It never downloads keys, firmware or games.
+  folder. Game37 copies them to the swigino Core before each start. Homebrew (`.nro`) needs no keys.
 - **Emulators that need files from your own console**, set up inside the emulator itself rather than in
   the Games Root: the PS3 firmware for RPCS3, and the PS4 modules for shadPS4.
 
@@ -607,8 +603,8 @@ Oldest release on screen, once per Game.
   In-game Save.
 - shadPS4 stays open in its own game list when a game stops, so Playtime keeps counting until you
   close the emulator's window.
-- Switch has no Save States, Resume State or Restart game: the suyu Core can't save the emulated
-  Switch's state. Your In-game Saves are kept as usual. Switch is only confirmed with homebrew so
+- Switch has no Save States, Resume State or Restart game: the swigino Core can't save the
+  emulated Switch's state. Your In-game Saves are kept as usual. Switch is only confirmed with homebrew so
   far, not with a commercial game.
 - Embedded Systems render with OpenGL only, not Vulkan, so some PS2, 3DS, GameCube and Wii Games may
   run slower than in their standalone emulators.

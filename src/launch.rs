@@ -15,7 +15,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
-use crate::cores::{self, BiosRule, CoreInfo};
+use crate::cores::{self, BiosRule};
 use crate::ctx::{Ctx, Play};
 use crate::emulators::{self, Emulator, PATH};
 use crate::library::db::GameRow;
@@ -65,12 +65,6 @@ pub fn confirm_play(play: Play, ctx: &mut Ctx) -> Transition {
                 missing_bios_message(&ctx.games_root, rule),
             )));
         }
-        if !core.downloads() && !cores::is_installed(&ctx.data_dir, core) {
-            return Transition::Push(Box::new(Message::new(
-                CORE_NOT_BUILT_TITLE,
-                core_not_built_message(core, system),
-            )));
-        }
         if !cores::is_installed(&ctx.data_dir, core) {
             let screen = if let Some(assets) = core.assets
                 && !cores::has_assets(&ctx.data_dir, core)
@@ -88,17 +82,6 @@ pub fn confirm_play(play: Play, ctx: &mut Ctx) -> Transition {
         Some(message) => Transition::Push(Box::new(Message::new(NOT_PLAYABLE_TITLE, message))),
         None => Transition::None,
     }
-}
-
-const CORE_NOT_BUILT_TITLE: &str = "Core not built yet";
-
-/// Why a Game whose Core isn't on the build server doesn't start before the Core is built.
-pub(crate) fn core_not_built_message(core: &CoreInfo, system: &System) -> String {
-    format!(
-        "{} games play with the {} Core, which Game37 builds from source once. Run \
-         scripts/build-suyu-core.sh from the Game37 folder, then press Play again.",
-        system.name, core.name
-    )
 }
 
 /// FR-EMB-12's message for a missing BIOS, in its System's words, naming the folder it goes in.
@@ -825,14 +808,19 @@ mod tests {
     }
 
     #[test]
-    fn a_switch_game_before_the_core_is_built_says_how_to_build_it() {
+    fn a_switch_game_before_its_core_is_there_downloads_it() {
         let mut w = world("exit 0");
         w.ctx.data_dir = w._dir.path().join("data");
+        let started = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = std::sync::Arc::clone(&started);
+        // Never touches the network: this only checks which Core Confirm starts downloading.
+        w.ctx.start_download = Box::new(move |core, data_dir| {
+            seen.lock().unwrap().push(core.file);
+            cores::testing::spawn_failing(core, data_dir)
+        });
         let game = switch_game(&w, "Homebrew.nro");
-        let Transition::Push(screen) = confirm_game(&game, &mut w.ctx) else {
-            panic!("expected the Core-not-built message, not a download");
-        };
-        assert_eq!(screen.title(), "Core not built yet");
+        assert!(matches!(confirm_game(&game, &mut w.ctx), Transition::Push(_)));
+        assert_eq!(*started.lock().unwrap(), vec!["swigino_libretro.so"]);
         assert!(w.ctx.play.is_none());
     }
 
@@ -840,7 +828,7 @@ mod tests {
     fn an_encrypted_switch_game_without_keys_asks_for_them_and_homebrew_plays_without() {
         let mut w = world("exit 0");
         w.ctx.data_dir = w._dir.path().join("data");
-        touch(&w.ctx.data_dir.join("cores/suyu_libretro.so"));
+        touch(&w.ctx.data_dir.join("cores/swigino_libretro.so"));
         for file in ["Game.nsp", "Game.xci"] {
             let Transition::Push(screen) = confirm_game(&switch_game(&w, file), &mut w.ctx) else {
                 panic!("expected the missing-keys message for {file}");

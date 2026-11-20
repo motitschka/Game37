@@ -39,6 +39,19 @@ pub struct CoreInfo {
     pub saves: InGameSaves,
     /// The touch screen of a two-screen System (DS, 3DS), or `None` for a System without one.
     pub touch: Option<TouchScreen>,
+    /// Where Game37 downloads it from.
+    pub source: CoreSource,
+}
+
+/// Where Game37 downloads a Core from (NFR-5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoreSource {
+    /// The libretro build server's nightly zip of [`CoreInfo::file`] ([`url`]).
+    Buildbot,
+    /// A zip of [`CoreInfo::file`] that Game37 publishes on its own GitHub releases, pinned by the
+    /// zip's SHA-256 (lowercase hex): a download that doesn't match isn't installed. GitHub answers
+    /// with a redirect to its asset host, the one redirect Game37 follows ([`followed_redirect`]).
+    Release { url: &'static str, sha256: &'static str },
 }
 
 /// A Core's touch screen, one of two screens it shows in one frame (FR-DS-1–3, FR-NEW-2): the
@@ -246,6 +259,7 @@ pub static DOLPHIN_ASSETS: CoreAssets = CoreAssets {
 };
 
 pub static MESEN: CoreInfo = CoreInfo {
+    source: CoreSource::Buildbot,
     name: "Mesen",
     file: "mesen_libretro.so",
     options: &[],
@@ -255,6 +269,7 @@ pub static MESEN: CoreInfo = CoreInfo {
     touch: None,
 };
 pub static BSNES: CoreInfo = CoreInfo {
+    source: CoreSource::Buildbot,
     name: "bsnes",
     file: "bsnes_libretro.so",
     options: &[],
@@ -264,6 +279,7 @@ pub static BSNES: CoreInfo = CoreInfo {
     touch: None,
 };
 pub static SAMEBOY: CoreInfo = CoreInfo {
+    source: CoreSource::Buildbot,
     name: "SameBoy",
     file: "sameboy_libretro.so",
     options: &[],
@@ -273,6 +289,7 @@ pub static SAMEBOY: CoreInfo = CoreInfo {
     touch: None,
 };
 pub static MGBA: CoreInfo = CoreInfo {
+    source: CoreSource::Buildbot,
     name: "mGBA",
     file: "mgba_libretro.so",
     options: &[],
@@ -282,6 +299,7 @@ pub static MGBA: CoreInfo = CoreInfo {
     touch: None,
 };
 pub static MUPEN64PLUS_NEXT: CoreInfo = CoreInfo {
+    source: CoreSource::Buildbot,
     name: "Mupen64Plus-Next",
     file: "mupen64plus_next_libretro.so",
     options: &[],
@@ -333,6 +351,7 @@ fn n64_is_pal(header: &[u8; 64]) -> bool {
 /// option, so this is also needed for OpenGL hardware rendering to have any effect (see
 /// `docs/research/m4-cores.md`).
 pub static BEETLE_PSX_HW: CoreInfo = CoreInfo {
+    source: CoreSource::Buildbot,
     name: "Beetle PSX HW",
     file: "mednafen_psx_hw_libretro.so",
     options: &[("beetle_psx_hw_renderer", "hardware_gl")],
@@ -365,6 +384,7 @@ pub fn missing_ds_sysfiles(games_root: &Path) -> Vec<&'static str> {
 /// Options chosen for FR-DS-1–3: the layout Large and small draws from (see [`DS_LAYOUTS`]), the
 /// touch pointer and joystick cursor both live, and a visible cursor for aiming it.
 pub static MELONDS_DS: CoreInfo = CoreInfo {
+    source: CoreSource::Buildbot,
     name: "melonDS DS",
     file: "melondsds_libretro.so",
     options: &[
@@ -393,6 +413,7 @@ pub static MELONDS_DS: CoreInfo = CoreInfo {
     }),
 };
 pub static PPSSPP: CoreInfo = CoreInfo {
+    source: CoreSource::Buildbot,
     name: "PPSSPP",
     file: "ppsspp_libretro.so",
     options: &[],
@@ -405,6 +426,7 @@ pub static PPSSPP: CoreInfo = CoreInfo {
 /// host; twice the PS2's resolution; a memory card per Game, `<save dir>/<file stem>.ps2`; and the
 /// BIOS intro skipped.
 pub static LRPS2: CoreInfo = CoreInfo {
+    source: CoreSource::Buildbot,
     name: "LRPS2",
     file: "pcsx2_libretro.so",
     options: &[
@@ -425,6 +447,7 @@ pub static LRPS2: CoreInfo = CoreInfo {
 /// ([`screen_layouts`]). Its Save States break on every Core update: a slot that can't load then
 /// says so.
 pub static AZAHAR: CoreInfo = CoreInfo {
+    source: CoreSource::Buildbot,
     name: "Azahar",
     file: "azahar_libretro.so",
     options: &[
@@ -456,6 +479,7 @@ pub static AZAHAR: CoreInfo = CoreInfo {
 /// `User/` folder in the System's save folder. On Wii the controller is a Wii Remote with a
 /// Nunchuk, or a Classic Controller for a Game set to it ([`CoreInfo::port_device`]).
 pub static DOLPHIN: CoreInfo = CoreInfo {
+    source: CoreSource::Buildbot,
     name: "Dolphin",
     file: "dolphin_libretro.so",
     options: &[
@@ -471,18 +495,23 @@ pub static DOLPHIN: CoreInfo = CoreInfo {
     touch: None,
 };
 
-/// suyu (ADR 0019), for Switch: a yuzu-derived emulator whose libretro Core renders with its own
-/// Vulkan device and hands Game37 finished frames, so it needs no OpenGL host. It isn't on the
-/// build server: Game37 builds it from `swigino/`, its own fork of suyu's libretro Core
-/// (`scripts/build-suyu-core.sh`, [`CoreInfo::downloads`]). Its sound goes through Game37, its
+/// swigino, for Switch (ADR 0019, ADR 0022): Game37's own fork of suyu's libretro Core, in
+/// `swigino/`. suyu is a yuzu-derived emulator whose Core renders with its own Vulkan device and
+/// hands Game37 finished frames, so it needs no OpenGL host. It isn't on the build server: Game37's
+/// GitHub Actions build it and publish it as a release ([`CoreSource::Release`]);
+/// `scripts/build-swigino-core.sh` builds the same file locally. Its sound goes through Game37, its
 /// on-screen frame counter is off, and the Switch plays docked. It keeps its NAND (which holds
 /// In-game Saves) under the System's save folder and its config and caches in its own system
 /// folder ([`CoreInfo::own_system_dir`]). It has no Save States and can't restart a Game
 /// ([`CoreInfo::has_states`], [`CoreInfo::resets`]). Encrypted Games need the player's keys
 /// ([`SWITCH_KEYS`]).
-pub static SUYU: CoreInfo = CoreInfo {
-    name: "suyu",
-    file: "suyu_libretro.so",
+pub static SWIGINO: CoreInfo = CoreInfo {
+    source: CoreSource::Release {
+        url: SWIGINO_RELEASE_URL,
+        sha256: SWIGINO_RELEASE_SHA256,
+    },
+    name: "swigino",
+    file: "swigino_libretro.so",
     options: &[
         ("suyu_show_perf", "Off"),
         ("suyu_audio_output", "Frontend (libretro)"),
@@ -493,6 +522,13 @@ pub static SUYU: CoreInfo = CoreInfo {
     saves: InGameSaves::Shared,
     touch: None,
 };
+
+/// The swigino release Game37 downloads: `scripts/ci/build-swigino-portable.sh`'s Core, built
+/// by `.github/workflows/swigino-core.yml` for the tag `swigino-<version>`.
+const SWIGINO_RELEASE_URL: &str =
+    "https://github.com/motitschka/Game37/releases/download/swigino-1/swigino_libretro.so.zip";
+/// The SHA-256 of [`SWIGINO_RELEASE_URL`]'s zip, as its release's `.sha256` file gives it.
+const SWIGINO_RELEASE_SHA256: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
 /// The player's own Switch keys (FR-NEW-5): `prod.keys`, and `title.keys` if they have one, in
 /// `<Games Root>/bios/switch/`. Only encrypted Games (`.nsp`, `.xci`) need them; homebrew
@@ -508,7 +544,7 @@ pub static SWITCH_KEYS: BiosRule = BiosRule {
     },
 };
 
-/// The Switch keys files Game37 copies into suyu's own folder before it loads a Game.
+/// The Switch keys files Game37 copies into swigino's own folder before it loads a Game.
 pub const SWITCH_KEY_FILES: [&str; 2] = ["prod.keys", "title.keys"];
 
 /// Dolphin's Wii Remote with a Nunchuk (`RETRO_DEVICE_WIIMOTE_NC` in its `Input.cpp`): what most
@@ -777,7 +813,7 @@ impl CoreInfo {
     /// GameCube, Wii (the Nunchuk's), PSP, PS2 and 3DS have one, so their Cores read it as analog
     /// only.
     pub fn stick_is_dpad(&self) -> bool {
-        ![&MUPEN64PLUS_NEXT, &PPSSPP, &LRPS2, &AZAHAR, &DOLPHIN, &SUYU]
+        ![&MUPEN64PLUS_NEXT, &PPSSPP, &LRPS2, &AZAHAR, &DOLPHIN, &SWIGINO]
             .iter()
             .any(|core| std::ptr::eq(self, *core))
     }
@@ -797,39 +833,33 @@ impl CoreInfo {
         std::ptr::eq(self, &MUPEN64PLUS_NEXT)
     }
 
-    /// Whether Game37 downloads this Core from the libretro build server. suyu isn't there: it is
-    /// built from `swigino/`, Game37's own fork of it (`scripts/build-suyu-core.sh`, ADR 0019).
-    pub fn downloads(&self) -> bool {
-        !std::ptr::eq(self, &SUYU)
-    }
-
     /// Whether this Core can save and load states, and so have Save States and a Resume State
-    /// (FR-EMB-5, FR-EMB-6). suyu can't.
+    /// (FR-EMB-5, FR-EMB-6). swigino can't.
     pub fn has_states(&self) -> bool {
-        !std::ptr::eq(self, &SUYU)
+        !std::ptr::eq(self, &SWIGINO)
     }
 
     /// Whether this Core can restart a Game (`retro_reset`), for the Pause Menu's Restart game.
-    /// suyu can't.
+    /// swigino can't.
     pub fn resets(&self) -> bool {
-        !std::ptr::eq(self, &SUYU)
+        !std::ptr::eq(self, &SWIGINO)
     }
 
     /// Whether this Core keeps its system directory under the data dir though it has no assets:
-    /// suyu writes its config, caches and logs there, which don't belong with the player's BIOS
+    /// swigino writes its config, caches and logs there, which don't belong with the player's BIOS
     /// files.
     pub fn own_system_dir(&self) -> bool {
-        std::ptr::eq(self, &SUYU)
+        std::ptr::eq(self, &SWIGINO)
     }
 
-    /// The keys a Game at `game` needs before this Core can start it: suyu's encrypted Games
+    /// The keys a Game at `game` needs before this Core can start it: swigino's encrypted Games
     /// (`.nsp`, `.xci`) need [`SWITCH_KEYS`]; homebrew needs none.
     pub fn keys_for(&self, game: &Path) -> Option<&'static BiosRule> {
         let encrypted = game
             .extension()
             .and_then(|e| e.to_str())
             .is_some_and(|e| e.eq_ignore_ascii_case("nsp") || e.eq_ignore_ascii_case("xci"));
-        (std::ptr::eq(self, &SUYU) && encrypted).then_some(&SWITCH_KEYS)
+        (std::ptr::eq(self, &SWIGINO) && encrypted).then_some(&SWITCH_KEYS)
     }
 
     /// Whether this Core is loaded into an address window
@@ -868,16 +898,9 @@ pub fn for_system(system: &System) -> Option<&'static CoreInfo> {
         "3ds" => Some(&AZAHAR),
         "ps2" => Some(&LRPS2),
         "psp" => Some(&PPSSPP),
-        "switch" => Some(&SUYU),
+        "switch" => Some(&SWIGINO),
         _ => None,
     }
-}
-
-/// The Core Game37 downloads for a System: [`for_system`]'s, unless it isn't on the build server
-/// ([`CoreInfo::downloads`]), as suyu isn't. The download screens (Setup's Cores step, Settings →
-/// Cores) list only these.
-pub fn downloadable_for(system: &System) -> Option<&'static CoreInfo> {
-    for_system(system).filter(|core| core.downloads())
 }
 
 /// Where a Core is, or would be, stored: `<data_dir>/cores/<file>`.
@@ -927,11 +950,11 @@ pub fn has_required_bios(games_root: &Path, core: &CoreInfo) -> bool {
 }
 
 /// Copies the player's Switch keys ([`SWITCH_KEY_FILES`] in [`SWITCH_KEYS`]' folder) to where
-/// suyu reads them, `<system dir>/suyu/keys/`, before it loads a Game, replacing older copies so a
+/// swigino reads them, `<system dir>/suyu/keys/` (the folder keeps suyu's name), before it loads a Game, replacing older copies so a
 /// new dump takes effect. Does nothing for any other Core, or for a key file that isn't there.
 /// The files are copied, never read or logged.
 pub fn stage_keys(core: &CoreInfo, games_root: &Path, system_dir: &Path) -> io::Result<()> {
-    if !std::ptr::eq(core, &SUYU) {
+    if !std::ptr::eq(core, &SWIGINO) {
         return Ok(());
     }
     let from = SWITCH_KEYS.dir(games_root);
@@ -953,12 +976,16 @@ pub fn found_bios(games_root: &Path, core: &CoreInfo) -> Option<String> {
     core.bios.and_then(|rule| rule.found(games_root))
 }
 
-/// The libretro build server's URL for a Core's nightly zip.
+/// Where a Core's zip is downloaded from: the libretro build server's nightly zip, or the
+/// Core's pinned release.
 pub fn url(core: &CoreInfo) -> String {
-    format!(
-        "https://buildbot.libretro.com/nightly/linux/x86_64/latest/{}.zip",
-        core.file
-    )
+    match core.source {
+        CoreSource::Buildbot => format!(
+            "https://buildbot.libretro.com/nightly/linux/x86_64/latest/{}.zip",
+            core.file
+        ),
+        CoreSource::Release { url, .. } => url.to_string(),
+    }
 }
 
 /// How far a [`Download`] has got.
@@ -987,7 +1014,7 @@ type Fetcher = Arc<dyn Fn(&str) -> FetchResult + Send + Sync>;
 const MAX_DOWNLOAD_BYTES: u64 = 100 * 1024 * 1024;
 
 /// A cap on a Core's unzipped size, so a zip bomb can't fill memory or the disk. The largest real
-/// Core, Azahar's, is about 47 MB; most are under 25 MB.
+/// Core, swigino's, is about 52 MB, Azahar's about 47 MB; most are under 25 MB.
 const MAX_CORE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// The size caps a download enforces. A parameter so tests can exercise them with tiny inputs.
@@ -1181,6 +1208,7 @@ fn run(
     let mut zip_file = temp_file(&cores_dir, core, ".zip.part").map_err(|e| save_failed(core, &e))?;
     let mut buf = vec![0u8; CHUNK];
     let mut received: u64 = 0;
+    let mut digest = ring::digest::Context::new(&ring::digest::SHA256);
     loop {
         check_cancel(cancel)?;
         let n = reader.read(&mut buf).map_err(|_| incomplete(core))?;
@@ -1192,6 +1220,7 @@ fn run(
             return Err(incomplete(core));
         }
         zip_file.write_all(&buf[..n]).map_err(|e| save_failed(core, &e))?;
+        digest.update(&buf[..n]);
         *lock(state) = DownloadState::Running { received, total };
     }
     drop(reader);
@@ -1199,6 +1228,11 @@ fn run(
         && received < total
     {
         return Err(incomplete(core));
+    }
+    if let CoreSource::Release { sha256, .. } = core.source
+        && hex(digest.finish().as_ref()) != sha256
+    {
+        return Err(checksum_mismatch(core));
     }
 
     // Open the zip and take the one entry we trust: `by_name` matches the name exactly.
@@ -1443,6 +1477,18 @@ fn incomplete(core: &CoreInfo) -> String {
     format!("The {} Core download was incomplete.", core.name)
 }
 
+fn checksum_mismatch(core: &CoreInfo) -> String {
+    format!(
+        "The downloaded {} Core isn't the one this Game37 expects (its checksum differs).",
+        core.name
+    )
+}
+
+/// Lowercase hex, as a release's `.sha256` file writes a SHA-256.
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 fn invalid_library(core: &CoreInfo) -> String {
     format!("The downloaded {} Core isn't a valid Linux library.", core.name)
 }
@@ -1457,8 +1503,9 @@ fn save_failed(core: &CoreInfo, error: &io::Error) -> String {
 /// total, as ureq 3 has no idle timeout between reads: enough for the largest Core on a slow but
 /// working connection. The user can cancel at any point regardless.
 ///
-/// Redirects are not followed: the build server answers its zip URLs directly, and NFR-5 allows
-/// no other host. A redirect shows up as its HTTP status.
+/// The build server answers its zip URLs directly. A GitHub release download answers with a
+/// redirect to GitHub's asset host, and only such a redirect is followed ([`followed_redirect`]):
+/// NFR-5 allows no other host. Any other redirect shows up as its HTTP status.
 fn ureq_fetch(url: &str) -> FetchResult {
     let step = Some(Duration::from_secs(30));
     let config = ureq::Agent::config_builder()
@@ -1471,14 +1518,50 @@ fn ureq_fetch(url: &str) -> FetchResult {
         .http_status_as_error(false)
         .build();
     let agent: ureq::Agent = config.into();
-    let response = agent.get(url).call().map_err(|_| FetchError::Connect)?;
-    let status = response.status().as_u16();
-    if status != 200 {
-        return Err(FetchError::Status(status));
+    let mut url = url.to_string();
+    let mut redirects = 0;
+    loop {
+        let response = agent.get(&url).call().map_err(|_| FetchError::Connect)?;
+        let status = response.status().as_u16();
+        if (300..400).contains(&status) && redirects < MAX_REDIRECTS {
+            let next = response
+                .headers()
+                .get("location")
+                .and_then(|location| location.to_str().ok())
+                .and_then(followed_redirect);
+            if let Some(next) = next {
+                url = next;
+                redirects += 1;
+                continue;
+            }
+        }
+        if status != 200 {
+            return Err(FetchError::Status(status));
+        }
+        let total = response.body().content_length();
+        let reader = response.into_body().into_reader();
+        return Ok((Box::new(reader), total));
     }
-    let total = response.body().content_length();
-    let reader = response.into_body().into_reader();
-    Ok((Box::new(reader), total))
+}
+
+/// GitHub sends a release download on through one redirect; a few more are allowed in case it
+/// adds one.
+const MAX_REDIRECTS: u32 = 3;
+
+/// The hosts GitHub serves release assets from, after redirecting a release download there.
+const RELEASE_ASSET_HOSTS: [&str; 2] = [
+    "release-assets.githubusercontent.com",
+    "objects.githubusercontent.com",
+];
+
+/// The URL a redirect's `location` leads to, if Game37 follows it: an absolute `https` URL on
+/// GitHub's release asset host, on the default port. Every other redirect is refused (NFR-5).
+fn followed_redirect(location: &str) -> Option<String> {
+    let uri: ureq::http::Uri = location.parse().ok()?;
+    let allowed = uri.scheme_str() == Some("https")
+        && uri.port().is_none()
+        && uri.host().is_some_and(|host| RELEASE_ASSET_HOSTS.contains(&host));
+    allowed.then(|| location.to_string())
 }
 
 impl fmt::Debug for Download {
@@ -2498,6 +2581,7 @@ mod tests {
         assets: Some(&DOLPHIN_ASSETS),
         saves: InGameSaves::SaveMemory,
         touch: None,
+        source: CoreSource::Buildbot,
     };
 
     #[test]
@@ -2894,44 +2978,109 @@ mod tests {
         assert_eq!(leftovers(&data_dir), Vec::<PathBuf>::new());
     }
     #[test]
-    fn switch_plays_on_suyu_which_game37_builds_rather_than_downloads() {
+    fn switch_plays_on_swigino_downloaded_from_its_pinned_release() {
         let switch = crate::systems::by_id("switch").unwrap();
-        assert_eq!(for_system(switch), Some(&SUYU));
-        assert!(!SUYU.downloads());
-        assert_eq!(
-            downloadable_for(switch),
-            None,
-            "the download screens leave it out"
+        assert_eq!(for_system(switch), Some(&SWIGINO));
+        assert_eq!(SWIGINO.file, "swigino_libretro.so");
+        let CoreSource::Release { url: release, sha256 } = SWIGINO.source else {
+            panic!("swigino comes from Game37's own release");
+        };
+        assert_eq!(url(&SWIGINO), release);
+        assert!(release.starts_with("https://github.com/motitschka/Game37/releases/download/swigino-"));
+        assert!(release.ends_with("/swigino_libretro.so.zip"));
+        assert!(
+            sha256.len() == 64
+                && sha256
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            "a lowercase hex SHA-256: {sha256}"
         );
-        assert_eq!(
-            downloadable_for(crate::systems::by_id("snes").unwrap()),
-            Some(&BSNES)
-        );
-    }
-
-    #[test]
-    fn suyu_has_no_save_states_and_no_restart() {
-        assert!(!SUYU.has_states());
-        assert!(!SUYU.resets());
         for core in [&MESEN, &BSNES, &DOLPHIN, &LRPS2, &AZAHAR, &PPSSPP] {
-            assert!(core.has_states() && core.resets(), "{}", core.name);
-            assert!(core.downloads(), "{}", core.name);
+            assert_eq!(core.source, CoreSource::Buildbot, "{}", core.name);
+            assert!(
+                url(core).starts_with("https://buildbot.libretro.com/"),
+                "{}",
+                core.name
+            );
         }
     }
 
     #[test]
-    fn suyu_keeps_its_system_folder_under_the_data_dir() {
+    fn swigino_has_no_save_states_and_no_restart() {
+        assert!(!SWIGINO.has_states());
+        assert!(!SWIGINO.resets());
+        for core in [&MESEN, &BSNES, &DOLPHIN, &LRPS2, &AZAHAR, &PPSSPP] {
+            assert!(core.has_states() && core.resets(), "{}", core.name);
+        }
+    }
+
+    /// A Core pinned to a release of `zip`, its SHA-256 given as `sha256`.
+    fn released_core(sha256: String) -> &'static CoreInfo {
+        Box::leak(Box::new(CoreInfo {
+            source: CoreSource::Release {
+                url: "https://github.com/motitschka/Game37/releases/download/swigino-test/x.zip",
+                sha256: Box::leak(sha256.into_boxed_str()),
+            },
+            ..SAMEBOY
+        }))
+    }
+
+    #[test]
+    fn a_released_core_installs_only_when_its_zip_matches_the_pinned_sha256() {
+        let zip = core_zip();
+        let matching = hex(ring::digest::digest(&ring::digest::SHA256, &zip).as_ref());
+
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().to_path_buf();
+        let mut download = Download::spawn(
+            released_core("0".repeat(64)),
+            data_dir.clone(),
+            fixed_reader_fetcher(zip.clone()),
+        );
+        let message = wait_for_failure(&mut download);
+        assert!(message.contains("checksum"), "{message}");
+        assert!(!installed_path(&data_dir, &SAMEBOY).exists(), "nothing installed");
+        assert_eq!(leftovers(&data_dir), Vec::<PathBuf>::new());
+
+        let mut download = Download::spawn(
+            released_core(matching),
+            data_dir.clone(),
+            fixed_reader_fetcher(zip),
+        );
+        assert_eq!(wait_for_done(&mut download), installed_path(&data_dir, &SAMEBOY));
+    }
+
+    #[test]
+    fn only_a_redirect_to_githubs_release_asset_host_is_followed() {
+        let asset = "https://release-assets.githubusercontent.com/github-production-release-asset/1/2?sig=x";
+        assert_eq!(followed_redirect(asset).as_deref(), Some(asset));
+        assert!(followed_redirect("https://objects.githubusercontent.com/a/b").is_some());
+        for refused in [
+            "http://release-assets.githubusercontent.com/a",
+            "https://release-assets.githubusercontent.com:8443/a",
+            "https://evil.example/release-assets.githubusercontent.com/a",
+            "https://release-assets.githubusercontent.com.evil.example/a",
+            "https://github.com/motitschka/Game37/releases",
+            "/relative/path",
+            "not a url",
+        ] {
+            assert_eq!(followed_redirect(refused), None, "{refused}");
+        }
+    }
+
+    #[test]
+    fn swigino_keeps_its_system_folder_under_the_data_dir() {
         let (data, root) = (Path::new("/data"), Path::new("/Games"));
-        assert_eq!(system_dir(&SUYU, data, root), Path::new("/data/system"));
+        assert_eq!(system_dir(&SWIGINO, data, root), Path::new("/data/system"));
         assert_eq!(system_dir(&BSNES, data, root), Path::new("/Games/bios"));
     }
 
     #[test]
     fn only_encrypted_switch_games_need_the_keys() {
         for game in ["switch/A.nsp", "switch/B.XCI"] {
-            assert_eq!(SUYU.keys_for(Path::new(game)), Some(&SWITCH_KEYS), "{game}");
+            assert_eq!(SWIGINO.keys_for(Path::new(game)), Some(&SWITCH_KEYS), "{game}");
         }
-        assert_eq!(SUYU.keys_for(Path::new("switch/Homebrew.nro")), None);
+        assert_eq!(SWIGINO.keys_for(Path::new("switch/Homebrew.nro")), None);
         assert_eq!(BSNES.keys_for(Path::new("snes/A.xci")), None);
         assert_eq!(
             SWITCH_KEYS.dir(Path::new("/Games")),
@@ -2940,14 +3089,14 @@ mod tests {
     }
 
     #[test]
-    fn stage_keys_copies_the_players_keys_where_suyu_reads_them() {
+    fn stage_keys_copies_the_players_keys_where_swigino_reads_them() {
         let dir = tempfile::tempdir().unwrap();
         let (root, system) = (dir.path().join("Games"), dir.path().join("system"));
         let keys = SWITCH_KEYS.dir(&root);
         fs::create_dir_all(&keys).unwrap();
         fs::write(keys.join("prod.keys"), "old").unwrap();
         fs::write(keys.join("notes.txt"), "not a key").unwrap();
-        stage_keys(&SUYU, &root, &system).unwrap();
+        stage_keys(&SWIGINO, &root, &system).unwrap();
         let staged = system.join("suyu/keys");
         assert_eq!(fs::read_to_string(staged.join("prod.keys")).unwrap(), "old");
         assert!(!staged.join("title.keys").exists(), "only keys that are there");
@@ -2956,7 +3105,7 @@ mod tests {
         // A new dump replaces the copy.
         fs::write(keys.join("prod.keys"), "new").unwrap();
         fs::write(keys.join("title.keys"), "titles").unwrap();
-        stage_keys(&SUYU, &root, &system).unwrap();
+        stage_keys(&SWIGINO, &root, &system).unwrap();
         assert_eq!(fs::read_to_string(staged.join("prod.keys")).unwrap(), "new");
         assert_eq!(fs::read_to_string(staged.join("title.keys")).unwrap(), "titles");
     }
@@ -2965,7 +3114,7 @@ mod tests {
     fn stage_keys_does_nothing_for_other_cores_or_without_keys() {
         let dir = tempfile::tempdir().unwrap();
         let (root, system) = (dir.path().join("Games"), dir.path().join("system"));
-        stage_keys(&SUYU, &root, &system).unwrap();
+        stage_keys(&SWIGINO, &root, &system).unwrap();
         assert!(!system.exists(), "no keys, nothing made");
         let keys = SWITCH_KEYS.dir(&root);
         fs::create_dir_all(&keys).unwrap();

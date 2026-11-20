@@ -198,7 +198,7 @@ impl Cores {
     }
 
     fn core_of(&self, i: usize) -> &'static CoreInfo {
-        cores::downloadable_for(self.rows[i].system).expect("a row's System has a downloaded Core")
+        cores::for_system(self.rows[i].system).expect("a row's System has a downloaded Core")
     }
 
     /// The BIOS note under the rows: a line for each ticked System whose Core needs a BIOS.
@@ -282,18 +282,18 @@ impl Step for Cores {
     }
 
     fn explanation(&self) -> &'static str {
-        "Embedded Systems play inside Game37 with a libretro Core from the libretro buildbot."
+        "Embedded Systems play inside Game37 with a libretro Core from the libretro buildbot, Switch's from Game37's own releases."
     }
 
     fn applies(&self, model: &Model) -> bool {
-        model.ticked().any(|s| cores::downloadable_for(s).is_some())
+        model.ticked().any(|s| cores::for_system(s).is_some())
     }
 
     fn enter(&mut self, model: &Model, ctx: &mut Ctx) {
         let mut queued: Vec<&'static CoreInfo> = Vec::new();
         self.rows.clear();
         for system in model.ticked() {
-            let Some(core) = cores::downloadable_for(system) else {
+            let Some(core) = cores::for_system(system) else {
                 continue;
             };
             let at = match queued.iter().position(|&c| c == core) {
@@ -482,8 +482,12 @@ mod tests {
     #[test]
     fn the_step_is_passed_over_without_an_embedded_system() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(!Cores::new().applies(&model(dir.path(), &["wiiu", "switch"])));
+        assert!(!Cores::new().applies(&model(dir.path(), &["wiiu", "ps3"])));
         assert!(Cores::new().applies(&model(dir.path(), &["wiiu", "nes"])));
+        assert!(
+            Cores::new().applies(&model(dir.path(), &["wiiu", "switch"])),
+            "Switch's swigino"
+        );
 
         let mut setup = Setup::new(dir.path().join("Games"));
         setup.model = model(dir.path(), &["wiiu"]);

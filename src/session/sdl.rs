@@ -315,7 +315,7 @@ impl Session {
             fs::create_dir_all(dir)
                 .map_err(|e| StartError::generic(fail(&format!("Can't create {}: {e}", dir.display()))))?;
         }
-        // The player's Switch keys go where suyu looks for them, before it loads.
+        // The player's Switch keys go where swigino looks for them, before it loads.
         cores::stage_keys(core_info, root, &dirs.system)
             .map_err(|e| StartError::generic(fail(&format!("Can't copy the Switch keys: {e}"))))?;
         // Before the Core loads, or it makes its own (an unformatted PS2 memory card).
@@ -2391,14 +2391,14 @@ mod tests {
         to_like < to_unlike
     }
 
-    /// suyu (ADR 0019) boots the Space NX homebrew from `.testdata/games/switch/` on the renderer
-    /// (the Core built by `scripts/build-suyu-core.sh`, in `.testdata/data/cores/`). It keeps its
-    /// own files in the data dir's system folder and its NAND in the Switch save folder, writes
-    /// nothing to the BIOS folder, offers no Save States, and quits promptly. suyu runs on its own
-    /// clock, so the frames are ticked at 60 a second.
+    /// swigino (ADR 0019, ADR 0022) boots the Space NX homebrew from `.testdata/games/switch/` on the
+    /// renderer (the Core built by `scripts/build-swigino-core.sh` or published by Game37's Actions,
+    /// in `.testdata/data/cores/`). It keeps its own files in the data dir's system folder and its
+    /// NAND in the Switch save folder, writes nothing to the BIOS folder, offers no Save States, and
+    /// quits promptly. swigino runs on its own clock, so the frames are ticked at 60 a second.
     #[test]
     #[ignore = "needs /home/matei/Game37/.testdata"]
-    fn hw_suyu_boots_homebrew_keeps_its_files_in_game37s_folders_and_quits() {
+    fn hw_swigino_boots_homebrew_keeps_its_files_in_game37s_folders_and_quits() {
         use crate::ui::text::Fonts;
 
         let _serial = serial();

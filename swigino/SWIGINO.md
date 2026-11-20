@@ -43,7 +43,7 @@ Games need keys dumped from your own Switch.
 
 ## Building
 
-`scripts/build-suyu-core.sh` fetches the submodules (shallow), builds the Core in
+`scripts/build-swigino-core.sh` fetches the submodules (shallow), builds the Core in
 `~/.cache/game37/suyu-build/swigino` and installs it where Game37 looks for Cores. See its header for
 what it needs. `scripts/ci/build-swigino-portable.sh` builds the Core Game37 publishes, one that loads
 on any current distribution, in the manylinux_2_28 container; GitHub Actions runs it

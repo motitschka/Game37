@@ -44,17 +44,17 @@ jobs:
         run: |
           cd "$RUNNER_TEMP/out"
           sudo chown "$(id -u)" .
-          zip -j -X suyu_libretro.so.zip suyu_libretro.so
-          sha256sum suyu_libretro.so.zip > suyu_libretro.so.zip.sha256
-          cat suyu_libretro.so.sha256 suyu_libretro.so.zip.sha256
+          zip -j -X swigino_libretro.so.zip swigino_libretro.so
+          sha256sum swigino_libretro.so.zip > swigino_libretro.so.zip.sha256
+          cat swigino_libretro.so.sha256 swigino_libretro.so.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
           name: swigino-core
           path: |
-            ${{ runner.temp }}/out/suyu_libretro.so.zip
-            ${{ runner.temp }}/out/suyu_libretro.so.zip.sha256
-            ${{ runner.temp }}/out/suyu_libretro.so.sha256
+            ${{ runner.temp }}/out/swigino_libretro.so.zip
+            ${{ runner.temp }}/out/swigino_libretro.so.zip.sha256
+            ${{ runner.temp }}/out/swigino_libretro.so.sha256
 
   release:
     if: startsWith(github.ref, 'refs/tags/swigino-')
@@ -73,4 +73,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             --title "swigino Core ${GITHUB_REF_NAME#swigino-}" \
             --notes "The Switch Core Game37 downloads, built from swigino/ at ${GITHUB_SHA}. Never contains keys, firmware or Games." \
-            suyu_libretro.so.zip suyu_libretro.so.zip.sha256
+            swigino_libretro.so.zip swigino_libretro.so.zip.sha256

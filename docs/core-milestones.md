@@ -41,7 +41,7 @@ When the owner says "work on milestone M<n>":
 5. Stop and ask the owner when a stage needs something only they have: a BIOS, keys, firmware or a
    Game dumped from their own hardware, or a decision the section marks as theirs. Never download or
    commit any of those (NFR-6). Building a Core from a pinned source release, as
-   `scripts/build-suyu-core.sh` does, needs no separate go-ahead: asking for the milestone is it.
+   `scripts/build-swigino-core.sh` does, needs no separate go-ahead: asking for the milestone is it.
 6. Each milestone adds a smoke shot for every new screen (`scripts/smoke-screens.sh`), a section in
    [manual-checks.md](manual-checks.md) for what only a real Game can show, and an ADR for each
    decision that changes an earlier one.
@@ -199,7 +199,7 @@ in Game37.
   `docs/research/ps4-core.md` and an ADR. If the ADR finds the port isn't workable yet, the milestone
   stops there, with the reason in the Notes.
 - **Q2 A libretro frontend for shadPS4:** `patches/shadps4/` and `scripts/build-shadps4-core.sh`,
-  modelled on swigino's (`scripts/build-suyu-core.sh`, and its changes in `git log -- swigino`): the
+  modelled on swigino's (`scripts/build-swigino-core.sh`, and its changes in `git log -- swigino`): the
   libretro entry points; frames rendered offscreen and handed over through `video_refresh`; sound
   through libretro rather than its own audio device; RetroPad port 0 as player 1's DualShock 4, with
   the touchpad click on a spare button; every folder under the frontend's save and system folders,
@@ -285,7 +285,7 @@ touch weren't tried.
 as `swigino/`, in which Game37's libretro changes are commits instead of a patch file, which follows
 suyu's releases, and from which Game37 publishes a ready-built Core that loads on any distribution.
 Players download it on first use like every other Core instead of building suyu themselves.
-`scripts/build-suyu-core.sh` stays for development and offline use.
+`scripts/build-swigino-core.sh` stays for development and offline use.
 
 **Why.** `patches/suyu/` was one 235-line patch (input on port 0, the frontend's folders, the pause
 watchdog, a GCC 16 fix). M9 adds `retro_reset` and Save States, which reach into suyu's CPU, kernel,
@@ -410,5 +410,14 @@ commits in `swigino/` rather than added to a patch file. F3 and F4 don't block M
   the same checks and `hw_suyu_boots_…`. It isn't byte-identical to a local build of the same
   source (different SHA-256), so "anyone can rebuild the published file" means the same recipe,
   not yet the same bytes.
+- **F4 (2026-11-20):** the Core is `swigino_libretro.so` (library name "swigino"; the CMake target
+  stays `suyu_libretro`, so suyu's own files change less), and `scripts/build-suyu-core.sh` is now
+  `scripts/build-swigino-core.sh`. `CoreInfo` has a `source`: `Buildbot`, or `Release { url, sha256 }`
+  for swigino. The download hashes the zip as it streams and refuses a mismatch; the fetcher follows
+  redirects only to GitHub's release asset hosts (`followed_redirect`). `downloads()` and
+  `downloadable_for` are gone: Setup, Settings → Cores and Play treat swigino like any Core, Settings
+  → BIOS's Switch row shows only the keys. Settings → Cores now has the twelve rows its layout was
+  made for, so its test no longer asks for room for a thirteenth: **the next Core (M10 to M12) needs
+  a new layout for that page.** ADR 0022 records all of it.
 - If this works, M11's shadPS4 Core, now planned as `patches/shadps4/`, could follow the same route.
   That is M11's call.

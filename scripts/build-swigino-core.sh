@@ -2,7 +2,7 @@
 # Builds the Switch Core that plays Switch games inside Game37 (ADR 0019) from swigino/, Game37's
 # own fork of suyu's libretro Core, and installs it where Game37 looks for Cores.
 #
-#   scripts/build-suyu-core.sh [--data-dir DIR] [--jobs N]
+#   scripts/build-swigino-core.sh [--data-dir DIR] [--jobs N]
 #
 # swigino/ is suyu's source with Game37's changes: the Core connects a controller, keeps its files
 # in Game37's folders and pauses under Game37's Pause Menu (swigino/SWIGINO.md). Its submodules are
@@ -65,8 +65,8 @@ echo "Building (the first build takes a while)"
 cmake --build "$build" --target suyu_libretro -j "$jobs"
 
 mkdir -p "$data_dir/cores"
-installed=$data_dir/cores/suyu_libretro.so
-cp "$build/src/libretro_core/suyu_libretro.so" "$installed.part"
+installed=$data_dir/cores/swigino_libretro.so
+cp "$build/src/libretro_core/swigino_libretro.so" "$installed.part"
 strip --strip-debug "$installed.part"
 mv "$installed.part" "$installed"
 echo "Installed $installed"

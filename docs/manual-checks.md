@@ -92,10 +92,14 @@ The Switch controller in PlayStation Games is checked in section 5.
 - [ ] Switching F11 between windowed and fullscreen, and resizing the window, on a scrolled Console
       Page and in Settings → Hidden games: the focused item stays in view and nothing is cut off.
 
-## 10. Switch inside Game37 (ADR 0019)
+## 10. Switch inside Game37 (ADR 0019, ADR 0022)
 
-- [ ] `scripts/build-suyu-core.sh` builds and installs the Core on a fresh checkout; Settings → BIOS
-      then shows the Switch row as built (and the keys as optional until they're there).
+- [ ] On a fresh data folder, Setup's Cores step lists swigino for Switch and downloads it; Settings →
+      BIOS shows the Switch keys as optional until they're there.
+- [ ] Play on a Switch Game without the Core downloads it first, with the progress screen.
+- [ ] `scripts/build-swigino-core.sh` builds and installs the same Core on a fresh checkout.
+- [ ] The published Core (the `swigino-…` release's zip) loads in Game37 on another current
+      distribution than the owner's, e.g. Fedora or Ubuntu.
 - [ ] With your own `prod.keys` dumped from your own Switch in `~/Games/bios/switch/`, one of your own
       Games (`.nsp` or `.xci`) starts, plays with the controller, and makes sound; note the frame rate.
 - [ ] Without the keys, Play on an `.nsp` shows "Switch keys missing" naming that folder.
