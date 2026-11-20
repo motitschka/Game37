@@ -34,6 +34,10 @@
 //     unavailable rather than offering them and failing later.
 
 #include <algorithm>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 #include <array>
 #include <cstring>
 #include <cstdlib>
@@ -512,6 +516,63 @@ constexpr RetroToVirtual kButtonMap[] = {
 bool g_prev_buttons[20] = {};
 } // namespace
 
+// A frontend pauses a libretro core by not calling retro_run (RetroArch's pause,
+// a frontend's own menu). The emulated Switch runs on its own threads, so
+// without this it would keep playing, sound and all. A watchdog pauses it once
+// retro_run has not been called for kPauseAfter, and the next retro_run resumes it.
+static constexpr auto kPauseAfter = std::chrono::milliseconds(200);
+static std::mutex g_pause_mutex;
+static std::condition_variable g_pause_cv;
+static std::thread g_pause_watchdog;
+static bool g_pause_watchdog_stop = false;
+static bool g_paused_by_watchdog = false;
+static std::chrono::steady_clock::time_point g_last_run;
+
+static void StartPauseWatchdog() {
+    std::lock_guard lock{g_pause_mutex};
+    g_pause_watchdog_stop = false;
+    g_paused_by_watchdog = false;
+    g_last_run = std::chrono::steady_clock::now();
+    g_pause_watchdog = std::thread([] {
+        std::unique_lock lock{g_pause_mutex};
+        while (!g_pause_watchdog_stop) {
+            g_pause_cv.wait_for(lock, std::chrono::milliseconds(50));
+            if (!g_pause_watchdog_stop && !g_paused_by_watchdog &&
+                std::chrono::steady_clock::now() - g_last_run > kPauseAfter) {
+                g_system->Pause();
+                g_paused_by_watchdog = true;
+                LOG_INFO(Frontend, "libretro: paused, retro_run not called");
+            }
+        }
+    });
+}
+
+// Stops the watchdog and leaves the system running, as unloading expects.
+static void StopPauseWatchdog() {
+    {
+        std::lock_guard lock{g_pause_mutex};
+        g_pause_watchdog_stop = true;
+    }
+    g_pause_cv.notify_all();
+    if (g_pause_watchdog.joinable()) {
+        g_pause_watchdog.join();
+    }
+    if (g_paused_by_watchdog) {
+        g_system->Run();
+        g_paused_by_watchdog = false;
+    }
+}
+
+static void NoteRetroRun() {
+    std::lock_guard lock{g_pause_mutex};
+    g_last_run = std::chrono::steady_clock::now();
+    if (g_paused_by_watchdog) {
+        g_system->Run();
+        g_paused_by_watchdog = false;
+        LOG_INFO(Frontend, "libretro: resumed");
+    }
+}
+
 // The emulated controller the RetroPad drives: player 1's Pro Controller when
 // docked, the handheld console's own controls (npad slot 8) when not.
 static std::size_t FrontendPort() {
@@ -602,6 +663,9 @@ RETRO_API void retro_run() {
             g_perf_frontend_frames = 0;
             g_perf_unique_frames = 0;
         }
+    }
+    if (g_game_loaded) {
+        NoteRetroRun();
     }
     if (g_input_poll_cb) {
         g_input_poll_cb();
@@ -1049,6 +1113,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game) {
     g_perf_start = g_perf_last_sample = std::chrono::steady_clock::now();
     g_system->Run();
     g_game_loaded = true;
+    StartPauseWatchdog();
     LOG_INFO(Frontend, "libretro core: game loaded and running");
     return true;
 }
@@ -1059,6 +1124,9 @@ RETRO_API bool retro_load_game_special(unsigned /*game_type*/, const struct retr
 }
 
 RETRO_API void retro_unload_game() {
+    if (g_game_loaded) {
+        StopPauseWatchdog();
+    }
     g_sample_perf = false;
     g_have_presented = false;
     if (g_system && g_game_loaded) {
