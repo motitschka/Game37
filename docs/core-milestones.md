@@ -6,8 +6,7 @@ Cores: [roadmap-external-systems.md](roadmap-external-systems.md),
 [research/wiiu-ps3-spikes.md](research/wiiu-ps3-spikes.md) and
 [research/switch-core.md](research/switch-core.md).
 
-**Base branch:** `b1-hardening`, until it is merged into `main`; then `main`. Whoever merges it
-updates this line.
+**Base branch:** `main` (`b1-hardening` is merged into it).
 
 ## Status
 
