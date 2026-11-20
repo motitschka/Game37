@@ -371,5 +371,27 @@ If M9 goes first anyway, F1 imports whatever patches it left.
 - Every earlier check still passes (tests, real-Core tests, smoke shots).
 
 **Notes**
+- **F1 (2026-11-20), done locally, not pushed:** the `swigino` repository doesn't exist on GitHub
+  yet. The fork is at `~/swigino`, branch `game37`, head `8c65ced39e`: suyu's full history, then
+  one commit each for the GCC 16 warning, the frontend's folders, the controller and the pause
+  watchdog, then swigino's README in `.github/README.md`, where GitHub shows it and suyu's own
+  `README.md` stays untouched, so merges from suyu stay clean. Applied in order, the four commits
+  give files byte-identical to today's patched archive. To publish: `git -C ~/swigino remote add
+  origin git@github.com:motitschka/swigino.git && git -C ~/swigino push -u origin game37`, then make
+  `game37` the default branch.
+- **suyu re-tagged the pinned release.** Tag `v14.1.0` and its release are gone. The same assets
+  are now on release `v0.1.4`, whose tag points at a later commit (`96fdc5ff`, 2026-11-06). So the
+  build script's pinned URL returns 404 on a fresh machine. The archive is still at
+  `…/releases/download/v0.1.4/suyu-v14.1.0-source.tar.gz` with the same SHA-256. F2 ends this by
+  pinning the fork's commit instead.
+- **The base commit is `347fcf91`** (2026-10-12), which the archive names in its `GIT-COMMIT` file,
+  not the moved tag. Tree check: the archive and the `game37` base, with all 26 submodules and
+  their nested ones, have no file that differs. The archive leaves out 20 entries that git has:
+  `tools-local/`, prebuilt `.exe`/`.dll`/`.obj`/`.a` files in `tools/static_recompiler/`,
+  breakpad, vcpkg and VulkanMemoryAllocator, and a few `.gitattributes`/`.gitignore` files in
+  opus and libusb. It adds four version files of its own: `GIT-COMMIT`, `GIT-REFSPEC`,
+  `GIT-RELEASE` and `GIT-TAG`.
+- **Before the first push:** suyu's `.github/workflows/` come along with its history. Turn off
+  Actions in swigino's settings first, or they run on the owner's account. D4 decides CI at F3.
 - If this works, M11's shadPS4 Core, now planned as `patches/shadps4/`, could follow the same route.
   That is M11's call.

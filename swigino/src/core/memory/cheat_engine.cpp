@@ -1,3 +1,5 @@
+// Game37 build: GCC 16 reports a false positive in std::unique_ptr here.
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 // SPDX-FileCopyrightText: Copyright 2026 suyu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
